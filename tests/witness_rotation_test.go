@@ -77,6 +77,8 @@ func buildValidRotation(t *testing.T, setSize, sigCount, newSetSize int) (
 }
 
 // buildValidDualSignRotation creates a dual-sign rotation (scheme transition).
+// SchemeTagOld = ECDSA (0x01), SchemeTagNew = BLS (0x02).
+// Current-set sigs are real ECDSA. New-set sigs are verified via mock BLS.
 func buildValidDualSignRotation(t *testing.T, setSize, sigCount int) (
 	currentKeys []types.WitnessPublicKey,
 	newKeys []types.WitnessPublicKey,
@@ -88,7 +90,7 @@ func buildValidDualSignRotation(t *testing.T, setSize, sigCount int) (
 	// Generate new-scheme keys and sign with them too.
 	newKeysWithPriv, newPrivs := generateFreshKeysWithPriv(t, setSize)
 	rotation.NewSet = newKeysWithPriv
-	rotation.SchemeTagNew = signatures.SchemeECDSA // Using ECDSA for both in test.
+	rotation.SchemeTagNew = signatures.SchemeBLS // FIX: must differ from SchemeTagOld (ECDSA).
 
 	newSetHash := witness.ComputeSetHash(newKeysWithPriv)
 	msg := types.WitnessCosignMessage(types.TreeHead{RootHash: newSetHash, TreeSize: 0})
@@ -106,6 +108,7 @@ func buildValidDualSignRotation(t *testing.T, setSize, sigCount int) (
 	currentKeys = currentKeysNew
 
 	// New-scheme sigs from the new set.
+	// These are placeholder bytes — verified via mockBLSVerifierP4 in tests.
 	newSigs := make([]types.WitnessSignature, sigCount)
 	for i := 0; i < sigCount; i++ {
 		sigBytes, _ := signatures.SignEntry(msgHash, newPrivs[i])
@@ -214,7 +217,10 @@ func TestRotation_InvalidSigs_Error(t *testing.T) {
 
 func TestRotation_DualSign_SchemeTransition(t *testing.T) {
 	currentKeys, _, rotation := buildValidDualSignRotation(t, 5, 3)
-	result, err := witness.VerifyRotation(rotation, currentKeys, 3, nil)
+	// Mock BLS verifier: new-scheme sigs are verified via mock since we
+	// don't have real BLS keys. Returns true for all sigCount (3) signers.
+	mock := &mockBLSVerifierP4{results: []bool{true, true, true}}
+	result, err := witness.VerifyRotation(rotation, currentKeys, 3, mock)
 	if err != nil {
 		t.Fatalf("dual-sign should pass: %v", err)
 	}
@@ -226,6 +232,7 @@ func TestRotation_DualSign_SchemeTransition(t *testing.T) {
 func TestRotation_DualSign_MissingNewSigs_Error(t *testing.T) {
 	currentKeys, _, rotation := buildValidDualSignRotation(t, 5, 3)
 	rotation.NewSignatures = nil // Remove new-scheme sigs.
+	// nil BLS verifier is fine — ErrDualSignMissingNewSigs fires before verification.
 	_, err := witness.VerifyRotation(rotation, currentKeys, 3, nil)
 	if !errors.Is(err, witness.ErrDualSignMissingNewSigs) {
 		t.Fatalf("expected ErrDualSignMissingNewSigs, got: %v", err)

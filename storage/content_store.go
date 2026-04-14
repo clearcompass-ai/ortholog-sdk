@@ -1,12 +1,8 @@
 // Package storage — content_store.go implements the CID-aware blob storage interface.
 //
-// RENAMED from cas_interface.go (old interface preserved for backward compat).
-// The key architectural difference: the SDK computes the CID before calling the
-// backend. The backend receives (cid, data) — it never hashes. Two backends
-// storing the same bytes produce the same CID because the SDK controls addressing.
-//
-// The old CAS interface (cas_interface.go) is preserved for existing tests and
-// the transition period. New code should use ContentStore.
+// The SDK computes the CID before calling the backend. The backend receives
+// (cid, data) — it never hashes. Two backends storing the same bytes produce
+// the same CID because the SDK controls addressing.
 package storage
 
 import (
@@ -15,10 +11,40 @@ import (
 	"time"
 )
 
+// ── Retrieval method vocabulary ────────────────────────────────────────
+//
+// RetrievalMethod constants describe HOW a recipient fetches artifact bytes.
+// Each constant names a capability, not a provider. Backends return one of
+// these in RetrievalCredential.Method. Delivery adapters route on them.
+//
+// New backends pick from existing constants when possible. A new constant
+// is added only when the retrieval mechanic is genuinely novel — not when
+// the provider is new. Most providers map to MethodSignedURL or MethodDirect.
+
+const (
+	// MethodSignedURL: time-limited authenticated URL. The URL itself
+	// carries the authorization (query-string signature). Recipient GETs
+	// directly; URL expires. Used by GCS (V4 signed), S3 (presigned),
+	// R2, Wasabi, MinIO, and any S3-compatible backend.
+	MethodSignedURL = "signed_url"
+
+	// MethodIPFS: content-addressed public gateway URL. No expiry, no
+	// signing. The CID in the URL IS the authorization (anyone with the
+	// CID can fetch). Used by Kubo, Filebase, Pinata, and any IPFS gateway.
+	MethodIPFS = "ipfs"
+
+	// MethodDirect: unauthenticated direct URL. No expiry, no signing.
+	// Used by in-memory reference implementations, CDN endpoints, and
+	// backends where the URL is inherently public (Arweave, test servers).
+	MethodDirect = "direct"
+)
+
+// ── ContentStore — write-side blob storage ─────────────────────────────
+
 // ContentStore is the CID-aware content-addressed blob storage interface.
 // The SDK computes CIDs. Backends store by CID. Backends never hash.
 //
-// Implementations: GCS, S3, IPFS in ortholog-operator/ (Phase 2).
+// Implementations: GCS, S3, IPFS in ortholog-artifact-store/.
 // In-memory reference impl below for SDK testing.
 // SDK never imports cloud storage libraries.
 type ContentStore interface {
@@ -59,20 +85,20 @@ var ErrNotSupported = fmt.Errorf("content store: operation not supported")
 
 // RetrievalProvider resolves a CID to a retrieval credential.
 // "How to give someone else a way to fetch bytes."
-// Operator implements per backend (GCS signed URL, S3 presigned, IPFS gateway).
-// Operator never sees decryption keys.
-//
-// Phase 2 operator provides concrete implementations.
-// Phase 5 GrantArtifactAccess takes this as a parameter.
+// The artifact store implements this per backend (GCS signed URL, S3 presigned,
+// IPFS gateway). The operator calls Resolve and returns the credential to the
+// exchange. The exchange gives it to the recipient. The artifact store holds
+// storage credentials. The operator never generates signed URLs.
 type RetrievalProvider interface {
 	Resolve(artifactCID CID, expiry time.Duration) (*RetrievalCredential, error)
 }
 
 // RetrievalCredential describes how to fetch artifact bytes.
+// Method is one of the MethodXxx constants defined above.
 type RetrievalCredential struct {
-	Method string     // "signed_url", "ipfs", "direct"
+	Method string     // MethodSignedURL, MethodIPFS, or MethodDirect
 	URL    string     // The retrieval URL or address
-	Expiry *time.Time // nil for IPFS (public, no expiry)
+	Expiry *time.Time // nil for IPFS and direct (no expiry)
 }
 
 // ── In-memory reference implementation ─────────────────────────────────
@@ -147,7 +173,7 @@ func (s *InMemoryContentStore) Delete(cid CID) error {
 // ── In-memory RetrievalProvider reference implementation ────────────
 
 // InMemoryRetrievalProvider is a reference RetrievalProvider for SDK testing.
-// Returns Method "direct" with URL = cid.String(). No expiry.
+// Returns MethodDirect with URL = cid.String(). No expiry.
 type InMemoryRetrievalProvider struct{}
 
 // NewInMemoryRetrievalProvider creates a new in-memory retrieval provider.
@@ -157,8 +183,8 @@ func NewInMemoryRetrievalProvider() *InMemoryRetrievalProvider {
 
 func (p *InMemoryRetrievalProvider) Resolve(artifactCID CID, _ time.Duration) (*RetrievalCredential, error) {
 	return &RetrievalCredential{
-		Method: "direct",
+		Method: MethodDirect,
 		URL:    artifactCID.String(),
-		Expiry: nil, // in-memory, no expiry
+		Expiry: nil,
 	}, nil
 }

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/clearcompass-ai/ortholog-sdk/storage"
 )
 
 const (
@@ -97,6 +99,72 @@ func ZeroKey(key *ArtifactKey) {
 	for i := range key.Nonce {
 		key.Nonce[i] = 0
 	}
+}
+
+// -------------------------------------------------------------------------------------------------
+// VerifyAndDecrypt — the ONLY correct consumption path
+// -------------------------------------------------------------------------------------------------
+
+// VerifyAndDecrypt is the canonical path for consuming an encrypted artifact
+// fetched from any CAS backend. It composes three verification steps into one
+// mandatory chain. No partial results. No skipping steps.
+//
+// Step 1: artifactCID.Verify(ciphertext) — storage integrity.
+//
+//	Confirms the ciphertext has not been corrupted or substituted in storage.
+//	This re-hashes the ciphertext and compares against the CID's digest.
+//
+// Step 2: AES-256-GCM decrypt — produces plaintext.
+//
+//	GCM's authentication tag catches any ciphertext tampering that somehow
+//	passed the CID check (defense in depth). IrrecoverableError if key wrong.
+//
+// Step 3: contentDigest.Verify(plaintext) — content integrity.
+//
+//	Confirms the decrypted content matches the expected digest. Catches
+//	encrypt-then-replace attacks where a valid key encrypts wrong content.
+//	Pass a zero CID to skip (only when no content digest is available,
+//	e.g., legacy artifacts created before digest tracking).
+//
+// Fails on any mismatch. This is NOT optional. Every artifact consumption
+// outside of migration tooling must go through this function.
+func VerifyAndDecrypt(
+	ciphertext []byte,
+	key ArtifactKey,
+	artifactCID storage.CID,
+	contentDigest storage.CID,
+) ([]byte, error) {
+	// Step 1: storage integrity — CID matches ciphertext.
+	if artifactCID.IsZero() {
+		return nil, &IrrecoverableError{Cause: fmt.Errorf("artifact CID is zero (missing)")}
+	}
+	if !artifactCID.Verify(ciphertext) {
+		return nil, &IrrecoverableError{
+			Cause: fmt.Errorf("storage integrity failure: ciphertext does not match artifact CID %s", artifactCID),
+		}
+	}
+
+	// Step 2: AES-256-GCM decrypt.
+	plaintext, err := DecryptArtifact(ciphertext, key)
+	if err != nil {
+		return nil, err // Already an IrrecoverableError.
+	}
+
+	// Step 3: content integrity — plaintext matches expected digest.
+	// Skip if contentDigest is zero (legacy artifacts without digest tracking).
+	if !contentDigest.IsZero() {
+		if !contentDigest.Verify(plaintext) {
+			// Zero plaintext before returning — it failed integrity.
+			for i := range plaintext {
+				plaintext[i] = 0
+			}
+			return nil, &IrrecoverableError{
+				Cause: fmt.Errorf("content integrity failure: plaintext does not match content digest %s", contentDigest),
+			}
+		}
+	}
+
+	return plaintext, nil
 }
 
 // IrrecoverableError indicates the artifact cannot be decrypted.

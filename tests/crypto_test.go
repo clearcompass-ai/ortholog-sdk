@@ -172,3 +172,119 @@ func TestDeadCID_Irrecoverable(t *testing.T) {
 		t.Fatal("expected IrrecoverableError for wrong key")
 	}
 }
+
+// ── CID (3 tests) ──────────────────────────────────────────────────────
+
+// Test 28: CID compute → string → parse → verify round-trip.
+func TestCID_RoundTrip(t *testing.T) {
+	data := []byte("content-addressed artifact payload")
+	cid := storage.Compute(data)
+
+	// String round-trip.
+	s := cid.String()
+	parsed, err := storage.ParseCID(s)
+	if err != nil {
+		t.Fatalf("ParseCID(%q): %v", s, err)
+	}
+	if !cid.Equal(parsed) {
+		t.Fatal("parsed CID should equal original")
+	}
+
+	// Bytes round-trip.
+	b := cid.Bytes()
+	parsedB, err := storage.ParseCIDBytes(b)
+	if err != nil {
+		t.Fatalf("ParseCIDBytes: %v", err)
+	}
+	if !cid.Equal(parsedB) {
+		t.Fatal("bytes-parsed CID should equal original")
+	}
+
+	// Verify against original data.
+	if !cid.Verify(data) {
+		t.Fatal("CID should verify against original data")
+	}
+
+	// Verify rejects tampered data.
+	tampered := append([]byte{}, data...)
+	tampered[0] ^= 0xFF
+	if cid.Verify(tampered) {
+		t.Fatal("CID should reject tampered data")
+	}
+
+	// CAS interop: Push produces the same string as Compute.
+	cas := storage.NewInMemoryCAS()
+	casCID, _ := cas.Push(data)
+	if casCID != s {
+		t.Fatalf("CAS CID %q != Compute CID %q", casCID, s)
+	}
+}
+
+// Test 29: VerifyAndDecrypt — full three-step chain passes.
+func TestVerifyAndDecrypt_Pass(t *testing.T) {
+	plaintext := []byte("credential payload for escrow")
+
+	// Encrypt.
+	ciphertext, key, err := artifact.EncryptArtifact(plaintext)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Compute CIDs.
+	artifactCID := storage.Compute(ciphertext)
+	contentDigest := storage.Compute(plaintext)
+
+	// VerifyAndDecrypt — all three steps pass.
+	recovered, err := artifact.VerifyAndDecrypt(ciphertext, key, artifactCID, contentDigest)
+	if err != nil {
+		t.Fatalf("VerifyAndDecrypt should pass: %v", err)
+	}
+	if string(recovered) != string(plaintext) {
+		t.Fatal("recovered plaintext doesn't match original")
+	}
+
+	// Also verify with zero contentDigest (legacy path — skips step 3).
+	recovered2, err := artifact.VerifyAndDecrypt(ciphertext, key, artifactCID, storage.CID{})
+	if err != nil {
+		t.Fatalf("VerifyAndDecrypt with zero contentDigest should pass: %v", err)
+	}
+	if string(recovered2) != string(plaintext) {
+		t.Fatal("recovered plaintext doesn't match (legacy path)")
+	}
+}
+
+// Test 30: VerifyAndDecrypt — tampered ciphertext detected at step 1.
+func TestVerifyAndDecrypt_TamperDetected(t *testing.T) {
+	plaintext := []byte("tamper detection test")
+	ciphertext, key, _ := artifact.EncryptArtifact(plaintext)
+	artifactCID := storage.Compute(ciphertext)
+	contentDigest := storage.Compute(plaintext)
+
+	// Tamper ciphertext — step 1 (storage integrity) should catch this.
+	tampered := append([]byte{}, ciphertext...)
+	tampered[0] ^= 0xFF
+
+	_, err := artifact.VerifyAndDecrypt(tampered, key, artifactCID, contentDigest)
+	if err == nil {
+		t.Fatal("VerifyAndDecrypt should fail on tampered ciphertext")
+	}
+	if !artifact.IsIrrecoverable(err) {
+		t.Fatalf("expected IrrecoverableError, got: %v", err)
+	}
+
+	// Wrong content digest — step 3 (content integrity) should catch this.
+	wrongDigest := storage.Compute([]byte("wrong content"))
+	_, err = artifact.VerifyAndDecrypt(ciphertext, key, artifactCID, wrongDigest)
+	if err == nil {
+		t.Fatal("VerifyAndDecrypt should fail on wrong content digest")
+	}
+	if !artifact.IsIrrecoverable(err) {
+		t.Fatalf("expected IrrecoverableError for content mismatch, got: %v", err)
+	}
+
+	// Zero artifact CID — rejected immediately.
+	_, err = artifact.VerifyAndDecrypt(ciphertext, key, storage.CID{}, contentDigest)
+	if err == nil {
+		t.Fatal("VerifyAndDecrypt should fail on zero artifact CID")
+	}
+}

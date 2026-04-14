@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -45,7 +46,9 @@ func NewMockFetcher() *MockFetcher {
 
 func (f *MockFetcher) Fetch(pos types.LogPosition) (*types.EntryWithMetadata, error) {
 	meta, ok := f.entries[pos]
-	if !ok { return nil, nil }
+	if !ok {
+		return nil, nil
+	}
 	return meta, nil
 }
 
@@ -78,7 +81,9 @@ func (h *testHarness) addRootEntity(t *testing.T, p types.LogPosition, signerDID
 	h.fetcher.Store(p, entry)
 	key := smt.DeriveKey(p)
 	leaf := types.SMTLeaf{Key: key, OriginTip: p, AuthorityTip: p}
-	if err := h.tree.SetLeaf(key, leaf); err != nil { t.Fatal(err) }
+	if err := h.tree.SetLeaf(key, leaf); err != nil {
+		t.Fatal(err)
+	}
 	return entry
 }
 
@@ -104,30 +109,46 @@ func (h *testHarness) process(t *testing.T, entry *envelope.Entry, p types.LogPo
 	t.Helper()
 	h.fetcher.Store(p, entry)
 	result, err := builder.ProcessBatch(h.tree, []*envelope.Entry{entry}, []types.LogPosition{p}, h.fetcher, h.schema, testLogDID, h.buffer)
-	if err != nil { t.Fatalf("ProcessBatch: %v", err) }
+	if err != nil {
+		t.Fatalf("ProcessBatch: %v", err)
+	}
 	return result
 }
 
 func (h *testHarness) leafOriginTip(t *testing.T, p types.LogPosition) types.LogPosition {
 	t.Helper()
 	leaf, err := h.tree.GetLeaf(smt.DeriveKey(p))
-	if err != nil || leaf == nil { t.Fatalf("leaf not found for %s", p) }
+	if err != nil || leaf == nil {
+		t.Fatalf("leaf not found for %s", p)
+	}
 	return leaf.OriginTip
 }
 
 func (h *testHarness) leafAuthorityTip(t *testing.T, p types.LogPosition) types.LogPosition {
 	t.Helper()
 	leaf, err := h.tree.GetLeaf(smt.DeriveKey(p))
-	if err != nil || leaf == nil { t.Fatalf("leaf not found for %s", p) }
+	if err != nil || leaf == nil {
+		t.Fatalf("leaf not found for %s", p)
+	}
 	return leaf.AuthorityTip
 }
 
 func intToStr(n int) string {
-	if n == 0 { return "0" }
-	neg := n < 0; if neg { n = -n }
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
 	digits := make([]byte, 0, 8)
-	for n > 0 { digits = append([]byte{byte('0' + n%10)}, digits...); n /= 10 }
-	if neg { digits = append([]byte{'-'}, digits...) }
+	for n > 0 {
+		digits = append([]byte{byte('0' + n%10)}, digits...)
+		n /= 10
+	}
+	if neg {
+		digits = append([]byte{'-'}, digits...)
+	}
 	return string(digits)
 }
 
@@ -136,3 +157,11 @@ func zeroPad3(n int) string {
 }
 
 func didForIndex(i int) string { return "did:example:user" + intToStr(i/10) }
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}

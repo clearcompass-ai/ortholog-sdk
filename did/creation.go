@@ -14,8 +14,6 @@ package did
 
 import (
 	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -65,9 +63,8 @@ func GenerateDIDKey() (*DIDKeyPair, error) {
 }
 
 // GenerateRawKey generates a raw ECDSA P-256 key pair without DID formatting.
-// Returns the private key and compressed public key bytes.
 func GenerateRawKey() (*ecdsa.PrivateKey, []byte, error) {
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	priv, err := signatures.GenerateKey()
 	if err != nil {
 		return nil, nil, err
 	}

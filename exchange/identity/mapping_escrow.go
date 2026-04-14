@@ -31,23 +31,15 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/artifact"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
-	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
 // ─────────────────────────────────────────────────────────────────────
 // Errors
 // ─────────────────────────────────────────────────────────────────────
 
-// ErrMappingNotFound is returned when no mapping exists for an identity.
 var ErrMappingNotFound = errors.New("identity/escrow: mapping not found")
-
-// ErrInvalidIdentity is returned when the identity hash is zero/empty.
 var ErrInvalidIdentity = errors.New("identity/escrow: invalid identity hash")
-
-// ErrInvalidCredentialRef is returned when a credential reference is empty.
 var ErrInvalidCredentialRef = errors.New("identity/escrow: invalid credential reference")
-
-// ErrShareAssemblyFailed is returned when key shares cannot be reassembled.
 var ErrShareAssemblyFailed = errors.New("identity/escrow: share assembly failed")
 
 // ─────────────────────────────────────────────────────────────────────
@@ -56,23 +48,26 @@ var ErrShareAssemblyFailed = errors.New("identity/escrow: share assembly failed"
 
 // CredentialRef identifies a credential entry in a log.
 type CredentialRef struct {
-	LogDID   string `json:"log_did"`
-	Sequence uint64 `json:"sequence"`
+	LogDID    string   `json:"log_did"`
+	Sequence  uint64   `json:"sequence"`
 	EntryHash [32]byte `json:"entry_hash"`
 }
 
 // MappingRecord is the plaintext mapping stored (encrypted) in the content store.
 type MappingRecord struct {
-	IdentityHash  [32]byte       `json:"identity_hash"`
-	CredentialRef CredentialRef  `json:"credential_ref"`
-	SchemaID      string         `json:"schema_id,omitempty"`
-	CreatedAt     int64          `json:"created_at"` // Unix timestamp.
+	IdentityHash  [32]byte      `json:"identity_hash"`
+	CredentialRef CredentialRef `json:"credential_ref"`
+	SchemaID      string        `json:"schema_id,omitempty"`
+	CreatedAt     int64         `json:"created_at"`
 }
 
 // StoredMapping holds the metadata for a stored encrypted mapping.
 type StoredMapping struct {
 	CID         storage.CID
-	EscrowPkg   types.EscrowPackage
+	ArtifactKey artifact.ArtifactKey
+	Shares      []escrow.Share
+	K           int
+	N           int
 	IdentityTag [32]byte // SHA-256(identity_hash) for index lookup without decryption.
 }
 
@@ -80,35 +75,22 @@ type StoredMapping struct {
 // MappingEscrow
 // ─────────────────────────────────────────────────────────────────────
 
-// MappingEscrowConfig configures the escrow.
 type MappingEscrowConfig struct {
-	// ShareThreshold is the K in K-of-N secret sharing.
 	ShareThreshold int
-
-	// TotalShares is the N in K-of-N secret sharing.
-	TotalShares int
+	TotalShares    int
 }
 
-// DefaultMappingEscrowConfig returns production defaults.
 func DefaultMappingEscrowConfig() MappingEscrowConfig {
-	return MappingEscrowConfig{
-		ShareThreshold: 3,
-		TotalShares:    5,
-	}
+	return MappingEscrowConfig{ShareThreshold: 3, TotalShares: 5}
 }
 
-// MappingEscrow manages encrypted identity ↔ credential mappings.
 type MappingEscrow struct {
-	store  storage.ContentStore
-	cfg    MappingEscrowConfig
-
-	// In-memory index: identity tag → stored mapping metadata.
-	// Production deployments would use a database index.
+	store storage.ContentStore
+	cfg   MappingEscrowConfig
 	mu    sync.RWMutex
 	index map[[32]byte]*StoredMapping
 }
 
-// NewMappingEscrow creates an escrow with the given content store.
 func NewMappingEscrow(store storage.ContentStore, cfg MappingEscrowConfig) *MappingEscrow {
 	if cfg.ShareThreshold <= 0 {
 		cfg.ShareThreshold = 3
@@ -124,17 +106,9 @@ func NewMappingEscrow(store storage.ContentStore, cfg MappingEscrowConfig) *Mapp
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// StoreMapping — encrypt and store an identity ↔ credential mapping
+// StoreMapping
 // ─────────────────────────────────────────────────────────────────────
 
-// StoreMapping encrypts a mapping record and stores it in the content store.
-//
-// Steps:
-//  1. Serialize mapping to JSON
-//  2. Encrypt with artifact.EncryptArtifact → ciphertext + key
-//  3. Split key with escrow.SplitGF256 → K-of-N shares
-//  4. Push ciphertext to ContentStore
-//  5. Return StoredMapping with CID + escrow package
 func (me *MappingEscrow) StoreMapping(record MappingRecord) (*StoredMapping, error) {
 	if record.IdentityHash == [32]byte{} {
 		return nil, ErrInvalidIdentity
@@ -149,46 +123,41 @@ func (me *MappingEscrow) StoreMapping(record MappingRecord) (*StoredMapping, err
 		return nil, fmt.Errorf("identity/escrow: marshal: %w", err)
 	}
 
-	// 2. Encrypt.
-	encrypted, err := artifact.EncryptArtifact(plaintext)
+	// 2. Encrypt. EncryptArtifact returns (ciphertext, ArtifactKey, error).
+	ciphertext, artKey, err := artifact.EncryptArtifact(plaintext)
 	if err != nil {
 		return nil, fmt.Errorf("identity/escrow: encrypt: %w", err)
 	}
 
-	// 3. Split key into shares.
-	shares, err := escrow.SplitGF256(
-		encrypted.Key,
-		me.cfg.ShareThreshold,
-		me.cfg.TotalShares,
-	)
+	// 3. Split the ArtifactKey into Shamir shares.
+	// Serialize Key (32 bytes) + Nonce (12 bytes) = 44 bytes as the secret.
+	keyMaterial := make([]byte, artifact.KeySize+artifact.NonceSize)
+	copy(keyMaterial[:artifact.KeySize], artKey.Key[:])
+	copy(keyMaterial[artifact.KeySize:], artKey.Nonce[:])
+
+	shares, err := escrow.SplitGF256(keyMaterial, me.cfg.ShareThreshold, me.cfg.TotalShares)
 	if err != nil {
 		return nil, fmt.Errorf("identity/escrow: split key: %w", err)
 	}
 
 	// 4. Push ciphertext to content store.
-	cid := storage.Compute(encrypted.Ciphertext)
-	if err := me.store.Push(cid, encrypted.Ciphertext); err != nil {
+	cid := storage.Compute(ciphertext)
+	if err := me.store.Push(cid, ciphertext); err != nil {
 		return nil, fmt.Errorf("identity/escrow: push: %w", err)
 	}
 
-	// 5. Build escrow package.
-	escrowPkg := types.EscrowPackage{
-		CID:    cid,
-		Shares: shares,
-		K:      me.cfg.ShareThreshold,
-		N:      me.cfg.TotalShares,
-	}
-
-	// Identity tag for index lookup (double-hash for privacy).
+	// 5. Build stored mapping.
 	identityTag := sha256.Sum256(record.IdentityHash[:])
 
 	stored := &StoredMapping{
 		CID:         cid,
-		EscrowPkg:   escrowPkg,
+		ArtifactKey: artKey,
+		Shares:      shares,
+		K:           me.cfg.ShareThreshold,
+		N:           me.cfg.TotalShares,
 		IdentityTag: identityTag,
 	}
 
-	// Store in index.
 	me.mu.Lock()
 	me.index[identityTag] = stored
 	me.mu.Unlock()
@@ -197,17 +166,12 @@ func (me *MappingEscrow) StoreMapping(record MappingRecord) (*StoredMapping, err
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// LookupMapping — retrieve and decrypt a mapping
+// LookupMapping
 // ─────────────────────────────────────────────────────────────────────
 
-// LookupMapping retrieves an encrypted mapping by identity hash and
-// decrypts it using the provided key shares.
-//
-// The caller must provide at least K shares (from the escrow package)
-// to reconstruct the decryption key.
 func (me *MappingEscrow) LookupMapping(
 	identityHash [32]byte,
-	keyShares [][]byte,
+	keyShares []escrow.Share,
 ) (*MappingRecord, error) {
 	if identityHash == [32]byte{} {
 		return nil, ErrInvalidIdentity
@@ -223,25 +187,32 @@ func (me *MappingEscrow) LookupMapping(
 		return nil, ErrMappingNotFound
 	}
 
-	// Fetch ciphertext from content store.
+	// Fetch ciphertext.
 	ciphertext, err := me.store.Fetch(stored.CID)
 	if err != nil {
 		return nil, fmt.Errorf("identity/escrow: fetch: %w", err)
 	}
 
 	// Reassemble key from shares.
-	key, err := escrow.CombineGF256(keyShares, me.cfg.ShareThreshold)
+	keyMaterial, err := escrow.ReconstructGF256(keyShares)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrShareAssemblyFailed, err)
 	}
 
+	// Deserialize ArtifactKey from reconstructed material.
+	if len(keyMaterial) != artifact.KeySize+artifact.NonceSize {
+		return nil, fmt.Errorf("identity/escrow: reconstructed key wrong length: %d", len(keyMaterial))
+	}
+	var artKey artifact.ArtifactKey
+	copy(artKey.Key[:], keyMaterial[:artifact.KeySize])
+	copy(artKey.Nonce[:], keyMaterial[artifact.KeySize:])
+
 	// Decrypt.
-	plaintext, err := artifact.DecryptArtifact(ciphertext, key)
+	plaintext, err := artifact.DecryptArtifact(ciphertext, artKey)
 	if err != nil {
 		return nil, fmt.Errorf("identity/escrow: decrypt: %w", err)
 	}
 
-	// Deserialize.
 	var record MappingRecord
 	if err := json.Unmarshal(plaintext, &record); err != nil {
 		return nil, fmt.Errorf("identity/escrow: unmarshal: %w", err)
@@ -254,8 +225,6 @@ func (me *MappingEscrow) LookupMapping(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
-// HasMapping checks if a mapping exists for the given identity hash
-// without decrypting it.
 func (me *MappingEscrow) HasMapping(identityHash [32]byte) bool {
 	identityTag := sha256.Sum256(identityHash[:])
 	me.mu.RLock()
@@ -264,16 +233,12 @@ func (me *MappingEscrow) HasMapping(identityHash [32]byte) bool {
 	return ok
 }
 
-// MappingCount returns the number of stored mappings.
 func (me *MappingEscrow) MappingCount() int {
 	me.mu.RLock()
 	defer me.mu.RUnlock()
 	return len(me.index)
 }
 
-// DeleteMapping removes a mapping from the index. Does not delete from
-// the content store (ciphertext is content-addressed and may be referenced
-// by other entries).
 func (me *MappingEscrow) DeleteMapping(identityHash [32]byte) bool {
 	identityTag := sha256.Sum256(identityHash[:])
 	me.mu.Lock()

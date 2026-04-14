@@ -5,28 +5,29 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/clearcompass-ai/ortholog-sdk/exchange/identity"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
 )
 
 // ─────────────────────────────────────────────────────────────────────
-// Mock ContentStore
+// Mock ContentStore (only defined here — not in other test files)
 // ─────────────────────────────────────────────────────────────────────
 
-type inMemoryContentStore struct {
+type mappingTestStore struct {
 	data map[string][]byte
 }
 
-func newInMemoryContentStore() *inMemoryContentStore {
-	return &inMemoryContentStore{data: make(map[string][]byte)}
+func newMappingTestStore() *mappingTestStore {
+	return &mappingTestStore{data: make(map[string][]byte)}
 }
 
-func (s *inMemoryContentStore) Push(cid storage.CID, data []byte) error {
+func (s *mappingTestStore) Push(cid storage.CID, data []byte) error {
 	s.data[cid.String()] = append([]byte(nil), data...)
 	return nil
 }
 
-func (s *inMemoryContentStore) Fetch(cid storage.CID) ([]byte, error) {
+func (s *mappingTestStore) Fetch(cid storage.CID) ([]byte, error) {
 	data, ok := s.data[cid.String()]
 	if !ok {
 		return nil, errors.New("not found")
@@ -34,25 +35,21 @@ func (s *inMemoryContentStore) Fetch(cid storage.CID) ([]byte, error) {
 	return data, nil
 }
 
-func (s *inMemoryContentStore) Exists(cid storage.CID) (bool, error) {
+func (s *mappingTestStore) Exists(cid storage.CID) (bool, error) {
 	_, ok := s.data[cid.String()]
 	return ok, nil
 }
 
-func (s *inMemoryContentStore) Pin(cid storage.CID) error { return nil }
-
-func (s *inMemoryContentStore) Delete(cid storage.CID) error {
-	delete(s.data, cid.String())
-	return nil
-}
+func (s *mappingTestStore) Pin(cid storage.CID) error    { return nil }
+func (s *mappingTestStore) Delete(cid storage.CID) error { delete(s.data, cid.String()); return nil }
 
 // ─────────────────────────────────────────────────────────────────────
 // Tests: StoreMapping
 // ─────────────────────────────────────────────────────────────────────
 
 func TestMappingEscrow_StoreAndLookup(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
+	store := newMappingTestStore()
+	me := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
 
 	idHash := sha256.Sum256([]byte("test-identity"))
 	record := identity.MappingRecord{
@@ -65,7 +62,7 @@ func TestMappingEscrow_StoreAndLookup(t *testing.T) {
 		CreatedAt: 1700000000,
 	}
 
-	stored, err := escrow.StoreMapping(record)
+	stored, err := me.StoreMapping(record)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
@@ -75,12 +72,18 @@ func TestMappingEscrow_StoreAndLookup(t *testing.T) {
 	if stored.IdentityTag == [32]byte{} {
 		t.Fatal("identity tag should not be zero")
 	}
-	if len(stored.EscrowPkg.Shares) != 5 {
-		t.Fatalf("shares: %d", len(stored.EscrowPkg.Shares))
+	if len(stored.Shares) != 5 {
+		t.Fatalf("shares: %d", len(stored.Shares))
+	}
+	if stored.K != 3 {
+		t.Fatalf("K: %d", stored.K)
+	}
+	if stored.N != 5 {
+		t.Fatalf("N: %d", stored.N)
 	}
 
-	// Lookup with sufficient shares.
-	result, err := escrow.LookupMapping(idHash, stored.EscrowPkg.Shares[:3])
+	// Lookup with sufficient shares (K=3).
+	result, err := me.LookupMapping(idHash, stored.Shares[:3])
 	if err != nil {
 		t.Fatalf("lookup: %v", err)
 	}
@@ -96,28 +99,24 @@ func TestMappingEscrow_StoreAndLookup(t *testing.T) {
 }
 
 func TestMappingEscrow_StoreZeroIdentity_Error(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
-
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
 	record := identity.MappingRecord{
-		IdentityHash:  [32]byte{}, // Zero.
+		IdentityHash:  [32]byte{},
 		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
 	}
-	_, err := escrow.StoreMapping(record)
+	_, err := me.StoreMapping(record)
 	if !errors.Is(err, identity.ErrInvalidIdentity) {
 		t.Fatalf("expected ErrInvalidIdentity, got: %v", err)
 	}
 }
 
 func TestMappingEscrow_StoreEmptyCredRef_Error(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
-
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
 	record := identity.MappingRecord{
 		IdentityHash:  sha256.Sum256([]byte("id")),
-		CredentialRef: identity.CredentialRef{LogDID: ""}, // Empty.
+		CredentialRef: identity.CredentialRef{LogDID: ""},
 	}
-	_, err := escrow.StoreMapping(record)
+	_, err := me.StoreMapping(record)
 	if !errors.Is(err, identity.ErrInvalidCredentialRef) {
 		t.Fatalf("expected ErrInvalidCredentialRef, got: %v", err)
 	}
@@ -128,23 +127,45 @@ func TestMappingEscrow_StoreEmptyCredRef_Error(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 
 func TestMappingEscrow_LookupNotFound(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
-
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
 	idHash := sha256.Sum256([]byte("nonexistent"))
-	_, err := escrow.LookupMapping(idHash, nil)
+	_, err := me.LookupMapping(idHash, nil)
 	if !errors.Is(err, identity.ErrMappingNotFound) {
 		t.Fatalf("expected ErrMappingNotFound, got: %v", err)
 	}
 }
 
 func TestMappingEscrow_LookupZeroIdentity_Error(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
-
-	_, err := escrow.LookupMapping([32]byte{}, nil)
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+	_, err := me.LookupMapping([32]byte{}, nil)
 	if !errors.Is(err, identity.ErrInvalidIdentity) {
 		t.Fatalf("expected ErrInvalidIdentity, got: %v", err)
+	}
+}
+
+func TestMappingEscrow_LookupDifferentShareSubsets(t *testing.T) {
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+	idHash := sha256.Sum256([]byte("subset-test"))
+	stored, _ := me.StoreMapping(identity.MappingRecord{
+		IdentityHash:  idHash,
+		CredentialRef: identity.CredentialRef{LogDID: "did:web:test", Sequence: 99},
+	})
+
+	// Any 3-of-5 subset should work.
+	subsets := [][]escrow.Share{
+		{stored.Shares[0], stored.Shares[1], stored.Shares[2]},
+		{stored.Shares[0], stored.Shares[2], stored.Shares[4]},
+		{stored.Shares[1], stored.Shares[3], stored.Shares[4]},
+		{stored.Shares[2], stored.Shares[3], stored.Shares[4]},
+	}
+	for i, subset := range subsets {
+		result, err := me.LookupMapping(idHash, subset)
+		if err != nil {
+			t.Fatalf("subset %d: %v", i, err)
+		}
+		if result.CredentialRef.Sequence != 99 {
+			t.Fatalf("subset %d: sequence %d", i, result.CredentialRef.Sequence)
+		}
 	}
 }
 
@@ -153,69 +174,55 @@ func TestMappingEscrow_LookupZeroIdentity_Error(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 
 func TestMappingEscrow_HasMapping(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
-
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
 	idHash := sha256.Sum256([]byte("check"))
-	if escrow.HasMapping(idHash) {
+	if me.HasMapping(idHash) {
 		t.Fatal("should not have mapping before store")
 	}
-
-	escrow.StoreMapping(identity.MappingRecord{
+	me.StoreMapping(identity.MappingRecord{
 		IdentityHash:  idHash,
 		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
 	})
-
-	if !escrow.HasMapping(idHash) {
+	if !me.HasMapping(idHash) {
 		t.Fatal("should have mapping after store")
 	}
 }
 
 func TestMappingEscrow_MappingCount(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
-
-	if escrow.MappingCount() != 0 {
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+	if me.MappingCount() != 0 {
 		t.Fatal("initial: 0")
 	}
-
 	for i := 0; i < 3; i++ {
 		idHash := sha256.Sum256([]byte{byte(i)})
-		escrow.StoreMapping(identity.MappingRecord{
+		me.StoreMapping(identity.MappingRecord{
 			IdentityHash:  idHash,
 			CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
 		})
 	}
-
-	if escrow.MappingCount() != 3 {
-		t.Fatalf("count: %d", escrow.MappingCount())
+	if me.MappingCount() != 3 {
+		t.Fatalf("count: %d", me.MappingCount())
 	}
 }
 
 func TestMappingEscrow_DeleteMapping(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
-
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
 	idHash := sha256.Sum256([]byte("delete-me"))
-	escrow.StoreMapping(identity.MappingRecord{
+	me.StoreMapping(identity.MappingRecord{
 		IdentityHash:  idHash,
 		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
 	})
-
-	if !escrow.DeleteMapping(idHash) {
-		t.Fatal("delete should return true for existing")
+	if !me.DeleteMapping(idHash) {
+		t.Fatal("delete should return true")
 	}
-	if escrow.HasMapping(idHash) {
+	if me.HasMapping(idHash) {
 		t.Fatal("should not have mapping after delete")
 	}
 }
 
 func TestMappingEscrow_DeleteNonexistent(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
-
-	idHash := sha256.Sum256([]byte("nope"))
-	if escrow.DeleteMapping(idHash) {
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+	if me.DeleteMapping(sha256.Sum256([]byte("nope"))) {
 		t.Fatal("delete of nonexistent should return false")
 	}
 }
@@ -235,41 +242,36 @@ func TestMappingEscrow_DefaultConfig(t *testing.T) {
 }
 
 func TestMappingEscrow_CustomConfig(t *testing.T) {
-	store := newInMemoryContentStore()
 	cfg := identity.MappingEscrowConfig{ShareThreshold: 2, TotalShares: 3}
-	escrow := identity.NewMappingEscrow(store, cfg)
-
+	me := identity.NewMappingEscrow(newMappingTestStore(), cfg)
 	idHash := sha256.Sum256([]byte("custom"))
-	stored, err := escrow.StoreMapping(identity.MappingRecord{
+	stored, err := me.StoreMapping(identity.MappingRecord{
 		IdentityHash:  idHash,
 		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stored.EscrowPkg.Shares) != 3 {
-		t.Fatalf("shares: %d (expected 3)", len(stored.EscrowPkg.Shares))
+	if len(stored.Shares) != 3 {
+		t.Fatalf("shares: %d (expected 3)", len(stored.Shares))
 	}
-	if stored.EscrowPkg.K != 2 {
-		t.Fatalf("K: %d", stored.EscrowPkg.K)
+	if stored.K != 2 {
+		t.Fatalf("K: %d", stored.K)
 	}
 }
 
 func TestMappingEscrow_ZeroConfig_UsesDefaults(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.MappingEscrowConfig{})
-
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.MappingEscrowConfig{})
 	idHash := sha256.Sum256([]byte("zero-cfg"))
-	stored, err := escrow.StoreMapping(identity.MappingRecord{
+	stored, err := me.StoreMapping(identity.MappingRecord{
 		IdentityHash:  idHash,
 		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should use defaults: K=3, N=5.
-	if stored.EscrowPkg.K != 3 {
-		t.Fatalf("K: %d (expected 3 default)", stored.EscrowPkg.K)
+	if stored.K != 3 {
+		t.Fatalf("K: %d (expected 3 default)", stored.K)
 	}
 }
 
@@ -278,22 +280,21 @@ func TestMappingEscrow_ZeroConfig_UsesDefaults(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 
 func TestMappingEscrow_MultipleIdentities(t *testing.T) {
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
 
 	id1 := sha256.Sum256([]byte("alice"))
 	id2 := sha256.Sum256([]byte("bob"))
 
-	stored1, _ := escrow.StoreMapping(identity.MappingRecord{
+	stored1, _ := me.StoreMapping(identity.MappingRecord{
 		IdentityHash:  id1,
 		CredentialRef: identity.CredentialRef{LogDID: "did:web:log1", Sequence: 10},
 	})
-	stored2, _ := escrow.StoreMapping(identity.MappingRecord{
+	stored2, _ := me.StoreMapping(identity.MappingRecord{
 		IdentityHash:  id2,
 		CredentialRef: identity.CredentialRef{LogDID: "did:web:log2", Sequence: 20},
 	})
 
-	result1, err := escrow.LookupMapping(id1, stored1.EscrowPkg.Shares[:3])
+	result1, err := me.LookupMapping(id1, stored1.Shares[:3])
 	if err != nil {
 		t.Fatalf("lookup alice: %v", err)
 	}
@@ -301,7 +302,7 @@ func TestMappingEscrow_MultipleIdentities(t *testing.T) {
 		t.Fatalf("alice seq: %d", result1.CredentialRef.Sequence)
 	}
 
-	result2, err := escrow.LookupMapping(id2, stored2.EscrowPkg.Shares[:3])
+	result2, err := me.LookupMapping(id2, stored2.Shares[:3])
 	if err != nil {
 		t.Fatalf("lookup bob: %v", err)
 	}
@@ -314,10 +315,8 @@ func TestMappingEscrow_IdentityTagIsDoubleHash(t *testing.T) {
 	idHash := sha256.Sum256([]byte("test"))
 	expectedTag := sha256.Sum256(idHash[:])
 
-	store := newInMemoryContentStore()
-	escrow := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
-
-	stored, _ := escrow.StoreMapping(identity.MappingRecord{
+	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+	stored, _ := me.StoreMapping(identity.MappingRecord{
 		IdentityHash:  idHash,
 		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
 	})

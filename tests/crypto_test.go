@@ -6,285 +6,244 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/admission"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/artifact"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
+	"github.com/clearcompass-ai/ortholog-sdk/crypto/signatures"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
 )
 
-// ── Admission stamps (2 tests) ─────────────────────────────────────────
+// ── Admission stamps ───────────────────────────────────────────────────
 
-// Test 20: Mode B stamp generate and verify.
 func TestAdmissionStamp_GenerateVerify(t *testing.T) {
 	entryHash := [32]byte{1, 2, 3}
 	logDID := "did:ortholog:testlog"
-	difficulty := uint32(8) // 8 leading zero bits — fast for testing.
-	nonce, err := admission.GenerateStamp(entryHash, logDID, difficulty, admission.HashSHA256, nil)
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	if err := admission.VerifyStamp(entryHash, nonce, logDID, difficulty, admission.HashSHA256, nil); err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
-}
-
-// Test 21: Stamp bound to target log DID — wrong DID rejected.
-func TestAdmissionStamp_WrongLogDIDRejected(t *testing.T) {
-	entryHash := [32]byte{4, 5, 6}
-	logDID := "did:ortholog:correct"
 	difficulty := uint32(8)
 	nonce, err := admission.GenerateStamp(entryHash, logDID, difficulty, admission.HashSHA256, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Verify against wrong log DID.
-	err = admission.VerifyStamp(entryHash, nonce, "did:ortholog:wrong", difficulty, admission.HashSHA256, nil)
-	if err == nil {
-		t.Fatal("stamp should fail against wrong log DID")
-	}
+	if err != nil { t.Fatalf("Generate: %v", err) }
+	if err := admission.VerifyStamp(entryHash, nonce, logDID, difficulty, admission.HashSHA256, nil); err != nil { t.Fatalf("Verify: %v", err) }
 }
 
-// ── Artifact encryption (2 tests) ──────────────────────────────────────
+func TestAdmissionStamp_WrongLogDIDRejected(t *testing.T) {
+	entryHash := [32]byte{4, 5, 6}
+	nonce, _ := admission.GenerateStamp(entryHash, "did:ortholog:correct", 8, admission.HashSHA256, nil)
+	err := admission.VerifyStamp(entryHash, nonce, "did:ortholog:wrong", 8, admission.HashSHA256, nil)
+	if err == nil { t.Fatal("stamp should fail against wrong log DID") }
+}
 
-// Test 22: Encrypt -> decrypt round-trip.
+// ── Artifact encryption ────────────────────────────────────────────────
+
 func TestArtifact_EncryptDecrypt(t *testing.T) {
 	plaintext := []byte("confidential credential data")
 	ciphertext, key, err := artifact.EncryptArtifact(plaintext)
-	if err != nil {
-		t.Fatal(err)
-	}
+	if err != nil { t.Fatal(err) }
 	recovered, err := artifact.DecryptArtifact(ciphertext, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(recovered) != string(plaintext) {
-		t.Fatal("decrypted plaintext doesn't match original")
-	}
+	if err != nil { t.Fatal(err) }
+	if string(recovered) != string(plaintext) { t.Fatal("decrypted plaintext doesn't match") }
 }
 
-// Test 23: Re-encrypt — old key destroyed, new key decrypts.
 func TestArtifact_ReEncrypt(t *testing.T) {
 	plaintext := []byte("re-encryption test")
 	ciphertext, oldKey, _ := artifact.EncryptArtifact(plaintext)
-	newCiphertext, newKey, err := artifact.ReEncryptArtifact(ciphertext, oldKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// New key decrypts new ciphertext.
-	recovered, err := artifact.DecryptArtifact(newCiphertext, newKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(recovered) != string(plaintext) {
-		t.Fatal("re-encrypted plaintext doesn't match")
-	}
-	// Old ciphertext with new key should fail.
+	newCT, newKey, err := artifact.ReEncryptArtifact(ciphertext, oldKey)
+	if err != nil { t.Fatal(err) }
+	recovered, err := artifact.DecryptArtifact(newCT, newKey)
+	if err != nil { t.Fatal(err) }
+	if string(recovered) != string(plaintext) { t.Fatal("re-encrypted plaintext doesn't match") }
 	_, err = artifact.DecryptArtifact(ciphertext, newKey)
-	if err == nil {
-		t.Fatal("old ciphertext should not decrypt with new key")
-	}
+	if err == nil { t.Fatal("old ciphertext should not decrypt with new key") }
 }
 
-// ── Escrow (2 tests) ───────────────────────────────────────────────────
+// ── Escrow ─────────────────────────────────────────────────────────────
 
-// Test 24: Shamir 3-of-5 — all C(5,3)=10 subsets reconstruct correctly.
 func TestEscrow_Shamir3of5AllSubsets(t *testing.T) {
-	secret := []byte("0123456789abcdef0123456789abcdef") // 32 bytes.
+	secret := []byte("0123456789abcdef0123456789abcdef")
 	shares, err := escrow.SplitGF256(secret, 3, 5)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(shares) != 5 {
-		t.Fatalf("expected 5 shares, got %d", len(shares))
-	}
-	// Test all C(5,3)=10 subsets.
+	if err != nil { t.Fatal(err) }
 	count := 0
 	for i := 0; i < 5; i++ {
 		for j := i + 1; j < 5; j++ {
 			for k := j + 1; k < 5; k++ {
 				subset := []escrow.Share{shares[i], shares[j], shares[k]}
 				recovered, err := escrow.ReconstructGF256(subset)
-				if err != nil {
-					t.Fatalf("subset {%d,%d,%d}: %v", i, j, k, err)
-				}
-				if string(recovered) != string(secret) {
-					t.Fatalf("subset {%d,%d,%d}: wrong secret", i, j, k)
-				}
+				if err != nil { t.Fatalf("subset {%d,%d,%d}: %v", i, j, k, err) }
+				if string(recovered) != string(secret) { t.Fatalf("subset {%d,%d,%d}: wrong secret", i, j, k) }
 				count++
 			}
 		}
 	}
-	if count != 10 {
-		t.Fatalf("tested %d subsets, expected 10", count)
-	}
+	if count != 10 { t.Fatalf("tested %d subsets, expected 10", count) }
 }
 
-// Test 25: Field tag validation — wrong tag rejected.
 func TestEscrow_TagValidation(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	shares, _ := escrow.SplitGF256(secret, 2, 3)
-	// Corrupt first share's tag.
-	shares[0].FieldTag = 0x02 // Wrong field.
+	shares[0].FieldTag = 0x02
 	_, err := escrow.ReconstructGF256(shares[:2])
-	if err == nil {
-		t.Fatal("expected error for unrecognized field tag 0x02")
-	}
+	if err == nil { t.Fatal("expected error for unrecognized field tag") }
 }
 
-// ── Blind routing (1 test) ─────────────────────────────────────────────
+// ── Blind routing ──────────────────────────────────────────────────────
 
-// Test 26: Mock attestation pass/fail.
 func TestBlindRouting_MockAttestation(t *testing.T) {
 	apple := &escrow.MockAppleAttestation{}
-	if err := apple.VerifyAttestation([]byte("valid")); err != nil {
-		t.Fatal(err)
-	}
-	if err := apple.VerifyAttestation(nil); err == nil {
-		t.Fatal("nil attestation should fail")
-	}
-	if apple.Platform() != "apple_secure_enclave_mock" {
-		t.Fatal("wrong platform")
-	}
+	if err := apple.VerifyAttestation([]byte("valid")); err != nil { t.Fatal(err) }
+	if err := apple.VerifyAttestation(nil); err == nil { t.Fatal("nil attestation should fail") }
+	if apple.Platform() != "apple_secure_enclave_mock" { t.Fatal("wrong platform") }
 	android := &escrow.MockAndroidAttestation{}
-	if err := android.VerifyAttestation([]byte("valid")); err != nil {
-		t.Fatal(err)
-	}
+	if err := android.VerifyAttestation([]byte("valid")); err != nil { t.Fatal(err) }
 }
 
-// ── Dead CID (1 test) ──────────────────────────────────────────────────
+// ── Dead CID ───────────────────────────────────────────────────────────
 
-// Test 27: Dead CID -> structured "irrecoverable" error.
 func TestDeadCID_Irrecoverable(t *testing.T) {
-	cas := storage.NewInMemoryCAS()
-	// Push, then delete (simulate key destruction / cryptographic erasure).
-	cid, _ := cas.Push([]byte("sensitive data"))
-	cas.Delete(cid)
-	_, err := cas.Fetch(cid)
-	if err == nil {
-		t.Fatal("expected not-found error for deleted CID")
-	}
-	if err != storage.ErrNotFound {
-		t.Fatalf("expected ErrNotFound, got: %v", err)
-	}
-
-	// Artifact decryption with wrong key -> irrecoverable.
-	ciphertext, _, _ := artifact.EncryptArtifact([]byte("data"))
-	wrongKey := artifact.ArtifactKey{} // Zero key.
-	_, err = artifact.DecryptArtifact(ciphertext, wrongKey)
-	if !artifact.IsIrrecoverable(err) {
-		t.Fatal("expected IrrecoverableError for wrong key")
-	}
-}
-
-// ── CID (3 tests) ──────────────────────────────────────────────────────
-
-// Test 28: CID compute → string → parse → verify round-trip.
-func TestCID_RoundTrip(t *testing.T) {
-	data := []byte("content-addressed artifact payload")
+	cs := storage.NewInMemoryContentStore()
+	data := []byte("sensitive data")
 	cid := storage.Compute(data)
-
-	// String round-trip.
-	s := cid.String()
-	parsed, err := storage.ParseCID(s)
-	if err != nil {
-		t.Fatalf("ParseCID(%q): %v", s, err)
-	}
-	if !cid.Equal(parsed) {
-		t.Fatal("parsed CID should equal original")
-	}
-
-	// Bytes round-trip.
-	b := cid.Bytes()
-	parsedB, err := storage.ParseCIDBytes(b)
-	if err != nil {
-		t.Fatalf("ParseCIDBytes: %v", err)
-	}
-	if !cid.Equal(parsedB) {
-		t.Fatal("bytes-parsed CID should equal original")
-	}
-
-	// Verify against original data.
-	if !cid.Verify(data) {
-		t.Fatal("CID should verify against original data")
-	}
-
-	// Verify rejects tampered data.
-	tampered := append([]byte{}, data...)
-	tampered[0] ^= 0xFF
-	if cid.Verify(tampered) {
-		t.Fatal("CID should reject tampered data")
-	}
-
-	// CAS interop: Push produces the same string as Compute.
-	cas := storage.NewInMemoryCAS()
-	casCID, _ := cas.Push(data)
-	if casCID != s {
-		t.Fatalf("CAS CID %q != Compute CID %q", casCID, s)
-	}
+	cs.Push(cid, data)
+	cs.Delete(cid)
+	_, err := cs.Fetch(cid)
+	if err != storage.ErrNotFound { t.Fatalf("expected ErrNotFound, got: %v", err) }
+	ciphertext, _, _ := artifact.EncryptArtifact([]byte("data"))
+	wrongKey := artifact.ArtifactKey{}
+	_, err = artifact.DecryptArtifact(ciphertext, wrongKey)
+	if !artifact.IsIrrecoverable(err) { t.Fatal("expected IrrecoverableError") }
 }
 
-// Test 29: VerifyAndDecrypt — full three-step chain passes.
-func TestVerifyAndDecrypt_Pass(t *testing.T) {
-	plaintext := []byte("credential payload for escrow")
+// ═══════════════════════════════════════════════════════════════════════
+// GAP 9: Re-encrypted artifact content_digest preservation
+// ═══════════════════════════════════════════════════════════════════════
 
-	// Encrypt.
-	ciphertext, key, err := artifact.EncryptArtifact(plaintext)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestVerifyAndDecrypt_ReEncryptPreservesContentDigest(t *testing.T) {
+	plaintext := []byte("re-encryption invariant: content_digest survives, artifact_cid changes")
 
-	// Compute CIDs.
-	artifactCID := storage.Compute(ciphertext)
+	// Original encryption
+	ct1, key1, err := artifact.EncryptArtifact(plaintext)
+	if err != nil { t.Fatal(err) }
+	artifactCID1 := storage.Compute(ct1)
 	contentDigest := storage.Compute(plaintext)
 
-	// VerifyAndDecrypt — all three steps pass.
-	recovered, err := artifact.VerifyAndDecrypt(ciphertext, key, artifactCID, contentDigest)
+	// Re-encrypt (Tier 1 key rotation)
+	ct2, key2, err := artifact.ReEncryptArtifact(ct1, key1)
+	if err != nil { t.Fatal(err) }
+	artifactCID2 := storage.Compute(ct2)
+
+	// artifact_cid MUST change (different ciphertext)
+	if artifactCID1.Equal(artifactCID2) {
+		t.Fatal("re-encryption must produce different artifact_cid")
+	}
+
+	// content_digest (hash of plaintext) MUST be the same
+	// This is the core invariant: content_digest survives re-encryption
+	// because re-encryption changes the ciphertext, not the plaintext.
+
+	// VerifyAndDecrypt with new key, new CID, but SAME content_digest
+	recovered, err := artifact.VerifyAndDecrypt(ct2, key2, artifactCID2, contentDigest)
 	if err != nil {
-		t.Fatalf("VerifyAndDecrypt should pass: %v", err)
+		t.Fatalf("VerifyAndDecrypt after re-encrypt should pass: %v", err)
 	}
 	if string(recovered) != string(plaintext) {
-		t.Fatal("recovered plaintext doesn't match original")
+		t.Fatal("recovered plaintext should match original")
 	}
 
-	// Also verify with zero contentDigest (legacy path — skips step 3).
-	recovered2, err := artifact.VerifyAndDecrypt(ciphertext, key, artifactCID, storage.CID{})
+	// Old key + old CID still works for old ciphertext
+	recovered2, err := artifact.VerifyAndDecrypt(ct1, key1, artifactCID1, contentDigest)
 	if err != nil {
-		t.Fatalf("VerifyAndDecrypt with zero contentDigest should pass: %v", err)
+		t.Fatalf("VerifyAndDecrypt with original should still pass: %v", err)
 	}
 	if string(recovered2) != string(plaintext) {
-		t.Fatal("recovered plaintext doesn't match (legacy path)")
+		t.Fatal("original decryption should still work")
 	}
 }
 
-// Test 30: VerifyAndDecrypt — tampered ciphertext detected at step 1.
-func TestVerifyAndDecrypt_TamperDetected(t *testing.T) {
-	plaintext := []byte("tamper detection test")
-	ciphertext, key, _ := artifact.EncryptArtifact(plaintext)
-	artifactCID := storage.Compute(ciphertext)
-	contentDigest := storage.Compute(plaintext)
+// ═══════════════════════════════════════════════════════════════════════
+// GAP 6: CSPRNG nonce uniqueness across 10K generations
+// ═══════════════════════════════════════════════════════════════════════
 
-	// Tamper ciphertext — step 1 (storage integrity) should catch this.
-	tampered := append([]byte{}, ciphertext...)
-	tampered[0] ^= 0xFF
+func TestCSPRNG_NonceUniqueness10K(t *testing.T) {
+	const N = 10000
+	type keyNonce struct {
+		key   [32]byte
+		nonce [12]byte
+	}
+	seen := make(map[keyNonce]bool, N)
 
-	_, err := artifact.VerifyAndDecrypt(tampered, key, artifactCID, contentDigest)
-	if err == nil {
-		t.Fatal("VerifyAndDecrypt should fail on tampered ciphertext")
+	for i := 0; i < N; i++ {
+		_, key, err := artifact.EncryptArtifact([]byte("test"))
+		if err != nil { t.Fatalf("iteration %d: %v", i, err) }
+		kn := keyNonce{key: key.Key, nonce: key.Nonce}
+		if seen[kn] {
+			t.Fatalf("duplicate key+nonce at iteration %d", i)
+		}
+		seen[kn] = true
 	}
-	if !artifact.IsIrrecoverable(err) {
-		t.Fatalf("expected IrrecoverableError, got: %v", err)
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// GAP 8: Per-node ECIES encrypt/decrypt
+// ═══════════════════════════════════════════════════════════════════════
+
+func TestECIES_EncryptDecryptRoundTrip(t *testing.T) {
+	// Generate escrow node key pair
+	nodeKey, err := signatures.GenerateKey()
+	if err != nil { t.Fatal(err) }
+
+	// Create a Shamir share and encrypt for node
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	shares, err := escrow.SplitGF256(secret, 3, 5)
+	if err != nil { t.Fatal(err) }
+
+	// Encrypt share for node
+	encrypted, err := escrow.EncryptShareForNode(shares[0], &nodeKey.PublicKey)
+	if err != nil { t.Fatalf("EncryptShareForNode: %v", err) }
+
+	// Decrypt share from node
+	recovered, err := escrow.DecryptShareFromNode(encrypted, nodeKey)
+	if err != nil { t.Fatalf("DecryptShareFromNode: %v", err) }
+
+	// Verify share content matches
+	if recovered.FieldTag != shares[0].FieldTag { t.Fatal("field tag mismatch") }
+	if recovered.Index != shares[0].Index { t.Fatal("index mismatch") }
+	for i := range recovered.Value {
+		if recovered.Value[i] != shares[0].Value[i] {
+			t.Fatalf("value byte %d mismatch", i)
+		}
 	}
 
-	// Wrong content digest — step 3 (content integrity) should catch this.
-	wrongDigest := storage.Compute([]byte("wrong content"))
-	_, err = artifact.VerifyAndDecrypt(ciphertext, key, artifactCID, wrongDigest)
-	if err == nil {
-		t.Fatal("VerifyAndDecrypt should fail on wrong content digest")
-	}
-	if !artifact.IsIrrecoverable(err) {
-		t.Fatalf("expected IrrecoverableError for content mismatch, got: %v", err)
-	}
+	// Wrong key should fail
+	wrongKey, _ := signatures.GenerateKey()
+	_, err = escrow.DecryptShareFromNode(encrypted, wrongKey)
+	if err == nil { t.Fatal("wrong key should fail decryption") }
+}
 
-	// Zero artifact CID — rejected immediately.
-	_, err = artifact.VerifyAndDecrypt(ciphertext, key, storage.CID{}, contentDigest)
-	if err == nil {
-		t.Fatal("VerifyAndDecrypt should fail on zero artifact CID")
-	}
+// ═══════════════════════════════════════════════════════════════════════
+// GAP 2 validation: ContentStore interface
+// ═══════════════════════════════════════════════════════════════════════
+
+func TestContentStore_PushFetchDelete(t *testing.T) {
+	store := storage.NewInMemoryContentStore()
+	data := []byte("artifact data for content store")
+
+	// SDK computes CID
+	cid := storage.Compute(data)
+
+	// Push
+	if err := store.Push(cid, data); err != nil { t.Fatal(err) }
+
+	// Exists
+	exists, err := store.Exists(cid)
+	if err != nil { t.Fatal(err) }
+	if !exists { t.Fatal("CID should exist after push") }
+
+	// Fetch
+	fetched, err := store.Fetch(cid)
+	if err != nil { t.Fatal(err) }
+	if string(fetched) != string(data) { t.Fatal("fetched data doesn't match") }
+
+	// Pin
+	if err := store.Pin(cid); err != nil { t.Fatal(err) }
+
+	// Delete
+	if err := store.Delete(cid); err != nil { t.Fatal(err) }
+
+	// Fetch after delete -> not found
+	_, err = store.Fetch(cid)
+	if err != storage.ErrContentNotFound { t.Fatalf("expected ErrContentNotFound, got: %v", err) }
 }

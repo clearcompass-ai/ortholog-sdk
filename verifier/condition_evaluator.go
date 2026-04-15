@@ -1,0 +1,350 @@
+/*
+Package verifier — condition_evaluator.go evaluates whether all conditions
+for a pending operation have been met. Used by monitoring services to
+determine when an activation entry should be published.
+
+Four conditions checked (all from SchemaParameters):
+  1. Activation delay elapsed: LogTime + ActivationDelay ≤ now
+  2. Cosignature threshold met: count of valid cosignatures ≥ CosignatureThreshold
+  3. Maturation epoch passed: LogTime + MaturationEpoch ≤ now (for key rotation)
+  4. Credential validity period not expired: LogTime + CredentialValidityPeriod > now
+
+Two entry points:
+  EvaluateConditions: full evaluation given a pending position + cosignatures
+  CheckActivationReady: quick boolean check for monitoring loops
+
+Consumed by:
+  - judicial-network/monitoring/sealing_compliance.go → EvaluateConditions
+  - operator admission pipeline for activation entry validation
+  - exchange lifecycle for activation entry publishing decisions
+*/
+package verifier
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
+	"github.com/clearcompass-ai/ortholog-sdk/schema"
+	"github.com/clearcompass-ai/ortholog-sdk/types"
+)
+
+// ─────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────
+
+// ConditionState classifies a single condition.
+type ConditionState uint8
+
+const (
+	// ConditionMet means the condition is satisfied.
+	ConditionMet ConditionState = iota
+	// ConditionPending means the condition is not yet satisfied.
+	ConditionPending
+	// ConditionNotApplicable means the condition is not required by the schema.
+	ConditionNotApplicable
+	// ConditionFailed means the condition cannot be satisfied (e.g., expired).
+	ConditionFailed
+)
+
+// ConditionDetail describes one evaluated condition.
+type ConditionDetail struct {
+	Name    string
+	State   ConditionState
+	Reason  string
+	MetAt   *time.Time // When the condition was or will be met. Nil if N/A.
+}
+
+// ConditionResult holds the full evaluation of all conditions for a
+// pending operation.
+type ConditionResult struct {
+	// AllMet is true when every applicable condition is satisfied.
+	AllMet bool
+
+	// Conditions lists each evaluated condition with its state.
+	Conditions []ConditionDetail
+
+	// PendingPosition is the position of the entry being evaluated.
+	PendingPosition types.LogPosition
+
+	// SchemaPosition is the Schema_Ref of the pending entry. Nil if absent.
+	SchemaPosition *types.LogPosition
+
+	// CosignatureCount is the number of valid cosignatures found.
+	CosignatureCount int
+
+	// EarliestActivation is the earliest time all time-based conditions
+	// will be met. Nil if all time conditions are already met or N/A.
+	EarliestActivation *time.Time
+}
+
+// EvaluateConditionsParams configures condition evaluation.
+type EvaluateConditionsParams struct {
+	// PendingPos is the log position of the pending operation.
+	PendingPos types.LogPosition
+
+	// Fetcher reads entries by position. Satisfied by operator's
+	// PostgresEntryFetcher or test MockFetcher.
+	Fetcher EntryFetcher
+
+	// Extractor reads schema parameters from Domain Payload.
+	// Nil is safe — all conditions default to met/not-applicable.
+	Extractor schema.SchemaParameterExtractor
+
+	// Cosignatures are the pre-fetched cosignature entries for the
+	// pending operation. The caller discovers these via
+	// OperatorQueryAPI.QueryByCosignatureOf(pendingPos).
+	Cosignatures []types.EntryWithMetadata
+
+	// Now is the evaluation time. Pass time.Now().UTC() for live
+	// evaluation or a fixed time for deterministic testing.
+	Now time.Time
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// EvaluateConditions
+// ─────────────────────────────────────────────────────────────────────
+
+// EvaluateConditions checks all schema-declared conditions for a pending
+// operation and returns a structured result.
+//
+// The caller is responsible for discovering cosignatures (via
+// OperatorQueryAPI.QueryByCosignatureOf) and passing them in. This keeps
+// the evaluator pure — it evaluates given data, it doesn't fetch data.
+//
+// Steps:
+//  1. Fetch the pending entry to read Schema_Ref and LogTime.
+//  2. If Schema_Ref is set, fetch schema entry and extract parameters.
+//  3. Evaluate each condition against the parameters and current time.
+//  4. Return structured result with per-condition detail.
+func EvaluateConditions(p EvaluateConditionsParams) (*ConditionResult, error) {
+	// 1. Fetch pending entry.
+	pendingMeta, err := p.Fetcher.Fetch(p.PendingPos)
+	if err != nil || pendingMeta == nil {
+		return nil, fmt.Errorf("verifier/conditions: pending entry not found at %s", p.PendingPos)
+	}
+	pendingEntry, err := envelope.Deserialize(pendingMeta.CanonicalBytes)
+	if err != nil {
+		return nil, fmt.Errorf("verifier/conditions: deserialize pending: %w", err)
+	}
+
+	result := &ConditionResult{
+		PendingPosition: p.PendingPos,
+		SchemaPosition:  pendingEntry.Header.SchemaRef,
+	}
+
+	// 2. Extract schema parameters.
+	var params *types.SchemaParameters
+	if pendingEntry.Header.SchemaRef != nil && p.Extractor != nil {
+		schemaMeta, fetchErr := p.Fetcher.Fetch(*pendingEntry.Header.SchemaRef)
+		if fetchErr == nil && schemaMeta != nil {
+			schemaEntry, desErr := envelope.Deserialize(schemaMeta.CanonicalBytes)
+			if desErr == nil {
+				extracted, extErr := p.Extractor.Extract(schemaEntry)
+				if extErr == nil {
+					params = extracted
+				}
+			}
+		}
+	}
+
+	// 3. Evaluate each condition.
+	entryTime := pendingMeta.LogTime
+
+	// Condition 1: Activation delay.
+	result.Conditions = append(result.Conditions, evaluateActivationDelay(params, entryTime, p.Now))
+
+	// Condition 2: Cosignature threshold.
+	cosigDetail := evaluateCosignatureThreshold(params, p.Cosignatures, pendingEntry)
+	result.CosignatureCount = countValidCosignatures(p.Cosignatures, pendingEntry)
+	result.Conditions = append(result.Conditions, cosigDetail)
+
+	// Condition 3: Maturation epoch.
+	result.Conditions = append(result.Conditions, evaluateMaturationEpoch(params, entryTime, p.Now))
+
+	// Condition 4: Credential validity period.
+	result.Conditions = append(result.Conditions, evaluateCredentialValidity(params, entryTime, p.Now))
+
+	// 4. Compute aggregate.
+	result.AllMet = true
+	var earliest *time.Time
+	for _, c := range result.Conditions {
+		if c.State == ConditionPending || c.State == ConditionFailed {
+			result.AllMet = false
+		}
+		if c.State == ConditionPending && c.MetAt != nil {
+			if earliest == nil || c.MetAt.Before(*earliest) {
+				t := *c.MetAt
+				earliest = &t
+			}
+		}
+	}
+	// EarliestActivation is the LATEST of all pending "MetAt" times
+	// (all must be met, so we need the last one).
+	if !result.AllMet {
+		var latest *time.Time
+		for _, c := range result.Conditions {
+			if c.State == ConditionPending && c.MetAt != nil {
+				if latest == nil || c.MetAt.After(*latest) {
+					t := *c.MetAt
+					latest = &t
+				}
+			}
+		}
+		result.EarliestActivation = latest
+	}
+
+	return result, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// CheckActivationReady — quick boolean for monitoring loops
+// ─────────────────────────────────────────────────────────────────────
+
+// CheckActivationReady is a convenience wrapper that returns true when
+// all conditions are met. Monitoring services call this in tight loops
+// to decide whether to publish an activation entry.
+func CheckActivationReady(p EvaluateConditionsParams) (bool, error) {
+	result, err := EvaluateConditions(p)
+	if err != nil {
+		return false, err
+	}
+	return result.AllMet, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Individual condition evaluators
+// ─────────────────────────────────────────────────────────────────────
+
+func evaluateActivationDelay(params *types.SchemaParameters, entryTime time.Time, now time.Time) ConditionDetail {
+	if params == nil || params.ActivationDelay <= 0 {
+		return ConditionDetail{
+			Name:   "activation_delay",
+			State:  ConditionNotApplicable,
+			Reason: "no activation delay declared",
+		}
+	}
+
+	effectiveAt := entryTime.Add(params.ActivationDelay)
+	if !now.Before(effectiveAt) {
+		return ConditionDetail{
+			Name:   "activation_delay",
+			State:  ConditionMet,
+			Reason: fmt.Sprintf("delay %s elapsed at %s", params.ActivationDelay, effectiveAt.Format(time.RFC3339)),
+			MetAt:  &effectiveAt,
+		}
+	}
+	return ConditionDetail{
+		Name:   "activation_delay",
+		State:  ConditionPending,
+		Reason: fmt.Sprintf("delay %s not elapsed until %s", params.ActivationDelay, effectiveAt.Format(time.RFC3339)),
+		MetAt:  &effectiveAt,
+	}
+}
+
+func evaluateCosignatureThreshold(params *types.SchemaParameters, cosignatures []types.EntryWithMetadata, pendingEntry *envelope.Entry) ConditionDetail {
+	if params == nil || params.CosignatureThreshold <= 0 {
+		return ConditionDetail{
+			Name:   "cosignature_threshold",
+			State:  ConditionNotApplicable,
+			Reason: "no cosignature threshold declared",
+		}
+	}
+
+	validCount := countValidCosignatures(cosignatures, pendingEntry)
+	threshold := params.CosignatureThreshold
+
+	if validCount >= threshold {
+		return ConditionDetail{
+			Name:   "cosignature_threshold",
+			State:  ConditionMet,
+			Reason: fmt.Sprintf("%d of %d required cosignatures present", validCount, threshold),
+		}
+	}
+	return ConditionDetail{
+		Name:   "cosignature_threshold",
+		State:  ConditionPending,
+		Reason: fmt.Sprintf("%d of %d required cosignatures present", validCount, threshold),
+	}
+}
+
+func evaluateMaturationEpoch(params *types.SchemaParameters, entryTime time.Time, now time.Time) ConditionDetail {
+	if params == nil || params.MaturationEpoch <= 0 {
+		return ConditionDetail{
+			Name:   "maturation_epoch",
+			State:  ConditionNotApplicable,
+			Reason: "no maturation epoch declared",
+		}
+	}
+
+	maturedAt := entryTime.Add(params.MaturationEpoch)
+	if !now.Before(maturedAt) {
+		return ConditionDetail{
+			Name:   "maturation_epoch",
+			State:  ConditionMet,
+			Reason: fmt.Sprintf("maturation %s elapsed at %s", params.MaturationEpoch, maturedAt.Format(time.RFC3339)),
+			MetAt:  &maturedAt,
+		}
+	}
+	return ConditionDetail{
+		Name:   "maturation_epoch",
+		State:  ConditionPending,
+		Reason: fmt.Sprintf("maturation %s not elapsed until %s", params.MaturationEpoch, maturedAt.Format(time.RFC3339)),
+		MetAt:  &maturedAt,
+	}
+}
+
+func evaluateCredentialValidity(params *types.SchemaParameters, entryTime time.Time, now time.Time) ConditionDetail {
+	if params == nil || params.CredentialValidityPeriod == nil {
+		return ConditionDetail{
+			Name:   "credential_validity",
+			State:  ConditionNotApplicable,
+			Reason: "no credential validity period declared (no expiry)",
+		}
+	}
+
+	expiresAt := entryTime.Add(*params.CredentialValidityPeriod)
+	if now.Before(expiresAt) {
+		return ConditionDetail{
+			Name:   "credential_validity",
+			State:  ConditionMet,
+			Reason: fmt.Sprintf("valid until %s", expiresAt.Format(time.RFC3339)),
+			MetAt:  &expiresAt,
+		}
+	}
+	return ConditionDetail{
+		Name:   "credential_validity",
+		State:  ConditionFailed,
+		Reason: fmt.Sprintf("expired at %s", expiresAt.Format(time.RFC3339)),
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────
+
+// countValidCosignatures counts cosignature entries whose CosignatureOf
+// matches the pending entry's position. Each unique signer counts once.
+func countValidCosignatures(cosignatures []types.EntryWithMetadata, pendingEntry *envelope.Entry) int {
+	seen := make(map[string]bool)
+	count := 0
+	for _, meta := range cosignatures {
+		entry, err := envelope.Deserialize(meta.CanonicalBytes)
+		if err != nil {
+			continue
+		}
+		if entry.Header.CosignatureOf == nil {
+			continue
+		}
+		// Exclude self-cosignature (signer cosigning their own entry).
+		if entry.Header.SignerDID == pendingEntry.Header.SignerDID {
+			continue
+		}
+		if seen[entry.Header.SignerDID] {
+			continue
+		}
+		seen[entry.Header.SignerDID] = true
+		count++
+	}
+	return count
+}

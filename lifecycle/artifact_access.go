@@ -1,56 +1,46 @@
 /*
 Package lifecycle — artifact_access.go composes artifact access control.
 
-Three responsibilities:
+Four responsibilities:
 
-1. GRANT AUTHORIZATION (Phase 6): CheckGrantAuthorization determines
-   whether a granter is allowed to produce key material for a recipient.
-   Dispatches on GrantAuthorizationMode from the schema:
-     - GrantAuthOpen: no check, produce key material for anyone.
-     - GrantAuthRestricted: granter must be in scope's AuthoritySet.
-     - GrantAuthSealed: restricted check + recipient must be in the
-       caller-provided authorized recipients list.
+ 1. KEY STORE: ArtifactKeyStore interface + InMemoryKeyStore. Maps CID to
+    ArtifactKey (Key[32] + Nonce[12]). AES-GCM only — one key per artifact.
+    PRE owner keys have a different lifecycle (per-identity, HSM-held) and
+    arrive via OwnerSecretKey on the grant params, not the key store.
 
-2. KEY MATERIAL PRODUCTION: GrantArtifactAccess routes to AES-GCM
-   (ECIES key wrapping via escrow.EncryptForNode) or Umbral PRE
-   (threshold re-encryption with DLEQ proofs) based on schema parameters.
+ 2. GRANT AUTHORIZATION (Phase 6): CheckGrantAuthorization gates key
+    material production. Dispatches on GrantAuthorizationMode:
+    GrantAuthOpen(0):       no check.
+    GrantAuthRestricted(1): granter in scope AuthoritySet.
+    GrantAuthSealed(2):     restricted + recipient in authorized list.
 
-3. CONTENT VERIFICATION: VerifyAndDecrypt validates content integrity
-   after decryption by checking the content digest (SHA-256 of plaintext).
-   The CID check (ciphertext integrity) is NOT performed here — the
-   content store already verifies CID integrity on fetch. The content
-   digest is the only check the decryptor can exclusively perform.
+ 3. KEY MATERIAL PRODUCTION: GrantArtifactAccess routes to AES-GCM
+    (ECIES key wrapping via escrow.EncryptForNode) or Umbral PRE
+    (threshold re-encryption with DLEQ proofs).
+
+ 4. CONTENT VERIFICATION: VerifyAndDecryptArtifact decrypts and verifies
+    ciphertext integrity (ArtifactCID) and plaintext integrity
+    (ContentDigest).
 
 ECIES key wrapping reuses escrow.EncryptForNode — same ECIES primitive
 over secp256k1. The recipient is an artifact requester rather than an
 escrow node, but the cryptographic operation is identical.
 
-The SDK is domain-agnostic. CheckGrantAuthorization does not know whether
-it is protecting a physician's rotation evaluation, sealed court evidence,
-or insurance policy details. It checks structural membership (DID in set)
-and produces or withholds key material. The domain application provides
-the inputs; the SDK validates them.
+The SDK is domain-agnostic. None of this code knows whether it protects
+physician credentials, sealed court evidence, or insurance policies.
 
-TRUST BOUNDARY (applies to AuthorizedRecipients):
-  The SDK enforces membership in the authorized recipients list. The
-  domain application is responsible for the list's correctness. The SDK
-  cannot verify that the list matches a sealing order or consent decision
-  because the SDK does not read Domain Payload (SDK-D6). An incorrect
-  list is a domain bug, not a protocol violation. Same caller-provides-
-  SDK-validates pattern as CosignaturePositions in EvaluateConditions
-  and CandidatePositions in AssemblePathB.
+TRUST BOUNDARY (AuthorizedRecipients in sealed mode):
 
-Consumed by:
-  - enforcement/evidence_access.go (grant artifact access for evidence)
-  - cases/artifact/retrieve.go (verify and decrypt retrieved artifacts)
-  - Any domain application that grants per-recipient artifact access
+	The SDK enforces membership. The domain application is responsible for
+	correctness. Same pattern as CosignaturePositions in EvaluateConditions
+	and CandidatePositions in AssemblePathB.
 */
 package lifecycle
 
 import (
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/clearcompass-ai/ortholog-sdk/builder"
@@ -58,114 +48,107 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/artifact"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
-	"github.com/clearcompass-ai/ortholog-sdk/crypto/signatures"
-	"github.com/clearcompass-ai/ortholog-sdk/schema"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
-// ─────────────────────────────────────────────────────────────────────
-// ArtifactKeyStore — key material storage for artifact access control
-// ─────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════
+// ArtifactKeyStore
+// ═════════════════════════════════════════════════════════════════════
 
-// ArtifactKeyStore stores and retrieves key material by artifact CID.
-// For AES-GCM mode: stores AES key + nonce (44 bytes).
-// For Umbral PRE mode: stores the owner's private key (32 bytes).
+// ArtifactKeyStore maps artifact CID to AES-GCM key material.
+// Used by GrantArtifactAccess (AES-GCM path), ReEncryptWithGrant,
+// and ExecuteRecovery. Not used by the PRE path — PRE owner keys
+// arrive via OwnerSecretKey on the grant params.
 type ArtifactKeyStore interface {
-	Get(cid storage.CID) ([]byte, error)
-	Store(cid storage.CID, key []byte) error
+	Get(cid storage.CID) (*artifact.ArtifactKey, error)
+	Store(cid storage.CID, key artifact.ArtifactKey) error
 	Delete(cid storage.CID) error
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// Grant authorization — who may grant, who may receive
-// ═════════════════════════════════════════════════════════════════════
+// InMemoryKeyStore is the reference implementation for testing and
+// development. Production deployments back this with an HSM or KMS.
+type InMemoryKeyStore struct {
+	mu    sync.RWMutex
+	store map[string]artifact.ArtifactKey
+}
 
-// ─────────────────────────────────────────────────────────────────────
-// Grant authorization types
-// ─────────────────────────────────────────────────────────────────────
+// NewInMemoryKeyStore creates an empty key store.
+func NewInMemoryKeyStore() *InMemoryKeyStore {
+	return &InMemoryKeyStore{store: make(map[string]artifact.ArtifactKey)}
+}
+
+func (s *InMemoryKeyStore) Get(cid storage.CID) (*artifact.ArtifactKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	k, ok := s.store[cid.String()]
+	if !ok {
+		return nil, nil
+	}
+	cp := k
+	return &cp, nil
+}
+
+func (s *InMemoryKeyStore) Store(cid storage.CID, key artifact.ArtifactKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.store[cid.String()] = key
+	return nil
+}
+
+func (s *InMemoryKeyStore) Delete(cid storage.CID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.store, cid.String())
+	return nil
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// Grant authorization (Phase 6)
+// ═════════════════════════════════════════════════════════════════════
 
 // GrantAuthCheckParams configures grant authorization verification.
 type GrantAuthCheckParams struct {
 	// Mode is the grant authorization policy from the schema.
-	// Determines which checks are performed.
 	Mode types.GrantAuthorizationMode
 
-	// GranterDID is the DID of the party calling GrantArtifactAccess.
-	// For GrantAuthRestricted and GrantAuthSealed: must be a member of
-	// the scope's AuthoritySet.
+	// GranterDID is the party calling GrantArtifactAccess.
+	// Must be in scope AuthoritySet for restricted/sealed modes.
 	GranterDID string
 
-	// RecipientDID is the DID of the party that will receive key material.
-	// For GrantAuthSealed: must appear in AuthorizedRecipients.
-	// For GrantAuthRestricted: informational only (not checked).
-	// For GrantAuthOpen: ignored.
+	// RecipientDID is the party receiving key material.
+	// Must be in AuthorizedRecipients for sealed mode.
 	RecipientDID string
 
-	// ScopePointer identifies the scope entity whose AuthoritySet
-	// governs grant authorization. Required for restricted and sealed
-	// modes. The SDK fetches the scope entry at this position and reads
-	// its AuthoritySet — same read-only pattern as classifyPathC in
-	// entry_classification.go.
+	// ScopePointer identifies the scope whose AuthoritySet governs
+	// this grant. Required for restricted and sealed modes.
 	ScopePointer *types.LogPosition
 
-	// AuthorizedRecipients is the list of DIDs permitted to receive
-	// artifact access. Required for GrantAuthSealed only.
-	//
-	// TRUST BOUNDARY: The SDK enforces membership in this list. The
-	// domain application is responsible for the list's correctness.
-	// See package-level doc comment for full trust boundary discussion.
+	// AuthorizedRecipients is the allowlist for sealed mode.
+	// SDK enforces membership; domain app ensures correctness.
 	AuthorizedRecipients []string
 
-	// Fetcher retrieves entries by position (for scope entry lookup).
+	// Fetcher retrieves entries by position (scope entry lookup).
 	Fetcher builder.EntryFetcher
 
-	// LeafReader reads SMT leaves (for scope leaf OriginTip lookup).
+	// LeafReader reads SMT leaves (scope OriginTip lookup).
 	LeafReader smt.LeafReader
 }
 
-// GrantAuthCheckResult holds the outcome of grant authorization.
+// GrantAuthCheckResult holds the authorization outcome.
 type GrantAuthCheckResult struct {
-	// Authorized is true when the granter may produce key material
-	// for the recipient under the schema's grant authorization policy.
 	Authorized bool
-
-	// Reason describes why authorization was granted or denied.
-	// Human-readable, for logging and diagnostics.
-	Reason string
+	Reason     string
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// CheckGrantAuthorization
-// ─────────────────────────────────────────────────────────────────────
-
-// CheckGrantAuthorization determines whether a granter is authorized to
-// produce key material for a recipient, according to the schema's
-// GrantAuthorizationMode.
+// CheckGrantAuthorization determines whether a granter may produce key
+// material for a recipient under the schema's grant authorization policy.
 //
-// Three modes:
-//
-//	GrantAuthOpen (0):
-//	  No check. Returns Authorized=true immediately.
-//	  Every pre-Phase-6 schema defaults to this mode.
-//
-//	GrantAuthRestricted (1):
-//	  Fetches the scope entry at ScopePointer. Reads the current scope
-//	  state (via LeafReader → OriginTip → Fetcher). Checks that
-//	  GranterDID is in the scope's AuthoritySet. If yes → authorized.
-//	  If no → denied.
-//
-//	GrantAuthSealed (2):
-//	  Restricted check (granter in authority set) PLUS: scans
-//	  AuthorizedRecipients for RecipientDID. Both must pass.
-//
-// This function is called by GrantArtifactAccess BEFORE any key material
-// is produced. If it returns Authorized=false, no ECIES wrapping occurs,
-// no KFrags are generated, no retrieval credential is issued. The
-// recipient gets nothing.
+// Called by GrantArtifactAccess before any key material is produced.
+// If Authorized=false, no ECIES wrapping occurs, no KFrags are
+// generated, no retrieval credential is issued.
 func CheckGrantAuthorization(params GrantAuthCheckParams) (*GrantAuthCheckResult, error) {
-
-	// ── GrantAuthOpen: no check ─────────────────────────────────────
+	// Open: no check.
 	if params.Mode == types.GrantAuthOpen {
 		return &GrantAuthCheckResult{
 			Authorized: true,
@@ -173,16 +156,13 @@ func CheckGrantAuthorization(params GrantAuthCheckParams) (*GrantAuthCheckResult
 		}, nil
 	}
 
-	// ── GrantAuthRestricted and GrantAuthSealed: granter must be in
-	//    the scope's AuthoritySet ─────────────────────────────────────
-
+	// Restricted and sealed: granter must be in scope AuthoritySet.
 	if params.GranterDID == "" {
 		return &GrantAuthCheckResult{
 			Authorized: false,
 			Reason:     "granter DID is empty",
 		}, nil
 	}
-
 	if params.ScopePointer == nil {
 		return &GrantAuthCheckResult{
 			Authorized: false,
@@ -190,13 +170,8 @@ func CheckGrantAuthorization(params GrantAuthCheckParams) (*GrantAuthCheckResult
 		}, nil
 	}
 
-	// Fetch the current scope entry. The scope is an SMT leaf whose
-	// OriginTip may have advanced (scope amendment). We read the leaf
-	// to find the current OriginTip, then fetch the entry at that tip
-	// to get the current AuthoritySet.
-	//
-	// This is the same read-only scope lookup that classifyPathC in
-	// entry_classification.go performs. No SMT mutation.
+	// Read current scope: LeafReader → OriginTip → Fetcher → Deserialize.
+	// Same read-only pattern as classifyPathC in entry_classification.go.
 	scopeLeafKey := smt.DeriveKey(*params.ScopePointer)
 	scopeLeaf, err := params.LeafReader.Get(scopeLeafKey)
 	if err != nil || scopeLeaf == nil {
@@ -218,11 +193,10 @@ func CheckGrantAuthorization(params GrantAuthCheckParams) (*GrantAuthCheckResult
 	if err != nil {
 		return &GrantAuthCheckResult{
 			Authorized: false,
-			Reason:     fmt.Sprintf("scope entry deserialization failed: %v", err),
+			Reason:     fmt.Sprintf("scope deserialization failed: %v", err),
 		}, nil
 	}
 
-	// Check: granter is in the scope's AuthoritySet.
 	if !scopeEntry.Header.AuthoritySetContains(params.GranterDID) {
 		return &GrantAuthCheckResult{
 			Authorized: false,
@@ -231,7 +205,7 @@ func CheckGrantAuthorization(params GrantAuthCheckParams) (*GrantAuthCheckResult
 		}, nil
 	}
 
-	// ── GrantAuthRestricted: granter check passed, done ─────────────
+	// Restricted: granter check passed, done.
 	if params.Mode == types.GrantAuthRestricted {
 		return &GrantAuthCheckResult{
 			Authorized: true,
@@ -239,24 +213,21 @@ func CheckGrantAuthorization(params GrantAuthCheckParams) (*GrantAuthCheckResult
 		}, nil
 	}
 
-	// ── GrantAuthSealed: additionally check recipient in list ────────
-
+	// Sealed: additionally check recipient in authorized list.
 	if params.RecipientDID == "" {
 		return &GrantAuthCheckResult{
 			Authorized: false,
 			Reason:     "recipient DID is empty (required for sealed mode)",
 		}, nil
 	}
-
-	for _, authorized := range params.AuthorizedRecipients {
-		if authorized == params.RecipientDID {
+	for _, did := range params.AuthorizedRecipients {
+		if did == params.RecipientDID {
 			return &GrantAuthCheckResult{
 				Authorized: true,
 				Reason:     "granter in authority set and recipient in authorized list",
 			}, nil
 		}
 	}
-
 	return &GrantAuthCheckResult{
 		Authorized: false,
 		Reason: fmt.Sprintf("recipient %s is not in authorized recipients list (size %d)",
@@ -265,143 +236,71 @@ func CheckGrantAuthorization(params GrantAuthCheckParams) (*GrantAuthCheckResult
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// Key material production — GrantArtifactAccess
+// GrantArtifactAccess
 // ═════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────────────────────────────────────────────────
-// Grant types
-// ─────────────────────────────────────────────────────────────────────
-
-// GrantParams configures artifact access grant.
-type GrantParams struct {
+// GrantArtifactAccessParams configures artifact access grant.
+type GrantArtifactAccessParams struct {
 	ArtifactCID       storage.CID
-	RequesterPubKey   []byte              // Recipient's secp256k1 public key (65 bytes uncompressed).
-	SchemaRef         types.LogPosition   // Schema governing this artifact.
-	Fetcher           builder.EntryFetcher
-	Extractor         schema.SchemaParameterExtractor
-	KeyStore          ArtifactKeyStore
-	RetrievalProvider storage.RetrievalProvider
+	ContentDigest     storage.CID               // CID of plaintext, for audit entries.
+	RecipientPubKey   []byte                    // 65-byte uncompressed secp256k1 public key.
+	KeyStore          ArtifactKeyStore          // AES-GCM key material.
+	RetrievalProvider storage.RetrievalProvider // Resolves retrieval credentials.
+	SchemaParams      *types.SchemaParameters   // Caller provides directly.
 
-	// GranterDID is the signer for the optional grant commentary entry
-	// and the subject of grant authorization checks.
-	// Required when the schema sets GrantAuthRestricted or GrantAuthSealed.
-	// Required when GrantEntryRequired or GrantRequiresAuditEntry is true.
-	GranterDID string
-
-	// ContentDigest is SHA-256(plaintext). Included in grant entries
-	// for recipient-side verification.
-	ContentDigest [32]byte
-
-	// ── Grant authorization fields ───────────────────────────────────
-	// Required when GrantAuthorizationMode != GrantAuthOpen.
-	// Ignored when GrantAuthorizationMode == GrantAuthOpen.
-
-	// RecipientDID identifies who is receiving artifact access.
-	// Required for GrantAuthSealed (checked against AuthorizedRecipients).
-	// Included in audit entries when present.
+	// Audit entry fields.
+	GranterDID   string
 	RecipientDID string
 
-	// EntityPosition is the entity the artifact belongs to.
-	// Used for scope lookup in restricted/sealed modes.
-	EntityPosition types.LogPosition
-
-	// ScopePointer is the scope governing the entity.
-	// Required for GrantAuthRestricted and GrantAuthSealed.
-	// The SDK fetches this scope entry and checks AuthoritySet membership.
-	ScopePointer *types.LogPosition
-
-	// AuthorizedRecipients is the list of DIDs authorized to receive
-	// access. Required for GrantAuthSealed only.
-	// See GrantAuthCheckParams.AuthorizedRecipients for trust boundary docs.
+	// Grant authorization (Phase 6). Required when
+	// SchemaParams.GrantAuthorizationMode != GrantAuthOpen.
+	ScopePointer         *types.LogPosition
 	AuthorizedRecipients []string
+	Fetcher              builder.EntryFetcher
+	LeafReader           smt.LeafReader
 
-	// LeafReader for scope authority verification in restricted/sealed mode.
-	LeafReader smt.LeafReader
+	// PRE-specific fields. Nil/zero for AES-GCM mode.
+	Capsule     *artifact.Capsule
+	OwnerPubKey []byte // 65-byte owner public key.
 
-	// ── PRE-specific fields (nil/zero for AES-GCM mode) ─────────────
+	// OwnerSecretKey is the owner's secp256k1 private key (32 bytes).
+	// Required for PRE mode. Ignored for AES-GCM mode.
+	// This is an identity-level key (one per owner), not a per-artifact key.
+	// It comes from the exchange's HSM/enclave, not from ArtifactKeyStore.
+	OwnerSecretKey []byte
 
-	// Capsule is the original capsule from PRE_Encrypt. Required for
-	// Umbral PRE mode — the exchange stores this at encryption time.
-	Capsule *artifact.Capsule
-
-	// OwnerPubKey is the owner's secp256k1 public key (65 bytes).
-	// Required for PRE mode grant entries.
-	OwnerPubKey []byte
-
-	// RetrievalExpiry is the duration for retrieval credential validity.
-	// Zero uses the provider's default.
 	RetrievalExpiry time.Duration
 }
 
-// GrantResult holds the output of GrantArtifactAccess.
-type GrantResult struct {
-	Retrieval    *storage.RetrievalCredential
-	GrantEntry   *envelope.Entry      // Nil if no audit entry required.
-	Scheme       types.EncryptionScheme
-
-	// AES-GCM mode: ECIES-wrapped key material for the requester.
-	EncryptedKey []byte
-
-	// Umbral PRE mode: re-encryption fragments and capsule.
-	CFrags  []*artifact.CFrag
-	Capsule *artifact.Capsule
-
-	ContentDigest [32]byte
+// GrantArtifactAccessResult holds the grant output.
+type GrantArtifactAccessResult struct {
+	Method     string                       // "aes_gcm" or "umbral_pre".
+	Credential *storage.RetrievalCredential // Retrieval path for ciphertext.
+	WrappedKey []byte                       // AES-GCM: ECIES-wrapped key material.
+	GrantEntry *envelope.Entry              // Nil if no audit entry required.
+	CFrags     []*artifact.CFrag            // PRE mode only.
+	Capsule    *artifact.Capsule            // PRE mode only.
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// GrantArtifactAccess
-// ─────────────────────────────────────────────────────────────────────
-
-// GrantArtifactAccess composes a grant for artifact access. Three phases:
+// GrantArtifactAccess composes a grant for artifact access.
 //
-// Phase 1 — AUTHORIZATION (Phase 6 addition):
+// Phase 1 — Authorization: if mode != open, CheckGrantAuthorization
+// gates all subsequent work. Denied → error, no key material produced.
 //
-//	If the schema's GrantAuthorizationMode is not GrantAuthOpen,
-//	CheckGrantAuthorization is called BEFORE any key material is produced.
-//	If the check fails, the function returns an error immediately.
-//	No ECIES wrapping. No KFrag generation. No retrieval credential.
-//	The recipient gets nothing.
+// Phase 2 — Key material: AES-GCM wraps via ECIES (KeyStore → wrap).
+// PRE generates KFrags and CFrags (OwnerSecretKey → KFrags → CFrags).
 //
-// Phase 2 — KEY MATERIAL PRODUCTION:
-//
-//	Dispatches on the schema's ArtifactEncryption field.
-//	AES-GCM: KeyStore.Get → ECIES wrap for requester → EncryptedKey.
-//	PRE: KeyStore.Get → PRE_GenerateKFrags → PRE_ReEncrypt → CFrags.
-//
-// Phase 3 — RETRIEVAL + AUDIT:
-//
-//	RetrievalProvider.Resolve → retrieval credential.
-//	If GrantEntryRequired or GrantRequiresAuditEntry → build commentary.
-func GrantArtifactAccess(params GrantParams) (*GrantResult, error) {
-	// ── Fetch and extract schema parameters ─────────────────────────
-
-	schemaMeta, err := params.Fetcher.Fetch(params.SchemaRef)
-	if err != nil || schemaMeta == nil {
-		return nil, fmt.Errorf("lifecycle/artifact: schema not found at %s", params.SchemaRef)
-	}
-	schemaEntry, err := envelope.Deserialize(schemaMeta.CanonicalBytes)
-	if err != nil {
-		return nil, fmt.Errorf("lifecycle/artifact: deserialize schema: %w", err)
-	}
-	schemaParams, err := params.Extractor.Extract(schemaEntry)
-	if err != nil {
-		return nil, fmt.Errorf("lifecycle/artifact: extract schema params: %w", err)
+// Phase 3 — Retrieval + audit: resolve retrieval credential, optionally
+// build a commentary entry recording the grant.
+func GrantArtifactAccess(params GrantArtifactAccessParams) (*GrantArtifactAccessResult, error) {
+	if params.SchemaParams == nil {
+		return nil, fmt.Errorf("lifecycle/artifact: nil schema params")
 	}
 
-	// ── Phase 1: Grant authorization check ──────────────────────────
-	//
-	// This is the gate. If the schema declares GrantAuthRestricted or
-	// GrantAuthSealed, the granter must pass the authorization check
-	// before the SDK produces any key material. This prevents an
-	// unauthorized caller from obtaining ECIES-wrapped keys or CFrags.
-	//
-	// GrantAuthOpen (the default, zero value) skips the check entirely.
-	// Every pre-Phase-6 schema takes this path — no behavioral change.
-
-	if schemaParams.GrantAuthorizationMode != types.GrantAuthOpen {
-		check, checkErr := CheckGrantAuthorization(GrantAuthCheckParams{
-			Mode:                 schemaParams.GrantAuthorizationMode,
+	// ── Phase 1: Grant authorization ────────────────────────────────
+	if params.SchemaParams.GrantAuthorizationMode != types.GrantAuthOpen {
+		check, err := CheckGrantAuthorization(GrantAuthCheckParams{
+			Mode:                 params.SchemaParams.GrantAuthorizationMode,
 			GranterDID:           params.GranterDID,
 			RecipientDID:         params.RecipientDID,
 			ScopePointer:         params.ScopePointer,
@@ -409,8 +308,8 @@ func GrantArtifactAccess(params GrantParams) (*GrantResult, error) {
 			Fetcher:              params.Fetcher,
 			LeafReader:           params.LeafReader,
 		})
-		if checkErr != nil {
-			return nil, fmt.Errorf("lifecycle/artifact: grant authorization check: %w", checkErr)
+		if err != nil {
+			return nil, fmt.Errorf("lifecycle/artifact: grant authorization: %w", err)
 		}
 		if !check.Authorized {
 			return nil, fmt.Errorf("lifecycle/artifact: grant denied: %s", check.Reason)
@@ -418,105 +317,91 @@ func GrantArtifactAccess(params GrantParams) (*GrantResult, error) {
 	}
 
 	// ── Phase 2: Key material production ────────────────────────────
-
-	result := &GrantResult{
-		ContentDigest: params.ContentDigest,
-	}
-
-	switch schemaParams.ArtifactEncryption {
+	result := &GrantArtifactAccessResult{}
+	switch params.SchemaParams.ArtifactEncryption {
 	case types.EncryptionAESGCM:
 		if err := grantAESGCM(params, result); err != nil {
 			return nil, err
 		}
 	case types.EncryptionUmbralPRE:
-		if err := grantUmbralPRE(params, schemaParams, result); err != nil {
+		if err := grantUmbralPRE(params, result); err != nil {
 			return nil, err
 		}
 	default:
-		return nil, fmt.Errorf("lifecycle/artifact: unknown encryption scheme %d", schemaParams.ArtifactEncryption)
+		return nil, fmt.Errorf("lifecycle/artifact: unknown encryption scheme %d",
+			params.SchemaParams.ArtifactEncryption)
 	}
 
 	// ── Phase 3: Retrieval credential + audit entry ─────────────────
-
-	cred, err := params.RetrievalProvider.Resolve(params.ArtifactCID, params.RetrievalExpiry)
-	if err != nil {
-		return nil, fmt.Errorf("lifecycle/artifact: resolve retrieval: %w", err)
-	}
-	result.Retrieval = cred
-
-	// Build audit entry when either flag requests it.
-	// GrantEntryRequired:      "record that a grant happened" (any mode)
-	// GrantRequiresAuditEntry: "record that an authorized grant happened"
-	needsAudit := schemaParams.GrantEntryRequired || schemaParams.GrantRequiresAuditEntry
-	if needsAudit && params.GranterDID != "" {
-		grantEntry, buildErr := buildGrantEntry(params, result.Scheme)
-		if buildErr != nil {
-			return nil, fmt.Errorf("lifecycle/artifact: build grant entry: %w", buildErr)
+	if params.RetrievalProvider != nil {
+		cred, err := params.RetrievalProvider.Resolve(params.ArtifactCID, params.RetrievalExpiry)
+		if err != nil {
+			return nil, fmt.Errorf("lifecycle/artifact: resolve retrieval: %w", err)
 		}
-		result.GrantEntry = grantEntry
+		result.Credential = cred
+	}
+
+	needsAudit := params.SchemaParams.GrantEntryRequired || params.SchemaParams.GrantRequiresAuditEntry
+	if needsAudit && params.GranterDID != "" {
+		entry, err := buildGrantEntry(params, result.Method)
+		if err != nil {
+			return nil, fmt.Errorf("lifecycle/artifact: build grant entry: %w", err)
+		}
+		result.GrantEntry = entry
 	}
 
 	return result, nil
 }
 
-// grantAESGCM handles the AES-GCM grant path: ECIES key wrapping.
-func grantAESGCM(params GrantParams, result *GrantResult) error {
-	// Get AES key material from store (32-byte key + 12-byte nonce).
-	keyMaterial, err := params.KeyStore.Get(params.ArtifactCID)
-	if err != nil {
-		return fmt.Errorf("lifecycle/artifact: key store get: %w", err)
-	}
-	if len(keyMaterial) != artifact.KeySize+artifact.NonceSize {
-		return fmt.Errorf("lifecycle/artifact: invalid AES key material length %d, expected %d",
-			len(keyMaterial), artifact.KeySize+artifact.NonceSize)
+// grantAESGCM: KeyStore.Get → serialize → ECIES wrap for recipient.
+func grantAESGCM(params GrantArtifactAccessParams, result *GrantArtifactAccessResult) error {
+	artKey, err := params.KeyStore.Get(params.ArtifactCID)
+	if err != nil || artKey == nil {
+		return fmt.Errorf("lifecycle/artifact: key not found for %s", params.ArtifactCID)
 	}
 
-	// Parse requester's public key for ECIES wrapping.
-	recipientPub, err := signatures.ParsePubKey(params.RequesterPubKey)
+	recipientPub, err := parseSecp256k1PubKey(params.RecipientPubKey)
 	if err != nil {
-		return fmt.Errorf("lifecycle/artifact: parse requester key: %w", err)
+		return fmt.Errorf("lifecycle/artifact: parse recipient key: %w", err)
 	}
 
-	// ECIES-encrypt key material for the requester.
-	// Reuses escrow.EncryptForNode — same ECIES primitive over secp256k1.
-	// The recipient is an artifact requester, not an escrow node, but the
-	// cryptographic operation is identical: ECDH → SHA-256 KDF → AES-256-GCM.
-	encryptedKey, err := escrow.EncryptForNode(keyMaterial, recipientPub)
+	// Serialize Key(32) + Nonce(12) for ECIES wrapping.
+	keyMaterial := make([]byte, artifact.KeySize+artifact.NonceSize)
+	copy(keyMaterial[:artifact.KeySize], artKey.Key[:])
+	copy(keyMaterial[artifact.KeySize:], artKey.Nonce[:])
+
+	wrapped, err := escrow.EncryptForNode(keyMaterial, recipientPub)
 	if err != nil {
 		return fmt.Errorf("lifecycle/artifact: wrap key: %w", err)
 	}
 
-	result.EncryptedKey = encryptedKey
-	result.Scheme = types.EncryptionAESGCM
+	result.Method = "aes_gcm"
+	result.WrappedKey = wrapped
 	return nil
 }
 
-// grantUmbralPRE handles the Umbral PRE grant path: KFrag generation + re-encryption.
-func grantUmbralPRE(params GrantParams, schemaParams *types.SchemaParameters, result *GrantResult) error {
+// grantUmbralPRE: OwnerSecretKey → KFrags → CFrags with DLEQ proofs.
+// The owner's private key comes from params, not the key store.
+// PRE keys are per-identity (HSM-held), not per-artifact.
+func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAccessResult) error {
 	if params.Capsule == nil {
 		return fmt.Errorf("lifecycle/artifact: capsule required for PRE mode")
 	}
-
-	// Get owner private key from store.
-	ownerSK, err := params.KeyStore.Get(params.ArtifactCID)
-	if err != nil {
-		return fmt.Errorf("lifecycle/artifact: key store get: %w", err)
+	if len(params.OwnerSecretKey) == 0 {
+		return fmt.Errorf("lifecycle/artifact: owner secret key required for PRE mode")
 	}
 
-	// Determine M-of-N from schema's ReEncryptionThreshold.
-	m, n := 3, 5 // Defaults matching escrow convention.
-	if schemaParams.ReEncryptionThreshold != nil {
-		m = schemaParams.ReEncryptionThreshold.M
-		n = schemaParams.ReEncryptionThreshold.N
+	m, n := 3, 5
+	if params.SchemaParams.ReEncryptionThreshold != nil {
+		m = params.SchemaParams.ReEncryptionThreshold.M
+		n = params.SchemaParams.ReEncryptionThreshold.N
 	}
 
-	// Generate threshold re-encryption key fragments.
-	kfrags, err := artifact.PRE_GenerateKFrags(ownerSK, params.RequesterPubKey, m, n)
+	kfrags, err := artifact.PRE_GenerateKFrags(params.OwnerSecretKey, params.RecipientPubKey, m, n)
 	if err != nil {
 		return fmt.Errorf("lifecycle/artifact: generate kfrags: %w", err)
 	}
 
-	// Re-encrypt with each KFrag to produce CFrags with DLEQ proofs.
 	cfrags := make([]*artifact.CFrag, len(kfrags))
 	for i, kf := range kfrags {
 		cf, reErr := artifact.PRE_ReEncrypt(kf, params.Capsule)
@@ -526,37 +411,27 @@ func grantUmbralPRE(params GrantParams, schemaParams *types.SchemaParameters, re
 		cfrags[i] = cf
 	}
 
+	result.Method = "umbral_pre"
 	result.CFrags = cfrags
 	result.Capsule = params.Capsule
-	result.Scheme = types.EncryptionUmbralPRE
 	return nil
 }
 
 // buildGrantEntry creates a commentary entry recording the grant.
-// This is the audit trail — a permanent, immutable log entry showing
-// who authorized access to what artifact for which recipient.
-func buildGrantEntry(params GrantParams, scheme types.EncryptionScheme) (*envelope.Entry, error) {
-	schemeName := "aes_gcm"
-	if scheme == types.EncryptionUmbralPRE {
-		schemeName = "umbral_pre"
-	}
+func buildGrantEntry(params GrantArtifactAccessParams, method string) (*envelope.Entry, error) {
 	payloadMap := map[string]any{
 		"grant_type":     "artifact_access",
 		"artifact_cid":   params.ArtifactCID.String(),
-		"recipient_key":  fmt.Sprintf("%x", params.RequesterPubKey),
-		"content_digest": fmt.Sprintf("%x", params.ContentDigest[:]),
-		"scheme":         schemeName,
+		"recipient_key":  fmt.Sprintf("%x", params.RecipientPubKey),
+		"content_digest": params.ContentDigest.String(),
+		"scheme":         method,
 	}
-	// Include RecipientDID in the audit entry when available.
-	// For sealed-mode grants this is essential — it records which
-	// authorized party received access.
 	if params.RecipientDID != "" {
 		payloadMap["recipient_did"] = params.RecipientDID
 	}
-
 	payload, err := json.Marshal(payloadMap)
 	if err != nil {
-		return nil, fmt.Errorf("marshal grant payload: %w", err)
+		return nil, err
 	}
 	return builder.BuildCommentary(builder.CommentaryParams{
 		SignerDID: params.GranterDID,
@@ -565,104 +440,125 @@ func buildGrantEntry(params GrantParams, scheme types.EncryptionScheme) (*envelo
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// Content verification — VerifyAndDecrypt
+// VerifyAndDecryptArtifact
 // ═════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────────────────────────────────────────────────
-// Decrypt types
-// ─────────────────────────────────────────────────────────────────────
-
-// DecryptParams configures artifact decryption and verification.
-type DecryptParams struct {
+// VerifyAndDecryptArtifactParams configures decryption and verification.
+type VerifyAndDecryptArtifactParams struct {
 	Ciphertext    []byte
-	Scheme        types.EncryptionScheme
+	ArtifactCID   storage.CID             // Expected CID of ciphertext.
+	ContentDigest storage.CID             // Expected CID of plaintext.
+	SchemaParams  *types.SchemaParameters // Encryption scheme selector.
+	Key           *artifact.ArtifactKey   // AES-GCM mode.
 
-	// AES-GCM fields:
-	Key []byte // AES key (32 bytes) + nonce (12 bytes) = 44 bytes.
-
-	// Umbral PRE fields:
+	// PRE fields:
 	CFrags       []*artifact.CFrag
 	Capsule      *artifact.Capsule
-	RecipientKey []byte // Recipient private key (32 bytes).
-	OwnerPubKey  []byte // Owner public key (65 bytes).
-
-	// ContentDigest is SHA-256(original plaintext). Used to verify
-	// decrypted content matches the expected plaintext.
-	ContentDigest [32]byte
+	RecipientKey []byte // 32-byte private key scalar.
+	OwnerPubKey  []byte // 65-byte uncompressed public key.
 }
 
-// DecryptResult holds the output of VerifyAndDecrypt.
-type DecryptResult struct {
-	Plaintext      []byte
-	DigestVerified bool
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// VerifyAndDecrypt
-// ─────────────────────────────────────────────────────────────────────
-
-// VerifyAndDecrypt decrypts artifact content and verifies the content
-// digest. Dispatches on Scheme for decryption, then checks
-// SHA-256(plaintext) against ContentDigest.
+// VerifyAndDecryptArtifact decrypts artifact content and verifies
+// integrity at both layers:
 //
-// The CID check (ciphertext integrity) is NOT performed here — the
-// content store already verifies CID integrity on fetch. The content
-// digest is the only integrity check the decryptor can exclusively
-// perform, confirming the plaintext matches what was originally stored.
-func VerifyAndDecrypt(params DecryptParams) (*DecryptResult, error) {
+//  1. Ciphertext integrity: ArtifactCID must match the ciphertext.
+//  2. Decrypt via schema's ArtifactEncryption scheme.
+//  3. Plaintext integrity: ContentDigest must match the plaintext.
+//
+// Returns the verified plaintext.
+func VerifyAndDecryptArtifact(params VerifyAndDecryptArtifactParams) ([]byte, error) {
+	if params.SchemaParams == nil {
+		return nil, fmt.Errorf("lifecycle/artifact: nil schema params")
+	}
+
+	// Ciphertext integrity.
+	if !params.ArtifactCID.IsZero() && !params.ArtifactCID.Verify(params.Ciphertext) {
+		return nil, fmt.Errorf("lifecycle/artifact: ciphertext does not match artifact CID")
+	}
+
+	// Decrypt.
 	var plaintext []byte
 	var err error
-
-	switch params.Scheme {
+	switch params.SchemaParams.ArtifactEncryption {
 	case types.EncryptionAESGCM:
-		plaintext, err = decryptAESGCM(params)
+		if params.Key == nil {
+			return nil, fmt.Errorf("lifecycle/artifact: nil AES key")
+		}
+		plaintext, err = artifact.DecryptArtifact(params.Ciphertext, *params.Key)
 	case types.EncryptionUmbralPRE:
-		plaintext, err = decryptUmbralPRE(params)
+		if params.Capsule == nil || len(params.CFrags) == 0 {
+			return nil, fmt.Errorf("lifecycle/artifact: capsule and cfrags required for PRE")
+		}
+		plaintext, err = artifact.PRE_DecryptFrags(
+			params.RecipientKey, params.CFrags, params.Capsule,
+			params.Ciphertext, params.OwnerPubKey,
+		)
 	default:
-		return nil, fmt.Errorf("lifecycle/artifact: unknown scheme %d", params.Scheme)
+		return nil, fmt.Errorf("lifecycle/artifact: unknown scheme %d",
+			params.SchemaParams.ArtifactEncryption)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("lifecycle/artifact: decrypt: %w", err)
 	}
 
-	// Verify content digest: SHA-256(plaintext) must match ContentDigest.
-	digest := sha256.Sum256(plaintext)
-	digestVerified := digest == params.ContentDigest
+	// Plaintext integrity.
+	if !params.ContentDigest.IsZero() && !params.ContentDigest.Verify(plaintext) {
+		return nil, fmt.Errorf("lifecycle/artifact: plaintext does not match content digest")
+	}
 
-	return &DecryptResult{
-		Plaintext:      plaintext,
-		DigestVerified: digestVerified,
-	}, nil
+	return plaintext, nil
 }
 
-// decryptAESGCM handles AES-256-GCM decryption.
-func decryptAESGCM(params DecryptParams) ([]byte, error) {
-	if len(params.Key) != artifact.KeySize+artifact.NonceSize {
-		return nil, fmt.Errorf("invalid AES key length %d, expected %d",
-			len(params.Key), artifact.KeySize+artifact.NonceSize)
-	}
-	var artKey artifact.ArtifactKey
-	copy(artKey.Key[:], params.Key[:artifact.KeySize])
-	copy(artKey.Nonce[:], params.Key[artifact.KeySize:])
-	return artifact.DecryptArtifact(params.Ciphertext, artKey)
+// ═════════════════════════════════════════════════════════════════════
+// ReEncryptWithGrant — artifact key rotation for recovery
+// ═════════════════════════════════════════════════════════════════════
+
+// ReEncryptWithGrantParams configures artifact re-encryption.
+type ReEncryptWithGrantParams struct {
+	OldCID              storage.CID
+	KeyStore            ArtifactKeyStore
+	ContentStore        storage.ContentStore
+	DeleteOldCiphertext bool
 }
 
-// decryptUmbralPRE handles Umbral PRE threshold decryption.
-func decryptUmbralPRE(params DecryptParams) ([]byte, error) {
-	if params.Capsule == nil {
-		return nil, fmt.Errorf("capsule required for PRE decryption")
+// ReEncryptWithGrantResult holds the re-encryption outcome.
+type ReEncryptWithGrantResult struct {
+	NewCID storage.CID
+	NewKey artifact.ArtifactKey
+}
+
+// ReEncryptWithGrant fetches an artifact by CID, decrypts with the old
+// key, re-encrypts with a fresh key, pushes the new ciphertext, and
+// deletes the old key from the store (cryptographic erasure).
+//
+// Used by ExecuteRecovery in recovery.go during M-of-N escrow recovery.
+func ReEncryptWithGrant(params ReEncryptWithGrantParams) (*ReEncryptWithGrantResult, error) {
+	oldKey, err := params.KeyStore.Get(params.OldCID)
+	if err != nil || oldKey == nil {
+		return nil, fmt.Errorf("lifecycle/artifact: old key not found for %s", params.OldCID)
 	}
-	if len(params.CFrags) == 0 {
-		return nil, fmt.Errorf("cfrags required for PRE decryption")
+
+	ciphertext, err := params.ContentStore.Fetch(params.OldCID)
+	if err != nil {
+		return nil, fmt.Errorf("lifecycle/artifact: fetch ciphertext: %w", err)
 	}
-	if len(params.RecipientKey) == 0 {
-		return nil, fmt.Errorf("recipient key required for PRE decryption")
+
+	newCT, newKey, err := artifact.ReEncryptArtifact(ciphertext, *oldKey)
+	if err != nil {
+		return nil, fmt.Errorf("lifecycle/artifact: re-encrypt: %w", err)
 	}
-	if len(params.OwnerPubKey) == 0 {
-		return nil, fmt.Errorf("owner public key required for PRE decryption")
+
+	newCID := storage.Compute(newCT)
+	if err := params.ContentStore.Push(newCID, newCT); err != nil {
+		return nil, fmt.Errorf("lifecycle/artifact: push: %w", err)
 	}
-	return artifact.PRE_DecryptFrags(
-		params.RecipientKey, params.CFrags, params.Capsule,
-		params.Ciphertext, params.OwnerPubKey,
-	)
+
+	if params.DeleteOldCiphertext {
+		_ = params.ContentStore.Delete(params.OldCID)
+	}
+
+	// Cryptographic erasure: old key no longer valid.
+	_ = params.KeyStore.Delete(params.OldCID)
+
+	return &ReEncryptWithGrantResult{NewCID: newCID, NewKey: newKey}, nil
 }

@@ -260,9 +260,9 @@ type GrantArtifactAccessParams struct {
 	LeafReader           smt.LeafReader
 
 	// PRE-specific fields. Nil/zero for AES-GCM mode.
-	Capsule              *artifact.Capsule
-	WrappedDelegationKey []byte // FIX: Replaces OwnerSecretKey
-	OwnerMasterKey       []byte // FIX: Used only to unwrap the delegation key
+	// PRE-specific fields. Nil/zero for AES-GCM mode.
+	Capsule        *artifact.Capsule
+	OwnerSecretKey []byte // 32-byte secp256k1 private key scalar (unwrapped sk_del provided by caller)
 
 	RetrievalExpiry time.Duration
 }
@@ -376,28 +376,14 @@ func grantAESGCM(params GrantArtifactAccessParams, result *GrantArtifactAccessRe
 }
 
 // grantUmbralPRE: OwnerSecretKey → KFrags → CFrags with DLEQ proofs.
-// The owner's private key comes from params, not the key store.
-// PRE keys are per-identity (HSM-held), not per-artifact.
+// The private key scalar (sk_del) comes from params, already unwrapped by the caller.
 func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAccessResult) error {
 	if params.Capsule == nil {
 		return fmt.Errorf("lifecycle/artifact: capsule required for PRE mode")
 	}
-	if len(params.OwnerMasterKey) == 0 || len(params.WrappedDelegationKey) == 0 {
-		return fmt.Errorf("lifecycle/artifact: master key and wrapped delegation key required for PRE mode")
+	if len(params.OwnerSecretKey) == 0 {
+		return fmt.Errorf("lifecycle/artifact: owner secret key required for PRE mode")
 	}
-
-	// 1. Unwrap the ephemeral delegation key using the owner's master key
-	skDel, err := UnwrapDelegationKey(params.WrappedDelegationKey, params.OwnerMasterKey)
-	if err != nil {
-		return fmt.Errorf("lifecycle/artifact: failed to unwrap delegation key: %w", err)
-	}
-
-	// Best-effort erasure of the delegation key scalar
-	defer func() {
-		for i := range skDel {
-			skDel[i] = 0
-		}
-	}()
 
 	m, n := 3, 5
 	if params.SchemaParams.ReEncryptionThreshold != nil {
@@ -405,8 +391,8 @@ func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAcces
 		n = params.SchemaParams.ReEncryptionThreshold.N
 	}
 
-	// 2. Generate KFrags using the artifact-scoped delegation key (skDel)
-	kfrags, err := artifact.PRE_GenerateKFrags(skDel, params.RecipientPubKey, m, n)
+	// Generate KFrags using the provided secret key (which should be the artifact-scoped sk_del)
+	kfrags, err := artifact.PRE_GenerateKFrags(params.OwnerSecretKey, params.RecipientPubKey, m, n)
 	if err != nil {
 		return fmt.Errorf("lifecycle/artifact: generate kfrags: %w", err)
 	}

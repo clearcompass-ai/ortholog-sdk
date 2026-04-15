@@ -19,21 +19,19 @@ func SignEntry(hash [32]byte, privkey *ecdsa.PrivateKey) ([]byte, error) {
 		return nil, fmt.Errorf("signatures: sign: %w", err)
 	}
 
-	// Normalize to Low-S (s <= N/2).
-	// Go's ecdsa.Sign does not guarantee Low-S. Without this,
-	// ~50% of signatures have s > N/2. Both are mathematically
-	// valid, but canonical form eliminates signature malleability.
+	// Normalize to Low-S (s <= N/2) to eliminate malleability
 	halfN := new(big.Int).Rsh(privkey.Curve.Params().N, 1)
 	if s.Cmp(halfN) > 0 {
 		s.Sub(privkey.Curve.Params().N, s)
 	}
 
-	// Serialize R || S, each zero-padded to 32 bytes.
+	// Serialize R || S, rigorously zero-padded to 32 bytes each
 	sig := make([]byte, 64)
 	rBytes := r.Bytes()
 	sBytes := s.Bytes()
 	copy(sig[32-len(rBytes):32], rBytes)
 	copy(sig[64-len(sBytes):64], sBytes)
+
 	return sig, nil
 }
 func VerifyEntry(hash [32]byte, sig []byte, pubkey *ecdsa.PublicKey) error {

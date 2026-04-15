@@ -260,14 +260,9 @@ type GrantArtifactAccessParams struct {
 	LeafReader           smt.LeafReader
 
 	// PRE-specific fields. Nil/zero for AES-GCM mode.
-	Capsule     *artifact.Capsule
-	OwnerPubKey []byte // 65-byte owner public key.
-
-	// OwnerSecretKey is the owner's secp256k1 private key (32 bytes).
-	// Required for PRE mode. Ignored for AES-GCM mode.
-	// This is an identity-level key (one per owner), not a per-artifact key.
-	// It comes from the exchange's HSM/enclave, not from ArtifactKeyStore.
-	OwnerSecretKey []byte
+	Capsule              *artifact.Capsule
+	WrappedDelegationKey []byte // FIX: Replaces OwnerSecretKey
+	OwnerMasterKey       []byte // FIX: Used only to unwrap the delegation key
 
 	RetrievalExpiry time.Duration
 }
@@ -387,9 +382,22 @@ func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAcces
 	if params.Capsule == nil {
 		return fmt.Errorf("lifecycle/artifact: capsule required for PRE mode")
 	}
-	if len(params.OwnerSecretKey) == 0 {
-		return fmt.Errorf("lifecycle/artifact: owner secret key required for PRE mode")
+	if len(params.OwnerMasterKey) == 0 || len(params.WrappedDelegationKey) == 0 {
+		return fmt.Errorf("lifecycle/artifact: master key and wrapped delegation key required for PRE mode")
 	}
+
+	// 1. Unwrap the ephemeral delegation key using the owner's master key
+	skDel, err := UnwrapDelegationKey(params.WrappedDelegationKey, params.OwnerMasterKey)
+	if err != nil {
+		return fmt.Errorf("lifecycle/artifact: failed to unwrap delegation key: %w", err)
+	}
+
+	// Best-effort erasure of the delegation key scalar
+	defer func() {
+		for i := range skDel {
+			skDel[i] = 0
+		}
+	}()
 
 	m, n := 3, 5
 	if params.SchemaParams.ReEncryptionThreshold != nil {
@@ -397,7 +405,8 @@ func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAcces
 		n = params.SchemaParams.ReEncryptionThreshold.N
 	}
 
-	kfrags, err := artifact.PRE_GenerateKFrags(params.OwnerSecretKey, params.RecipientPubKey, m, n)
+	// 2. Generate KFrags using the artifact-scoped delegation key (skDel)
+	kfrags, err := artifact.PRE_GenerateKFrags(skDel, params.RecipientPubKey, m, n)
 	if err != nil {
 		return fmt.Errorf("lifecycle/artifact: generate kfrags: %w", err)
 	}

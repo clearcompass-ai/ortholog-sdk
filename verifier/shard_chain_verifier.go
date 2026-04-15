@@ -13,19 +13,18 @@ VerifyShardChain walks the chain and checks that every link is consistent:
   - Predecessor final size matches
   - Chain positions are sequential
 
-The shardGenesisFields struct is a local copy of the operator's
-ShardGenesisPayload — only the chain-linking fields. Field names and
-JSON tags match exactly so json.Unmarshal works on operator-produced data.
+The genesis payload type is defined in schema/shard_genesis.go as
+ShardGenesisPayload — the canonical type shared between the verifier
+(consumer) and the operator's shard_manager.go (producer).
 */
 package verifier
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 
+	"github.com/clearcompass-ai/ortholog-sdk/schema"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
@@ -40,16 +39,6 @@ var ErrShardChainEmpty = errors.New("verifier/shard: empty shard chain")
 // ─────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────
-
-// shardGenesisFields is the SDK-local copy of the operator's
-// ShardGenesisPayload. Only chain-linking fields are included.
-// JSON tags match the operator's lifecycle/shard_manager.go exactly.
-type shardGenesisFields struct {
-	PredecessorShard     string `json:"predecessor_shard"`
-	PredecessorFinalHead string `json:"predecessor_final_head"`
-	PredecessorFinalSize uint64 `json:"predecessor_final_size"`
-	ChainPosition        int    `json:"chain_position"`
-}
 
 // ShardInfo describes one shard in a chain.
 type ShardInfo struct {
@@ -83,7 +72,7 @@ type ShardChainResult struct {
 // VerifyShardChain verifies the integrity of a shard chain.
 //
 // For each shard after the first:
-//  1. Parse genesis entry → extract shardGenesisFields
+//  1. Parse genesis entry → extract ShardGenesisPayload
 //  2. genesis.PredecessorShard must match shards[i-1].ShardID
 //  3. genesis.PredecessorFinalSize must match shards[i-1].FinalSize
 //  4. genesis.PredecessorFinalHead must match hash of shards[i-1].FinalHead
@@ -104,7 +93,7 @@ func VerifyShardChain(shards []ShardInfo) (*ShardChainResult, error) {
 	}
 
 	// Verify first shard genesis.
-	genesis0, err := parseGenesisFields(shards[0].GenesisBytes)
+	genesis0, err := parseGenesis(shards[0].GenesisBytes)
 	if err != nil {
 		return breakChain(result, 0, fmt.Errorf("%w at shard 0: %v", ErrShardGenesisParse, err))
 	}
@@ -119,7 +108,7 @@ func VerifyShardChain(shards []ShardInfo) (*ShardChainResult, error) {
 
 	// Verify subsequent shards.
 	for i := 1; i < len(shards); i++ {
-		genesis, err := parseGenesisFields(shards[i].GenesisBytes)
+		genesis, err := parseGenesis(shards[i].GenesisBytes)
 		if err != nil {
 			return breakChain(result, i, fmt.Errorf("%w at shard %d: %v", ErrShardGenesisParse, i, err))
 		}
@@ -173,7 +162,7 @@ func VerifyShardGenesis(
 	expectedFinalSize uint64,
 	expectedFinalHead types.TreeHead,
 ) error {
-	genesis, err := parseGenesisFields(genesisBytes)
+	genesis, err := parseGenesis(genesisBytes)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrShardGenesisParse, err)
 	}
@@ -201,15 +190,14 @@ func VerifyShardGenesis(
 // Internal
 // ─────────────────────────────────────────────────────────────────────
 
-func parseGenesisFields(data []byte) (*shardGenesisFields, error) {
-	if len(data) == 0 {
-		return nil, errors.New("empty genesis data")
-	}
-	var fields shardGenesisFields
-	if err := json.Unmarshal(data, &fields); err != nil {
+// parseGenesis delegates to the canonical parser in schema/shard_genesis.go.
+// Wraps the error with verifier-specific context.
+func parseGenesis(data []byte) (*schema.ShardGenesisPayload, error) {
+	payload, err := schema.ParseShardGenesisPayload(data)
+	if err != nil {
 		return nil, err
 	}
-	return &fields, nil
+	return payload, nil
 }
 
 func breakChain(result *ShardChainResult, at int, err error) (*ShardChainResult, error) {
@@ -218,6 +206,3 @@ func breakChain(result *ShardChainResult, at int, err error) (*ShardChainResult,
 	result.Error = err
 	return result, err
 }
-
-// Suppress unused import.
-var _ = sha256.Sum256

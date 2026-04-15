@@ -1,25 +1,3 @@
-/*
-Package builder — entry_classification.go provides read-only entry
-classification without executing state changes.
-
-ClassifyEntry mirrors the logic of processEntry (algorithm.go) but
-never modifies the SMT tree. It answers "what path would this entry
-take?" without side effects.
-
-Use cases:
-  - Pre-submission validation: "will this entry succeed?"
-  - Monitoring dashboards: classify entries without replay.
-  - Domain application UIs: show expected path before signing.
-  - Debugging: understand why an entry was classified as Path D.
-
-The classification result includes the path and a human-readable
-reason explaining why that path was selected. When classification
-fails (Path D), the reason identifies the specific check that failed.
-
-Thread safety: ClassifyEntry takes a LeafReader (read-only SMT
-access) instead of *smt.Tree. Multiple goroutines can classify
-concurrently without contention.
-*/
 package builder
 
 import (
@@ -31,140 +9,172 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────
-// Classification Result
+// Types
 // ─────────────────────────────────────────────────────────────────────
 
-// ClassificationResult describes the expected path for an entry.
-type ClassificationResult struct {
-	// Path is the classified path result.
-	Path PathResult
-
-	// Reason is a human-readable explanation of why this path was selected.
-	// For Path D and Rejected, explains the specific check that failed.
-	Reason string
+// ClassifyParams configures read-only entry classification.
+type ClassifyParams struct {
+	Entry       *envelope.Entry
+	Position    types.LogPosition // Entry's own position (for context).
+	LeafReader  smt.LeafReader
+	Fetcher     EntryFetcher
+	LocalLogDID string
 }
 
-// String returns a compact representation: "PathA: same signer match".
-func (r ClassificationResult) String() string {
-	return fmt.Sprintf("%s: %s", pathName(r.Path), r.Reason)
+// Classification is the result of ClassifyEntry.
+type Classification struct {
+	Path    PathResult
+	Reason  string
+	Details ClassificationDetails
+}
+
+// ClassificationDetails provides additional metadata about the classification.
+type ClassificationDetails struct {
+	TargetLeafKey    *[32]byte // SMT key for the target entity (nil for commentary).
+	DelegationDepth  int       // Number of hops in delegation chain (Path B only).
+	AuthoritySetSize int       // Size of scope authority set (Path C only).
+	IsCommentary     bool      // True for zero-SMT-impact entries.
+	OCCNoteReadOnly  bool      // True when commutative check was skipped in read-only mode.
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// ClassifyEntry — read-only path classification
+// ClassifyEntry
 // ─────────────────────────────────────────────────────────────────────
 
 // ClassifyEntry determines what path an entry would take without
-// modifying the SMT tree. This is a read-only operation.
-//
-// Parameters:
-//   entry:       the entry to classify (deserialized).
-//   leafReader:  read-only access to SMT leaves (LeafReader, not LeafStore).
-//   fetcher:     retrieves entries by position (for delegation/scope checks).
-//   schemaRes:   resolves schemas for OCC mode (optional, nil → strict OCC).
-//   localLogDID: the local log's DID (for locality checks).
-//
-// Returns the classified path and a reason string.
-func ClassifyEntry(
-	entry *envelope.Entry,
-	leafReader smt.LeafReader,
-	fetcher EntryFetcher,
-	schemaRes SchemaResolver,
-	localLogDID string,
-) ClassificationResult {
-	h := &entry.Header
+// modifying the SMT tree. Read-only classification.
+func ClassifyEntry(p ClassifyParams) (*Classification, error) {
+	h := &p.Entry.Header
 
-	// ── No TargetRoot ────────────────────────────────────────────────
+	// No TargetRoot → commentary or new leaf.
 	if h.TargetRoot == nil {
 		if h.AuthorityPath == nil {
-			return ClassificationResult{Path: PathResultCommentary, Reason: "no Target_Root, no Authority_Path"}
+			return &Classification{
+				Path:    PathResultCommentary,
+				Reason:  "no Target_Root, no Authority_Path",
+				Details: ClassificationDetails{IsCommentary: true},
+			}, nil
 		}
-		// Has AuthorityPath but no TargetRoot → new leaf.
-		return ClassificationResult{Path: PathResultNewLeaf, Reason: "Authority_Path set, no Target_Root → new leaf"}
+		return &Classification{
+			Path:   PathResultNewLeaf,
+			Reason: "Authority_Path set, no Target_Root → new leaf",
+		}, nil
 	}
 
 	targetRoot := *h.TargetRoot
 
-	// ── Locality check (Decision 47) ─────────────────────────────────
-	if targetRoot.LogDID != localLogDID {
-		return ClassificationResult{Path: PathResultPathD, Reason: "Target_Root references foreign log"}
+	// Locality check (Decision 47).
+	if targetRoot.LogDID != p.LocalLogDID {
+		return &Classification{
+			Path:   PathResultPathD,
+			Reason: "Target_Root references foreign log",
+		}, nil
 	}
 
-	// ── Fetch target entry ───────────────────────────────────────────
-	targetMeta, err := fetcher.Fetch(targetRoot)
+	// Fetch target entry.
+	targetMeta, err := p.Fetcher.Fetch(targetRoot)
 	if err != nil || targetMeta == nil {
-		return ClassificationResult{Path: PathResultPathD, Reason: "target entry not found or fetch error"}
+		return &Classification{
+			Path:   PathResultPathD,
+			Reason: "target entry not found or fetch error",
+		}, nil
 	}
 	targetEntry, err := envelope.Deserialize(targetMeta.CanonicalBytes)
 	if err != nil {
-		return ClassificationResult{Path: PathResultPathD, Reason: "target entry deserialization failed"}
+		return &Classification{
+			Path:   PathResultPathD,
+			Reason: "target entry deserialization failed",
+		}, nil
 	}
 
-	// ── Leaf lookup ──────────────────────────────────────────────────
+	// Leaf lookup.
 	leafKey := smt.DeriveKey(targetRoot)
-	leaf, err := leafReader.Get(leafKey)
+	leaf, err := p.LeafReader.Get(leafKey)
 	if err != nil || leaf == nil {
-		return ClassificationResult{Path: PathResultPathD, Reason: "target leaf not found in SMT"}
+		return &Classification{
+			Path:   PathResultPathD,
+			Reason: "target leaf not found in SMT",
+		}, nil
 	}
 
-	// ── Evidence cap check ───────────────────────────────────────────
+	// Evidence cap check.
 	if len(h.EvidencePointers) > envelope.MaxEvidencePointers {
 		if !isAuthoritySnapshot(h) {
-			return ClassificationResult{Path: PathResultRejected, Reason: fmt.Sprintf("Evidence_Pointers %d exceeds cap %d (non-snapshot)", len(h.EvidencePointers), envelope.MaxEvidencePointers)}
+			return &Classification{
+				Path:   PathResultRejected,
+				Reason: fmt.Sprintf("Evidence_Pointers %d exceeds cap %d (non-snapshot)", len(h.EvidencePointers), envelope.MaxEvidencePointers),
+			}, fmt.Errorf("evidence cap exceeded")
 		}
 	}
 
-	// ── No AuthorityPath → Path D ────────────────────────────────────
+	// No AuthorityPath → Path D.
 	if h.AuthorityPath == nil {
-		return ClassificationResult{Path: PathResultPathD, Reason: "Target_Root set but no Authority_Path"}
+		return &Classification{
+			Path:   PathResultPathD,
+			Reason: "Target_Root set but no Authority_Path",
+		}, nil
 	}
 
-	// ── Dispatch by AuthorityPath ────────────────────────────────────
+	details := ClassificationDetails{
+		TargetLeafKey: &leafKey,
+	}
+
 	switch *h.AuthorityPath {
 	case envelope.AuthoritySameSigner:
-		return classifyPathA(h, targetEntry, leaf, leafKey)
+		return classifyPathA(h, targetEntry, &details)
 	case envelope.AuthorityDelegation:
-		return classifyPathB(h, targetEntry, leaf, leafKey, fetcher, leafReader, localLogDID)
+		return classifyPathB(h, targetEntry, p.Fetcher, p.LeafReader, p.LocalLogDID, &details)
 	case envelope.AuthorityScopeAuthority:
-		return classifyPathC(h, targetRoot, leaf, leafKey, fetcher, leafReader, schemaRes, localLogDID)
+		return classifyPathC(h, targetRoot, leaf, p.Fetcher, p.LeafReader, p.LocalLogDID, &details)
 	default:
-		return ClassificationResult{Path: PathResultPathD, Reason: fmt.Sprintf("unknown Authority_Path %d", *h.AuthorityPath)}
-	}
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Path A classification (same signer)
-// ─────────────────────────────────────────────────────────────────────
-
-func classifyPathA(h *envelope.ControlHeader, target *envelope.Entry, leaf *types.SMTLeaf, leafKey [32]byte) ClassificationResult {
-	if h.SignerDID != target.Header.SignerDID {
-		return ClassificationResult{
+		return &Classification{
 			Path:   PathResultPathD,
-			Reason: fmt.Sprintf("signer %s != target signer %s", h.SignerDID, target.Header.SignerDID),
-		}
+			Reason: fmt.Sprintf("unknown Authority_Path %d", *h.AuthorityPath),
+		}, nil
 	}
-	return ClassificationResult{Path: PathResultPathA, Reason: "same signer match"}
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Path B classification (delegation)
+// Path A (same signer)
+// ─────────────────────────────────────────────────────────────────────
+
+func classifyPathA(h *envelope.ControlHeader, target *envelope.Entry, d *ClassificationDetails) (*Classification, error) {
+	if h.SignerDID != target.Header.SignerDID {
+		return &Classification{
+			Path:    PathResultPathD,
+			Reason:  fmt.Sprintf("signer %s != target signer %s", h.SignerDID, target.Header.SignerDID),
+			Details: *d,
+		}, nil
+	}
+	return &Classification{
+		Path:    PathResultPathA,
+		Reason:  "same signer match",
+		Details: *d,
+	}, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Path B (delegation)
 // ─────────────────────────────────────────────────────────────────────
 
 func classifyPathB(
 	h *envelope.ControlHeader,
 	target *envelope.Entry,
-	leaf *types.SMTLeaf,
-	leafKey [32]byte,
 	fetcher EntryFetcher,
 	leafReader smt.LeafReader,
 	localLogDID string,
-) ClassificationResult {
+	d *ClassificationDetails,
+) (*Classification, error) {
 	if len(h.DelegationPointers) == 0 {
-		return ClassificationResult{Path: PathResultPathD, Reason: "Delegation_Pointers empty"}
+		return &Classification{
+			Path:    PathResultPathD,
+			Reason:  "Delegation_Pointers empty",
+			Details: *d,
+		}, nil
 	}
 
 	targetSignerDID := target.Header.SignerDID
 
-	// Load and validate all delegation entries.
 	type delegInfo struct {
 		signerDID   string
 		delegateDID string
@@ -174,40 +184,39 @@ func classifyPathB(
 
 	for i, ptr := range h.DelegationPointers {
 		if ptr.LogDID != localLogDID {
-			return ClassificationResult{
+			return &Classification{
 				Path:   PathResultPathD,
 				Reason: fmt.Sprintf("Delegation_Pointer[%d] references foreign log", i),
-			}
+			}, nil
 		}
 		meta, err := fetcher.Fetch(ptr)
 		if err != nil || meta == nil {
-			return ClassificationResult{
+			return &Classification{
 				Path:   PathResultPathD,
 				Reason: fmt.Sprintf("Delegation_Pointer[%d] entry not found", i),
-			}
+			}, nil
 		}
 		entry, err := envelope.Deserialize(meta.CanonicalBytes)
 		if err != nil || entry.Header.DelegateDID == nil {
-			return ClassificationResult{
+			return &Classification{
 				Path:   PathResultPathD,
 				Reason: fmt.Sprintf("Delegation_Pointer[%d] invalid or missing Delegate_DID", i),
-			}
+			}, nil
 		}
 
-		// Check liveness.
 		dLeafKey := smt.DeriveKey(ptr)
 		dLeaf, lErr := leafReader.Get(dLeafKey)
 		if lErr != nil || dLeaf == nil {
-			return ClassificationResult{
+			return &Classification{
 				Path:   PathResultPathD,
 				Reason: fmt.Sprintf("Delegation_Pointer[%d] leaf not found", i),
-			}
+			}, nil
 		}
 		if !dLeaf.OriginTip.Equal(ptr) {
-			return ClassificationResult{
+			return &Classification{
 				Path:   PathResultPathD,
-				Reason: fmt.Sprintf("Delegation_Pointer[%d] not live (OriginTip advanced)", i),
-			}
+				Reason: fmt.Sprintf("Delegation_Pointer[%d] not live (revoked)", i),
+			}, nil
 		}
 
 		delegations = append(delegations, delegInfo{
@@ -216,25 +225,31 @@ func classifyPathB(
 		})
 	}
 
-	// Walk the chain: start from action signer, try to reach target signer.
 	expectedDelegate := h.SignerDID
 	visited := make(map[string]bool)
-	for depth := 0; depth < 3; depth++ {
+	depth := 0
+	for depth < envelope.MaxDelegationPointers {
 		found := false
 		for i := range delegations {
-			if delegations[i].used {
-				continue
-			}
-			if delegations[i].delegateDID != expectedDelegate {
+			if delegations[i].used || delegations[i].delegateDID != expectedDelegate {
 				continue
 			}
 			delegations[i].used = true
 			found = true
+			depth++
 			if delegations[i].signerDID == targetSignerDID {
-				return ClassificationResult{Path: PathResultPathB, Reason: fmt.Sprintf("delegation chain connects at depth %d", depth+1)}
+				d.DelegationDepth = depth
+				return &Classification{
+					Path:    PathResultPathB,
+					Reason:  fmt.Sprintf("delegation chain connects at depth %d", depth),
+					Details: *d,
+				}, nil
 			}
 			if visited[delegations[i].signerDID] {
-				return ClassificationResult{Path: PathResultRejected, Reason: "cycle in delegation chain"}
+				return &Classification{
+					Path:   PathResultRejected,
+					Reason: "cycle in delegation chain",
+				}, nil
 			}
 			visited[delegations[i].signerDID] = true
 			expectedDelegate = delegations[i].signerDID
@@ -245,151 +260,141 @@ func classifyPathB(
 		}
 	}
 
-	usedCount := 0
-	for _, d := range delegations {
-		if d.used {
-			usedCount++
-		}
-	}
-	if usedCount >= 3 {
-		return ClassificationResult{Path: PathResultRejected, Reason: "delegation chain exceeded max depth"}
-	}
-	return ClassificationResult{Path: PathResultPathD, Reason: "delegation chain does not connect to target signer"}
+	return &Classification{
+		Path:   PathResultPathD,
+		Reason: "delegation chain does not connect to target signer",
+	}, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Path C classification (scope authority)
+// Path C (scope authority)
 // ─────────────────────────────────────────────────────────────────────
 
 func classifyPathC(
 	h *envelope.ControlHeader,
 	targetRoot types.LogPosition,
 	leaf *types.SMTLeaf,
-	leafKey [32]byte,
 	fetcher EntryFetcher,
 	leafReader smt.LeafReader,
-	schemaRes SchemaResolver,
 	localLogDID string,
-) ClassificationResult {
-	// Scope pointer validation.
+	d *ClassificationDetails,
+) (*Classification, error) {
 	if h.ScopePointer == nil || h.ScopePointer.LogDID != localLogDID {
-		return ClassificationResult{Path: PathResultPathD, Reason: "Scope_Pointer nil or foreign"}
+		return &Classification{
+			Path:   PathResultPathD,
+			Reason: "Scope_Pointer nil or foreign",
+		}, nil
 	}
 
 	// Fetch current scope state.
 	scopeLeafKey := smt.DeriveKey(*h.ScopePointer)
 	scopeLeaf, err := leafReader.Get(scopeLeafKey)
 	if err != nil || scopeLeaf == nil {
-		return ClassificationResult{Path: PathResultPathD, Reason: "scope leaf not found"}
+		return &Classification{
+			Path:   PathResultPathD,
+			Reason: "scope leaf not found",
+		}, nil
 	}
 	currentScopeMeta, err := fetcher.Fetch(scopeLeaf.OriginTip)
 	if err != nil || currentScopeMeta == nil {
-		return ClassificationResult{Path: PathResultPathD, Reason: "current scope entry not found"}
+		return &Classification{
+			Path:   PathResultPathD,
+			Reason: "current scope entry not found",
+		}, nil
 	}
 	currentScope, err := envelope.Deserialize(currentScopeMeta.CanonicalBytes)
 	if err != nil {
-		return ClassificationResult{Path: PathResultPathD, Reason: "scope entry deserialization failed"}
+		return &Classification{
+			Path:   PathResultPathD,
+			Reason: "scope entry deserialization failed",
+		}, nil
 	}
 
 	// Authority set membership check.
-	if !currentScope.Header.AuthoritySetContains(h.SignerDID) {
-		return ClassificationResult{
+	if _, ok := currentScope.Header.AuthoritySet[h.SignerDID]; !ok {
+		return &Classification{
 			Path:   PathResultPathD,
 			Reason: fmt.Sprintf("signer %s not in scope authority set", h.SignerDID),
-		}
+		}, nil
 	}
+	d.AuthoritySetSize = len(currentScope.Header.AuthoritySet)
 
-	// Approval pointers validation.
-	if len(h.ApprovalPointers) > 0 {
-		for i, ptr := range h.ApprovalPointers {
-			if ptr.LogDID != localLogDID {
-				return ClassificationResult{Path: PathResultRejected, Reason: fmt.Sprintf("Approval_Pointer[%d] references foreign log", i)}
-			}
-			meta, fetchErr := fetcher.Fetch(ptr)
-			if fetchErr != nil || meta == nil {
-				return ClassificationResult{Path: PathResultRejected, Reason: fmt.Sprintf("Approval_Pointer[%d] not found", i)}
-			}
-			approval, desErr := envelope.Deserialize(meta.CanonicalBytes)
-			if desErr != nil {
-				return ClassificationResult{Path: PathResultRejected, Reason: fmt.Sprintf("Approval_Pointer[%d] deserialization failed", i)}
-			}
-			if !currentScope.Header.AuthoritySetContains(approval.Header.SignerDID) {
-				return ClassificationResult{Path: PathResultRejected, Reason: fmt.Sprintf("Approval_Pointer[%d] signer not in authority set", i)}
-			}
-		}
-	}
-
-	// OCC verification (Prior_Authority).
+	// OCC (Prior_Authority) — read-only, note when commutative check skipped.
 	currentTip := leaf.AuthorityTip
 	if currentTip.Equal(targetRoot) {
-		// Base case: no prior enforcement. Prior_Authority must be nil.
 		if h.PriorAuthority != nil {
-			return ClassificationResult{Path: PathResultRejected, Reason: "Prior_Authority must be nil when Authority_Tip == self"}
+			return &Classification{
+				Path:   PathResultRejected,
+				Reason: "Prior_Authority must be nil when Authority_Tip == self",
+			}, nil
 		}
 	} else {
-		// Enforcement history exists. Prior_Authority required.
 		if h.PriorAuthority == nil {
-			return ClassificationResult{Path: PathResultRejected, Reason: "Prior_Authority required when Authority_Tip != self"}
-		}
-		// Check OCC match (strict or commutative).
-		if !h.PriorAuthority.Equal(currentTip) {
-			// Check commutative OCC if schema declares it.
-			// Without a DeltaWindowBuffer in read-only mode, we can only
-			// check the current tip. Report as potential mismatch.
-			isCommutative := false
-			if h.SchemaRef != nil && schemaRes != nil {
-				resolution, resErr := schemaRes.Resolve(*h.SchemaRef, fetcher)
-				if resErr == nil && resolution != nil {
-					isCommutative = resolution.IsCommutative
-				}
-			}
-			if isCommutative {
-				return ClassificationResult{
-					Path:   PathResultPathC,
-					Reason: "commutative schema — Prior_Authority may be within delta window (cannot verify without buffer)",
-				}
-			}
-			return ClassificationResult{
+			return &Classification{
 				Path:   PathResultRejected,
-				Reason: fmt.Sprintf("strict OCC: Prior_Authority %s != current Authority_Tip %s", h.PriorAuthority, currentTip),
-			}
+				Reason: "Prior_Authority required when Authority_Tip != self",
+			}, nil
+		}
+		if !h.PriorAuthority.Equal(currentTip) {
+			d.OCCNoteReadOnly = true
+			return &Classification{
+				Path:    PathResultPathC,
+				Reason:  "Prior_Authority != Authority_Tip — commutative check not available in read-only mode",
+				Details: *d,
+			}, nil
 		}
 	}
 
-	// Classify sub-type: amendment vs enforcement.
 	isScopeAmendment := h.ScopePointer.Equal(targetRoot) && len(h.AuthoritySet) > 0
 	if isScopeAmendment {
-		return ClassificationResult{Path: PathResultPathC, Reason: "scope amendment execution (updates OriginTip)"}
+		return &Classification{
+			Path:    PathResultPathC,
+			Reason:  "scope amendment execution (updates OriginTip)",
+			Details: *d,
+		}, nil
 	}
-	return ClassificationResult{Path: PathResultPathC, Reason: "scope authority enforcement (updates AuthorityTip)"}
+	return &Classification{
+		Path:    PathResultPathC,
+		Reason:  "scope authority enforcement (updates AuthorityTip)",
+		Details: *d,
+	}, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// ClassifyBatch — classify multiple entries
+// ClassifyBatch
 // ─────────────────────────────────────────────────────────────────────
 
-// ClassifyBatch classifies multiple entries and returns per-entry results.
-// Read-only: no SMT state is modified. Each entry is classified
-// independently against the current tree state.
+// ClassifyBatch classifies multiple entries. Read-only, no SMT modification.
 func ClassifyBatch(
 	entries []*envelope.Entry,
+	positions []types.LogPosition,
 	leafReader smt.LeafReader,
 	fetcher EntryFetcher,
-	schemaRes SchemaResolver,
-	localLogDID string,
-) []ClassificationResult {
-	results := make([]ClassificationResult, len(entries))
-	for i, entry := range entries {
-		results[i] = ClassifyEntry(entry, leafReader, fetcher, schemaRes, localLogDID)
+	logDID string,
+) ([]Classification, error) {
+	if len(entries) != len(positions) {
+		return nil, fmt.Errorf("builder/classify: entries length %d != positions length %d", len(entries), len(positions))
 	}
-	return results
+	results := make([]Classification, len(entries))
+	for i, entry := range entries {
+		c, _ := ClassifyEntry(ClassifyParams{
+			Entry:       entry,
+			Position:    positions[i],
+			LeafReader:  leafReader,
+			Fetcher:     fetcher,
+			LocalLogDID: logDID,
+		})
+		if c != nil {
+			results[i] = *c
+		}
+	}
+	return results, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
-// pathName returns a human-readable name for a PathResult.
 func pathName(p PathResult) string {
 	switch p {
 	case PathResultCommentary:

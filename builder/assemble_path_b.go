@@ -1,27 +1,3 @@
-/*
-Package builder — assemble_path_b.go assembles delegation chains for
-Path B entries.
-
-AssemblePathB walks from a delegate DID backward through delegation
-entries to the root entity signer, collecting the ordered
-DelegationPointers slice required by BuildPathBEntry.
-
-The delegation chain connects:
-  delegate (action signer) ← delegation₁ ← delegation₂ ← ... ← root signer
-
-Each delegation entry has:
-  SignerDID   = who granted the delegation (upstream)
-  DelegateDID = who received it (downstream, toward the action signer)
-
-The chain is validated for:
-  - Maximum depth (3 hops per protocol)
-  - Liveness (each delegation leaf's OriginTip == delegation position)
-  - Connectivity (each hop's SignerDID matches the next hop's DelegateDID)
-  - Cycle detection (no DID appears twice in the chain)
-
-Consumed by domain applications that need to build Path B entries
-programmatically (e.g., clerk filing via delegated authority from judge).
-*/
 package builder
 
 import (
@@ -32,76 +8,66 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
-// ─────────────────────────────────────────────────────────────────────
-// Errors
-// ─────────────────────────────────────────────────────────────────────
-
 var (
-	ErrChainTooDeep      = fmt.Errorf("builder/path_b: delegation chain exceeds max depth %d", envelope.MaxDelegationPointers)
-	ErrChainDisconnected = fmt.Errorf("builder/path_b: delegation chain is disconnected")
-	ErrChainCycle        = fmt.Errorf("builder/path_b: cycle detected in delegation chain")
-	ErrDelegationNotLive = fmt.Errorf("builder/path_b: delegation is not live (revoked or amended)")
+	ErrChainTooDeep       = fmt.Errorf("builder/path_b: delegation chain exceeds max depth %d", envelope.MaxDelegationPointers)
+	ErrChainDisconnected  = fmt.Errorf("builder/path_b: delegation chain is disconnected")
+	ErrChainCycle         = fmt.Errorf("builder/path_b: cycle detected in delegation chain")
+	ErrDelegationNotLive  = fmt.Errorf("builder/path_b: delegation is not live (revoked or amended)")
 	ErrDelegationNotFound = fmt.Errorf("builder/path_b: delegation entry not found")
-	ErrNoDelegateDID     = fmt.Errorf("builder/path_b: delegation entry missing Delegate_DID")
+	ErrNoDelegateDID      = fmt.Errorf("builder/path_b: delegation entry missing Delegate_DID")
+	ErrRootNotFound       = fmt.Errorf("builder/path_b: root entity entry not found")
 )
 
-// ─────────────────────────────────────────────────────────────────────
-// AssemblePathB
-// ─────────────────────────────────────────────────────────────────────
-
-// DelegationLink describes one hop in the assembled delegation chain.
-type DelegationLink struct {
-	Position    types.LogPosition // LogPosition of the delegation entry.
-	SignerDID   string            // Who created the delegation (grantor).
-	DelegateDID string            // Who received the delegation (grantee).
-	IsLive      bool              // OriginTip == Position (not revoked).
+// DelegationHop describes one hop in the assembled delegation chain.
+// Defined in builder (not verifier) to avoid circular imports.
+type DelegationHop struct {
+	Position    types.LogPosition
+	SignerDID   string
+	DelegateDID string
+	IsLive      bool
 }
 
-// AssemblePathBResult is the output of delegation chain assembly.
-type AssemblePathBResult struct {
-	// DelegationPointers is the ordered slice for BuildPathBEntry.
-	// Order: closest to action signer first, root signer's delegation last.
-	DelegationPointers []types.LogPosition
-
-	// Links contains the full chain details for inspection.
-	Links []DelegationLink
-
-	// RootSignerDID is the DID at the top of the chain (the root
-	// entity's signer that the chain connects to).
-	RootSignerDID string
+// AssemblePathBParams configures delegation chain assembly.
+type AssemblePathBParams struct {
+	DelegateDID        string              // Action signer's DID.
+	TargetRoot         types.LogPosition   // Root entity being targeted.
+	LeafReader         smt.LeafReader      // SMT leaf access for liveness checks.
+	Fetcher            EntryFetcher        // Positional entry lookup.
+	MaxDepth           int                 // 0 = default (MaxDelegationPointers).
+	CandidatePositions []types.LogPosition // Delegation positions the caller knows about.
 }
 
-// AssemblePathB resolves and validates a delegation chain from a set
-// of candidate delegation positions. The chain must connect the
-// actionSignerDID (the delegate performing the action) back to the
-// rootSignerDID (the signer of the target root entity).
-//
-// candidatePositions: positions of delegation entries to consider.
-//   The function selects and orders the relevant subset.
-//
-// actionSignerDID: the DID that will sign the Path B entry.
-//
-// rootSignerDID: the SignerDID of the target root entity (the chain
-//   must terminate at a delegation whose SignerDID == rootSignerDID).
-//
-// fetcher: retrieves delegation entries by position.
-//
-// leafReader: checks delegation liveness (OriginTip == position).
-//
-// Returns the assembled chain or an error if the chain is invalid.
-func AssemblePathB(
-	candidatePositions []types.LogPosition,
-	actionSignerDID string,
-	rootSignerDID string,
-	fetcher EntryFetcher,
-	leafReader smt.LeafReader,
-) (*AssemblePathBResult, error) {
-	if len(candidatePositions) == 0 {
+// PathBAssembly is the result of successful delegation chain assembly.
+type PathBAssembly struct {
+	DelegationPointers []types.LogPosition // Ordered for BuildPathBEntry.
+	Hops               []DelegationHop     // Full chain details for inspection.
+}
+
+// AssemblePathB validates, filters, and orders delegation positions the
+// caller provides. It connects DelegateDID back to the root entity's signer
+// through delegation entries at CandidatePositions.
+func AssemblePathB(params AssemblePathBParams) (*PathBAssembly, error) {
+	if len(params.CandidatePositions) == 0 {
 		return nil, ErrEmptyDelegationChain
 	}
-	if len(candidatePositions) > envelope.MaxDelegationPointers {
+	maxDepth := params.MaxDepth
+	if maxDepth <= 0 {
+		maxDepth = envelope.MaxDelegationPointers
+	}
+	if len(params.CandidatePositions) > maxDepth {
 		return nil, ErrChainTooDeep
 	}
+
+	// Resolve root entity signer.
+	rootMeta, err := params.Fetcher.Fetch(params.TargetRoot)
+	if err != nil || rootMeta == nil {
+		return nil, fmt.Errorf("%w: %s", ErrRootNotFound, params.TargetRoot)
+	}
+	rootEntry, err := envelope.Deserialize(rootMeta.CanonicalBytes)
+	if err != nil {
+		return nil, fmt.Errorf("%w: deserialize root: %v", ErrRootNotFound, err)
+	}
+	rootSignerDID := rootEntry.Header.SignerDID
 
 	// Load all candidate delegation entries.
 	type delegInfo struct {
@@ -111,10 +77,9 @@ func AssemblePathB(
 		isLive      bool
 		used        bool
 	}
-
-	candidates := make([]delegInfo, 0, len(candidatePositions))
-	for _, pos := range candidatePositions {
-		meta, err := fetcher.Fetch(pos)
+	candidates := make([]delegInfo, 0, len(params.CandidatePositions))
+	for _, pos := range params.CandidatePositions {
+		meta, err := params.Fetcher.Fetch(pos)
 		if err != nil || meta == nil {
 			return nil, fmt.Errorf("%w: %s", ErrDelegationNotFound, pos)
 		}
@@ -126,9 +91,8 @@ func AssemblePathB(
 			return nil, fmt.Errorf("%w: %s", ErrNoDelegateDID, pos)
 		}
 
-		// Check liveness.
 		leafKey := smt.DeriveKey(pos)
-		leaf, leafErr := leafReader.Get(leafKey)
+		leaf, leafErr := params.LeafReader.Get(leafKey)
 		live := leafErr == nil && leaf != nil && leaf.OriginTip.Equal(pos)
 
 		candidates = append(candidates, delegInfo{
@@ -139,13 +103,12 @@ func AssemblePathB(
 		})
 	}
 
-	// Build the chain: start from actionSignerDID, walk toward rootSignerDID.
-	// At each step, find the candidate whose DelegateDID == currentExpected.
+	// Build chain: walk from DelegateDID toward rootSignerDID.
 	var chain []delegInfo
-	currentExpected := actionSignerDID
+	currentExpected := params.DelegateDID
 	visited := make(map[string]bool)
 
-	for depth := 0; depth < envelope.MaxDelegationPointers; depth++ {
+	for depth := 0; depth < maxDepth; depth++ {
 		if visited[currentExpected] {
 			return nil, ErrChainCycle
 		}
@@ -161,10 +124,21 @@ func AssemblePathB(
 				chain = append(chain, candidates[i])
 				found = true
 
-				// Check if we've reached the root.
 				if candidates[i].signerDID == rootSignerDID {
-					// Chain complete.
-					return buildResult(chain), nil
+					result := &PathBAssembly{
+						DelegationPointers: make([]types.LogPosition, len(chain)),
+						Hops:               make([]DelegationHop, len(chain)),
+					}
+					for j, c := range chain {
+						result.DelegationPointers[j] = c.pos
+						result.Hops[j] = DelegationHop{
+							Position:    c.pos,
+							SignerDID:   c.signerDID,
+							DelegateDID: c.delegateDID,
+							IsLive:      c.isLive,
+						}
+					}
+					return result, nil
 				}
 				currentExpected = candidates[i].signerDID
 				break
@@ -175,40 +149,46 @@ func AssemblePathB(
 		}
 	}
 
-	// If we get here, the chain didn't connect to rootSignerDID.
 	return nil, fmt.Errorf("%w: could not connect %s to %s",
-		ErrChainDisconnected, actionSignerDID, rootSignerDID)
+		ErrChainDisconnected, params.DelegateDID, rootSignerDID)
 }
 
-// buildResult converts the internal chain representation to the public result.
-func buildResult(chain []delegInfo) *AssemblePathBResult {
-	result := &AssemblePathBResult{
-		DelegationPointers: make([]types.LogPosition, len(chain)),
-		Links:              make([]DelegationLink, len(chain)),
-	}
-	for i, d := range chain {
-		result.DelegationPointers[i] = d.pos
-		result.Links[i] = DelegationLink{
-			Position:    d.pos,
-			SignerDID:   d.signerDID,
-			DelegateDID: d.delegateDID,
-			IsLive:      d.isLive,
-		}
-	}
-	if len(chain) > 0 {
-		result.RootSignerDID = chain[len(chain)-1].signerDID
-	}
-	return result
+// ValidateChainParams configures post-assembly liveness validation.
+type ValidateChainParams struct {
+	DelegationPointers []types.LogPosition
+	LeafReader         smt.LeafReader
+	Fetcher            EntryFetcher
 }
 
-// ValidateChainLiveness checks that every delegation in the chain is live.
-// Called after AssemblePathB to ensure the chain will succeed at Path B
-// processing time. Returns the first non-live link, or nil if all are live.
-func ValidateChainLiveness(result *AssemblePathBResult) *DelegationLink {
-	for i := range result.Links {
-		if !result.Links[i].IsLive {
-			return &result.Links[i]
+// ChainLivenessResult is the output of ValidateChainLiveness.
+type ChainLivenessResult struct {
+	AllLive    bool
+	FirstDead  *types.LogPosition
+	DeadReason string
+}
+
+// ValidateChainLiveness checks that every delegation pointer is still live.
+// Called after AssemblePathB to ensure the chain will succeed at processing time.
+func ValidateChainLiveness(params ValidateChainParams) (*ChainLivenessResult, error) {
+	for _, pos := range params.DelegationPointers {
+		leafKey := smt.DeriveKey(pos)
+		leaf, err := params.LeafReader.Get(leafKey)
+		if err != nil || leaf == nil {
+			p := pos
+			return &ChainLivenessResult{
+				AllLive:    false,
+				FirstDead:  &p,
+				DeadReason: "leaf not found in SMT",
+			}, nil
+		}
+		if !leaf.OriginTip.Equal(pos) {
+			p := pos
+			return &ChainLivenessResult{
+				AllLive:    false,
+				FirstDead:  &p,
+				DeadReason: fmt.Sprintf("OriginTip %s != delegation position %s", leaf.OriginTip, pos),
+			}, nil
 		}
 	}
-	return nil
+	return &ChainLivenessResult{AllLive: true}, nil
 }

@@ -44,15 +44,20 @@ func EncryptForNode(plaintext []byte, nodePubKey *ecdsa.PublicKey) ([]byte, erro
 	}
 
 	// ECDH: shared point = ephPriv * nodePubKey.
-	sx, sy := curve.ScalarMult(nodePubKey.X, nodePubKey.Y, ephPriv.D.Bytes())
+	// Fix 2: pad scalar to 32 bytes — big.Int.Bytes() strips leading zeros,
+	// which would produce a different ScalarMult input on ~1/256 of keys.
+	sx, sy := curve.ScalarMult(nodePubKey.X, nodePubKey.Y, padScalar(ephPriv.D))
 	if sx == nil {
 		return nil, errors.New("escrow/ecies: ECDH produced point at infinity")
 	}
 
 	// KDF: SHA-256(shared_x || shared_y) → 32-byte AES key.
+	// Fix 2: pad coordinates to 32 bytes — if sx or sy has leading zero bytes
+	// (~1/256 per coordinate), unpadded Bytes() produces 31 bytes, yielding a
+	// different KDF input than a correctly padded implementation (e.g., HSM).
 	var sharedBytes []byte
-	sharedBytes = append(sharedBytes, sx.Bytes()...)
-	sharedBytes = append(sharedBytes, sy.Bytes()...)
+	sharedBytes = append(sharedBytes, padCoord(sx)...)
+	sharedBytes = append(sharedBytes, padCoord(sy)...)
 	aesKey := sha256.Sum256(sharedBytes)
 
 	// AES-256-GCM encrypt.
@@ -97,15 +102,16 @@ func DecryptFromNode(ciphertext []byte, nodePrivKey *ecdsa.PrivateKey) ([]byte, 
 	}
 
 	// ECDH: shared point = nodePriv * ephPub.
-	sx, sy := curve.ScalarMult(ephX, ephY, nodePrivKey.D.Bytes())
+	// Fix 2: pad scalar to 32 bytes (see EncryptForNode comment).
+	sx, sy := curve.ScalarMult(ephX, ephY, padScalar(nodePrivKey.D))
 	if sx == nil {
 		return nil, errors.New("escrow/ecies: ECDH produced point at infinity")
 	}
 
-	// KDF: same as encryption.
+	// KDF: same as encryption — pad coordinates to 32 bytes.
 	var sharedBytes []byte
-	sharedBytes = append(sharedBytes, sx.Bytes()...)
-	sharedBytes = append(sharedBytes, sy.Bytes()...)
+	sharedBytes = append(sharedBytes, padCoord(sx)...)
+	sharedBytes = append(sharedBytes, padCoord(sy)...)
 	aesKey := sha256.Sum256(sharedBytes)
 
 	// AES-256-GCM decrypt.
@@ -152,8 +158,24 @@ func DecryptShareFromNode(encrypted []byte, nodePrivKey *ecdsa.PrivateKey) (Shar
 }
 
 // padScalar pads a big.Int to 32 bytes for secp256k1 scalar operations.
+// Prevents big.Int.Bytes() from stripping leading zero bytes, which would
+// alter ScalarMult input and produce a different ECDH shared point.
 func padScalar(b *big.Int) []byte {
 	buf := b.Bytes()
+	if len(buf) >= 32 {
+		return buf[:32]
+	}
+	padded := make([]byte, 32)
+	copy(padded[32-len(buf):], buf)
+	return padded
+}
+
+// padCoord pads an elliptic curve coordinate to 32 bytes for KDF input.
+// Same rationale as padScalar: a coordinate with leading zero bytes would
+// produce a shorter Bytes() output, yielding a different KDF-derived AES key
+// than a correctly padded implementation (SEC 1 v2 §4.1 field element encoding).
+func padCoord(c *big.Int) []byte {
+	buf := c.Bytes()
 	if len(buf) >= 32 {
 		return buf[:32]
 	}

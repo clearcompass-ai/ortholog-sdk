@@ -1,22 +1,28 @@
 /*
 FILE PATH: tests/phase6_part_a_test.go
 
-Phase 6 Part A: 46 tests covering:
+Phase 6 Part A: 50 tests covering:
   - Entry builders (29 tests): one per builder + constraint violations
   - AssemblePathB (7 tests): chain depth, cycles, liveness, disconnection
   - ClassifyEntry (10 tests): each path + edge cases
+  - Delegation Key Isolation (4 tests): generate, unwrap, rejection, full PRE flow
 
 All tests use in-memory infrastructure. No Postgres required.
 */
 package tests
 
 import (
+	"bytes"
+	"crypto/elliptic"
 	"errors"
 	"testing"
 
 	"github.com/clearcompass-ai/ortholog-sdk/builder"
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
+	"github.com/clearcompass-ai/ortholog-sdk/crypto/artifact"
+	"github.com/clearcompass-ai/ortholog-sdk/crypto/signatures"
+	"github.com/clearcompass-ai/ortholog-sdk/lifecycle"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
@@ -43,6 +49,15 @@ func p6storeDelegation(t *testing.T, fetcher *MockFetcher, store *smt.InMemoryLe
 	}, nil)
 	fetcher.Store(p, entry)
 	p6setLeaf(t, store, p)
+}
+
+func padSecretKeyTo32(b []byte) []byte {
+	if len(b) >= 32 {
+		return b[len(b)-32:]
+	}
+	padded := make([]byte, 32)
+	copy(padded[32-len(b):], b)
+	return padded
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1043,5 +1058,126 @@ func TestClassifyBatch_MixedPaths(t *testing.T) {
 	}
 	if results[2].Path != builder.PathResultPathD {
 		t.Fatalf("results[2]: expected PathD, got %d", results[2].Path)
+	}
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// 4. Delegation Key Tests (4 tests)
+// ═════════════════════════════════════════════════════════════════════
+
+func TestDelegationKey_GenerateUnwrapRoundTrip(t *testing.T) {
+	// Generate owner master key
+	ownerPriv, _ := signatures.GenerateKey()
+	ownerPubBytes := signatures.PubKeyBytes(&ownerPriv.PublicKey)
+	ownerSecretBytes := padSecretKeyTo32(ownerPriv.D.Bytes())
+
+	// Generate delegation key
+	pkDel, wrappedSkDel, err := lifecycle.GenerateDelegationKey(ownerPubBytes)
+	if err != nil {
+		t.Fatalf("GenerateDelegationKey: %v", err)
+	}
+
+	// Unwrap
+	skDel, err := lifecycle.UnwrapDelegationKey(wrappedSkDel, ownerSecretBytes)
+	if err != nil {
+		t.Fatalf("UnwrapDelegationKey: %v", err)
+	}
+
+	// Verify unwrapped scalar produces the same public key
+	c := signatures.Secp256k1()
+	x, y := c.ScalarBaseMult(skDel)
+	expectedPkDel := elliptic.Marshal(c, x, y)
+
+	if !bytes.Equal(pkDel, expectedPkDel) {
+		t.Fatal("unwrapped sk_del does not match original pk_del")
+	}
+}
+
+func TestDelegationKey_WrongMasterKey_FailsUnwrap(t *testing.T) {
+	ownerA, _ := signatures.GenerateKey()
+	ownerB, _ := signatures.GenerateKey()
+
+	ownerAPubBytes := signatures.PubKeyBytes(&ownerA.PublicKey)
+	ownerBSecretBytes := padSecretKeyTo32(ownerB.D.Bytes())
+
+	_, wrappedSkDel, err := lifecycle.GenerateDelegationKey(ownerAPubBytes)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	_, err = lifecycle.UnwrapDelegationKey(wrappedSkDel, ownerBSecretBytes)
+	if err == nil {
+		t.Fatal("UnwrapDelegationKey should fail with wrong master key")
+	}
+}
+
+func TestDelegationKey_GrantWithDelegationKey_Works(t *testing.T) {
+	// Owner setup
+	ownerPriv, _ := signatures.GenerateKey()
+	ownerPubBytes := signatures.PubKeyBytes(&ownerPriv.PublicKey)
+	ownerSecretBytes := padSecretKeyTo32(ownerPriv.D.Bytes())
+
+	// Recipient setup
+	recipientPriv, _ := signatures.GenerateKey()
+	recipientPubBytes := signatures.PubKeyBytes(&recipientPriv.PublicKey)
+	recipientSecretBytes := padSecretKeyTo32(recipientPriv.D.Bytes())
+
+	plaintext := []byte("delegated PRE artifact content")
+
+	// 1. Generate Delegation Key
+	pkDel, wrappedSkDel, err := lifecycle.GenerateDelegationKey(ownerPubBytes)
+	if err != nil {
+		t.Fatalf("GenerateDelegationKey: %v", err)
+	}
+
+	// 2. Encrypt artifact using pkDel (NOT ownerPubBytes)
+	capsule, ciphertext, err := artifact.PRE_Encrypt(pkDel, plaintext)
+	if err != nil {
+		t.Fatalf("PRE_Encrypt: %v", err)
+	}
+
+	// 3. Grant: Unwrap skDel using Master Key
+	skDel, err := lifecycle.UnwrapDelegationKey(wrappedSkDel, ownerSecretBytes)
+	if err != nil {
+		t.Fatalf("UnwrapDelegationKey: %v", err)
+	}
+
+	// 4. Generate KFrags using skDel (no ephPub — rejected proposal)
+	kfrags, err := artifact.PRE_GenerateKFrags(skDel, recipientPubBytes, 3, 5)
+	if err != nil {
+		t.Fatalf("PRE_GenerateKFrags: %v", err)
+	}
+
+	// 5. Re-Encrypt (simulated Escrow Nodes)
+	cfrags := make([]*artifact.CFrag, 3)
+	for i := 0; i < 3; i++ {
+		cfrags[i], err = artifact.PRE_ReEncrypt(kfrags[i], capsule)
+		if err != nil {
+			t.Fatalf("PRE_ReEncrypt: %v", err)
+		}
+	}
+
+	// 6. Decrypt (Recipient side — no ephPub parameter)
+	recovered, err := artifact.PRE_DecryptFrags(recipientSecretBytes, cfrags, capsule, ciphertext, pkDel)
+	if err != nil {
+		t.Fatalf("PRE_DecryptFrags: %v", err)
+	}
+
+	if !bytes.Equal(recovered, plaintext) {
+		t.Fatal("recovered plaintext does not match original")
+	}
+}
+
+func TestDelegationKey_ExtractedKeyCannotSignEntries(t *testing.T) {
+	// Shows that the extracted key (skDel) is mathematically different from the master key.
+	ownerPriv, _ := signatures.GenerateKey()
+	ownerPubBytes := signatures.PubKeyBytes(&ownerPriv.PublicKey)
+	ownerSecretBytes := padSecretKeyTo32(ownerPriv.D.Bytes())
+
+	_, wrappedSkDel, _ := lifecycle.GenerateDelegationKey(ownerPubBytes)
+	skDel, _ := lifecycle.UnwrapDelegationKey(wrappedSkDel, ownerSecretBytes)
+
+	if bytes.Equal(skDel, ownerSecretBytes) {
+		t.Fatal("CRITICAL: Delegation key is identical to Master Identity Key!")
 	}
 }

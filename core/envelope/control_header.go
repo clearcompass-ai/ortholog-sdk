@@ -18,6 +18,8 @@ belong in Domain Payload, never here.
 package envelope
 
 import (
+	"sort"
+
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
@@ -53,8 +55,18 @@ const (
 // ControlHeader carries the protocol-level metadata for a single entry.
 // All fields are read by the builder or verifier as part of path classification
 // and state evaluation. Domain Payload is opaque to both.
+//
+// Field ordering mirrors wire order. ProtocolVersion is first because it is
+// the first field of the canonical preamble (bytes 0–1) and authoritatively
+// identifies how every other field is encoded.
 type ControlHeader struct {
-	DomainManifestVersion *[3]uint16
+	// ProtocolVersion is the wire-format version of this entry. Populated by
+	// NewEntry (set to currentProtocolVersion) and by Deserialize (read from
+	// the canonical preamble). Callers read this field directly; there is no
+	// zero-value fallback — a zero here means the header has not been through
+	// NewEntry or Deserialize, which is a programming error, not a valid state.
+	ProtocolVersion uint16
+
 	// SignerDID is the DID whose signing key produced the signature over
 	// this entry's canonical bytes. Required for every entry.
 	SignerDID string
@@ -143,32 +155,13 @@ type ControlHeader struct {
 	AuthoritySkip *types.LogPosition
 
 	// DomainManifestVersion pins this entry to a specific domain manifest
-	// version [major, minor, patch]. Nil indicates a legacy v4 entry that
-	// predates per-entry manifest pinning; verifiers resolve such entries
-	// against the latest-known manifest for the domain.
+	// version [major, minor, patch]. Nil indicates an entry that predates
+	// per-entry manifest pinning in its domain; verifiers resolve such
+	// entries against the latest-known manifest for the domain.
 	//
-	// NEW in protocol v5. On the wire: 1 presence byte + 6 bytes when present.
+	// NEW in protocol v5. On the wire: 1 presence byte + 6 fixed-width
+	// bytes (zero-filled slot when absent).
 	DomainManifestVersion *[3]uint16
-
-	// protocolVersion tracks which protocol version this entry was
-	// serialized under. Populated by Deserialize; set to currentProtocolVersion
-	// by NewEntry. Private — callers access via ProtocolVersion().
-	protocolVersion uint16
-}
-
-// ProtocolVersion returns the protocol version this header was serialized
-// under (populated during Deserialize) or will be serialized under
-// (populated by NewEntry).
-func (h *ControlHeader) ProtocolVersion() uint16 {
-	if h.protocolVersion == 0 {
-		return currentProtocolVersion
-	}
-	return h.protocolVersion
-}
-
-// setProtocolVersion is the internal setter used by Deserialize and NewEntry.
-func (h *ControlHeader) setProtocolVersion(v uint16) {
-	h.protocolVersion = v
 }
 
 // AuthoritySetContains reports whether a DID is a member of this header's
@@ -181,6 +174,11 @@ func (h *ControlHeader) AuthoritySetContains(did string) bool {
 	return ok
 }
 
+// AuthoritySetSize returns the cardinality of Authority_Set.
+func (h *ControlHeader) AuthoritySetSize() int {
+	return len(h.AuthoritySet)
+}
+
 // SortedDIDs returns the Authority_Set DIDs in deterministic sorted order
 // (NFC-normalized lexicographic). Used for canonical serialization.
 func (h *ControlHeader) SortedDIDs() []string {
@@ -191,7 +189,7 @@ func (h *ControlHeader) SortedDIDs() []string {
 	for did := range h.AuthoritySet {
 		dids = append(dids, did)
 	}
-	sortDIDs(dids)
+	sort.Strings(dids)
 	return dids
 }
 
@@ -220,15 +218,4 @@ type AdmissionProofBody struct {
 
 	// Hash is the computed stamp hash below the difficulty target.
 	Hash [32]byte
-}
-
-// sortDIDs sorts DIDs in lexicographic order. Exported via SortedDIDs;
-// internal to allow test stubbing.
-func sortDIDs(dids []string) {
-	// Standard sort; real implementation uses sort.Strings at package init.
-	for i := 1; i < len(dids); i++ {
-		for j := i; j > 0 && dids[j-1] > dids[j]; j-- {
-			dids[j-1], dids[j] = dids[j], dids[j-1]
-		}
-	}
 }

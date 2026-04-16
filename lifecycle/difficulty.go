@@ -1,20 +1,51 @@
-/*
-Package lifecycle — difficulty.go wraps Phase 1's admission.GenerateStamp
-and admission.VerifyStamp with a higher-level API for Mode B admission.
-
-The operator exposes current difficulty via GET /v1/admission/difficulty.
-The exchange reads the difficulty, generates a stamp via this wrapper,
-and includes it in the entry's AdmissionProof field.
-
-Two entry points:
-  GenerateAdmissionStamp: computes a stamp for a given entry hash + config
-  VerifyAdmissionStamp: validates a stamp against the operator's config
-
-Consumed by:
-  - Exchange submission pipeline (generate stamp before submit)
-  - Operator admission middleware (verify stamp on receipt)
-  - judicial-network/onboarding/provision.go for Mode B log setup
-*/
+// FILE PATH:
+//     lifecycle/difficulty.go
+//
+// DESCRIPTION:
+//     High-level entry points for Mode B admission stamp generation and
+//     verification. Wraps crypto/admission with a single DifficultyConfig
+//     struct that carries every knob operators and exchanges need: target
+//     log, minimum difficulty, hash function selection, Argon2id parameters,
+//     and epoch binding parameters.
+//
+// KEY ARCHITECTURAL DECISIONS:
+//     - DifficultyConfig is the single source of truth for stamp policy.
+//       Operators populate one from their config file and pass it to
+//       VerifyAdmissionStamp on every admission. Exchanges fetch it from
+//       the operator's difficulty endpoint and pass it to
+//       GenerateAdmissionStamp. No ambient state.
+//     - Generation takes an optional submitter commit pointer. When non-nil,
+//       the resulting AdmissionProof carries it. When nil, the proof carries
+//       no commit and the admission hash zero-fills its commit slot.
+//     - Epoch binding is OPT-IN at verification. EpochAcceptanceWindow of 0
+//       disables the check. Exchanges always populate Epoch from
+//       admission.CurrentEpoch so that enabling verification later does not
+//       require changes to submitter code paths.
+//     - Generation failures surface as wrapped errors with the "lifecycle/
+//       difficulty:" prefix. Verification failures pass through the named
+//       errors from crypto/admission unchanged so callers can dispatch via
+//       errors.Is.
+//
+// OVERVIEW:
+//     Generation flow:
+//         1. Caller computes the entry's canonical hash via
+//            crypto.CanonicalHash.
+//         2. Caller invokes GenerateAdmissionStamp(hash, cfg, commit).
+//         3. This function validates config, computes the current epoch,
+//            invokes admission.GenerateStamp, and returns a fully
+//            populated AdmissionProof ready to attach to the entry's
+//            Control Header.
+//
+//     Verification flow:
+//         1. Operator receives an entry with an admission proof.
+//         2. Operator computes the entry hash and invokes
+//            VerifyAdmissionStamp(hash, proof, cfg).
+//         3. This function computes the current epoch from the configured
+//            window and delegates to admission.VerifyStamp.
+//
+// KEY DEPENDENCIES:
+//     - crypto/admission: stamp hash primitive, epoch helpers, named errors.
+//     - types/admission.go: AdmissionProof and AdmissionMode.
 package lifecycle
 
 import (
@@ -24,96 +55,161 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
-// ─────────────────────────────────────────────────────────────────────
-// Configuration
-// ─────────────────────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------------------------
+// 1) DifficultyConfig
+// -------------------------------------------------------------------------------------------------
 
-// DifficultyConfig holds the admission difficulty parameters.
-// The operator publishes these; the exchange reads them.
+// DifficultyConfig holds the complete Mode B admission policy.
+//
+// Fields:
+//
+//	TargetLogDID          — the log this policy applies to. Stamps must
+//	                        carry this DID in AdmissionProof.TargetLog.
+//	                        Generation uses it to bind the stamp; verification
+//	                        uses it to reject stamps targeting other logs.
+//	Difficulty            — at generation: the difficulty the submitter will
+//	                        satisfy. At verification: the operator's minimum
+//	                        acceptable difficulty. Range 1..256.
+//	HashFunc              — HashSHA256 or HashArgon2id. Both sides MUST
+//	                        agree. Operators publish their choice via the
+//	                        difficulty endpoint.
+//	Argon2idParams        — parameters for Argon2id. nil uses
+//	                        admission.DefaultArgon2idParams. Ignored for
+//	                        HashSHA256.
+//	EpochWindowSeconds    — epoch width in seconds. 0 disables epoch binding
+//	                        (AdmissionProof.Epoch will be 0 on generation;
+//	                        verification will not check it).
+//	EpochAcceptanceWindow — tolerance in epochs around the current epoch.
+//	                        0 disables the epoch check at verification even
+//	                        if EpochWindowSeconds is non-zero. Set to 1 for
+//	                        the default ±1-epoch tolerance.
 type DifficultyConfig struct {
-	// TargetLogDID is the log this stamp is bound to. The stamp is
-	// invalid on any other log (prevents stamp reuse across logs).
-	TargetLogDID string
-
-	// Difficulty is the number of leading zero bits required.
-	// Range: 1-256. Higher = more work. Typical: 16-24.
-	Difficulty uint32
-
-	// HashFunc selects SHA-256 (default) or Argon2id (memory-hard).
-	// Memory-hard recommended for better targeting of infrastructure
-	// operators over botnets (governance doc recommendation).
-	HashFunc admission.HashFunc
-
-	// Argon2idParams are used when HashFunc is Argon2id.
-	// Nil uses admission.DefaultArgon2idParams().
-	Argon2idParams *admission.Argon2idParams
+	TargetLogDID          string
+	Difficulty            uint32
+	HashFunc              admission.HashFunc
+	Argon2idParams        *admission.Argon2idParams
+	EpochWindowSeconds    uint64
+	EpochAcceptanceWindow uint64
 }
 
-// DefaultDifficultyConfig returns safe defaults for development.
+// DefaultDifficultyConfig returns a safe starting configuration for the
+// given log DID: difficulty 16, SHA-256, default epoch width (5 minutes),
+// default acceptance window (±1 epoch).
+//
+// Production operators MUST review and tune these values — in particular,
+// Difficulty should be raised based on observed submission rates and
+// attack patterns, and HashFunc should be switched to HashArgon2id when
+// the operator's threat model includes commodity-hashing-capable adversaries.
 func DefaultDifficultyConfig(logDID string) DifficultyConfig {
 	return DifficultyConfig{
-		TargetLogDID: logDID,
-		Difficulty:   16,
-		HashFunc:     admission.HashSHA256,
+		TargetLogDID:          logDID,
+		Difficulty:            16,
+		HashFunc:              admission.HashSHA256,
+		EpochWindowSeconds:    admission.DefaultEpochWindowSeconds,
+		EpochAcceptanceWindow: admission.DefaultEpochAcceptanceWindow,
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// GenerateAdmissionStamp
-// ─────────────────────────────────────────────────────────────────────
-
-// GenerateAdmissionStamp computes a Mode B admission stamp for an entry.
-// The caller computes the entry's canonical hash via crypto.CanonicalHash,
-// then calls this with the hash and the operator's difficulty config.
-//
-// Returns an AdmissionProof ready to set on the entry's Control Header
-// before serialization and submission.
-func GenerateAdmissionStamp(entryHash [32]byte, cfg DifficultyConfig) (*types.AdmissionProof, error) {
+// validate enforces invariants shared by generation and verification.
+func (cfg DifficultyConfig) validate() error {
 	if cfg.TargetLogDID == "" {
-		return nil, fmt.Errorf("lifecycle/difficulty: empty target log DID")
+		return fmt.Errorf("lifecycle/difficulty: empty target log DID")
 	}
 	if cfg.Difficulty == 0 || cfg.Difficulty > 256 {
-		return nil, fmt.Errorf("lifecycle/difficulty: difficulty %d out of range 1-256", cfg.Difficulty)
+		return fmt.Errorf("lifecycle/difficulty: difficulty %d out of range 1..256", cfg.Difficulty)
+	}
+	switch cfg.HashFunc {
+	case admission.HashSHA256, admission.HashArgon2id:
+	default:
+		return fmt.Errorf("lifecycle/difficulty: unknown hash function %d", cfg.HashFunc)
+	}
+	return nil
+}
+
+// -------------------------------------------------------------------------------------------------
+// 2) Stamp generation
+// -------------------------------------------------------------------------------------------------
+
+// GenerateAdmissionStamp computes a Mode B admission stamp for an entry
+// and returns a fully populated AdmissionProof ready to attach to the
+// entry's Control Header.
+//
+// Arguments:
+//
+//	entryHash       — canonical hash of the entry, from crypto.CanonicalHash.
+//	cfg             — stamp policy. See DifficultyConfig.
+//	submitterCommit — optional 32-byte submitter identity binding. nil
+//	                  when the operator does not require per-submitter
+//	                  rate limiting.
+//
+// The returned AdmissionProof has:
+//
+//	Mode            = AdmissionModeB
+//	Nonce           = the winning nonce from GenerateStamp
+//	TargetLog       = cfg.TargetLogDID
+//	Difficulty      = cfg.Difficulty
+//	Epoch           = CurrentEpoch(cfg.EpochWindowSeconds)
+//	SubmitterCommit = submitterCommit
+func GenerateAdmissionStamp(
+	entryHash [32]byte,
+	cfg DifficultyConfig,
+	submitterCommit *[32]byte,
+) (*types.AdmissionProof, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
-	nonce, err := admission.GenerateStamp(entryHash, cfg.TargetLogDID, cfg.Difficulty, cfg.HashFunc, cfg.Argon2idParams)
+	epoch := admission.CurrentEpoch(cfg.EpochWindowSeconds)
+
+	nonce, err := admission.GenerateStamp(admission.StampParams{
+		EntryHash:       entryHash,
+		LogDID:          cfg.TargetLogDID,
+		Difficulty:      cfg.Difficulty,
+		HashFunc:        cfg.HashFunc,
+		Argon2idParams:  cfg.Argon2idParams,
+		Epoch:           epoch,
+		SubmitterCommit: submitterCommit,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("lifecycle/difficulty: generate stamp: %w", err)
 	}
 
 	return &types.AdmissionProof{
-		Mode:       types.AdmissionModeB,
-		Nonce:      nonce,
-		TargetLog:  cfg.TargetLogDID,
-		Difficulty: cfg.Difficulty,
+		Mode:            types.AdmissionModeB,
+		Nonce:           nonce,
+		TargetLog:       cfg.TargetLogDID,
+		Difficulty:      cfg.Difficulty,
+		Epoch:           epoch,
+		SubmitterCommit: submitterCommit,
 	}, nil
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// VerifyAdmissionStamp
-// ─────────────────────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------------------------
+// 3) Stamp verification
+// -------------------------------------------------------------------------------------------------
 
-// VerifyAdmissionStamp validates a Mode B admission stamp. The operator's
-// admission pipeline calls this to verify stamps on incoming entries.
-//
-// Checks:
-//  1. Proof is Mode B
-//  2. TargetLog matches the operator's log DID (stamp bound to this log)
-//  3. Difficulty meets the minimum (operator can accept higher)
-//  4. Stamp hash meets the difficulty target
-func VerifyAdmissionStamp(entryHash [32]byte, proof *types.AdmissionProof, cfg DifficultyConfig) error {
-	if proof == nil {
-		return fmt.Errorf("lifecycle/difficulty: nil admission proof")
+// VerifyAdmissionStamp validates an AdmissionProof against operator policy.
+// Computes the current epoch from cfg.EpochWindowSeconds and delegates to
+// admission.VerifyStamp. All named errors from crypto/admission pass
+// through unchanged; callers dispatch on errors.Is to map failures to
+// HTTP status codes or audit categories.
+func VerifyAdmissionStamp(
+	entryHash [32]byte,
+	proof *types.AdmissionProof,
+	cfg DifficultyConfig,
+) error {
+	if err := cfg.validate(); err != nil {
+		return err
 	}
-	if proof.Mode != types.AdmissionModeB {
-		return fmt.Errorf("lifecycle/difficulty: expected Mode B, got mode %d", proof.Mode)
-	}
-	if proof.TargetLog != cfg.TargetLogDID {
-		return fmt.Errorf("lifecycle/difficulty: stamp bound to %s, expected %s", proof.TargetLog, cfg.TargetLogDID)
-	}
-	if proof.Difficulty < cfg.Difficulty {
-		return fmt.Errorf("lifecycle/difficulty: stamp difficulty %d below minimum %d", proof.Difficulty, cfg.Difficulty)
-	}
-
-	return admission.VerifyStamp(entryHash, proof.Nonce, cfg.TargetLogDID, proof.Difficulty, cfg.HashFunc, cfg.Argon2idParams)
+	currentEpoch := admission.CurrentEpoch(cfg.EpochWindowSeconds)
+	return admission.VerifyStamp(
+		proof,
+		entryHash,
+		cfg.TargetLogDID,
+		cfg.Difficulty,
+		cfg.HashFunc,
+		cfg.Argon2idParams,
+		currentEpoch,
+		cfg.EpochAcceptanceWindow,
+	)
 }

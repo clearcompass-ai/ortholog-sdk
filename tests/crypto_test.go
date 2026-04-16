@@ -8,6 +8,7 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/signatures"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
+	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
 // ── Admission stamps ───────────────────────────────────────────────────
@@ -16,16 +17,58 @@ func TestAdmissionStamp_GenerateVerify(t *testing.T) {
 	entryHash := [32]byte{1, 2, 3}
 	logDID := "did:ortholog:testlog"
 	difficulty := uint32(8)
-	nonce, err := admission.GenerateStamp(entryHash, logDID, difficulty, admission.HashSHA256, nil)
-	if err != nil { t.Fatalf("Generate: %v", err) }
-	if err := admission.VerifyStamp(entryHash, nonce, logDID, difficulty, admission.HashSHA256, nil); err != nil { t.Fatalf("Verify: %v", err) }
+
+	nonce, err := admission.GenerateStamp(admission.StampParams{
+		EntryHash:  entryHash,
+		LogDID:     logDID,
+		Difficulty: difficulty,
+		HashFunc:   admission.HashSHA256,
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	proof := &types.AdmissionProof{
+		Mode:       types.AdmissionModeB,
+		Nonce:      nonce,
+		TargetLog:  logDID,
+		Difficulty: difficulty,
+	}
+	if err := admission.VerifyStamp(
+		proof, entryHash, logDID, difficulty,
+		admission.HashSHA256, nil,
+		0, 0, // currentEpoch, acceptanceWindow (0 disables epoch check)
+	); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
 }
 
 func TestAdmissionStamp_WrongLogDIDRejected(t *testing.T) {
 	entryHash := [32]byte{4, 5, 6}
-	nonce, _ := admission.GenerateStamp(entryHash, "did:ortholog:correct", 8, admission.HashSHA256, nil)
-	err := admission.VerifyStamp(entryHash, nonce, "did:ortholog:wrong", 8, admission.HashSHA256, nil)
-	if err == nil { t.Fatal("stamp should fail against wrong log DID") }
+	nonce, err := admission.GenerateStamp(admission.StampParams{
+		EntryHash:  entryHash,
+		LogDID:     "did:ortholog:correct",
+		Difficulty: 8,
+		HashFunc:   admission.HashSHA256,
+	})
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	proof := &types.AdmissionProof{
+		Mode:       types.AdmissionModeB,
+		Nonce:      nonce,
+		TargetLog:  "did:ortholog:correct",
+		Difficulty: 8,
+	}
+	err = admission.VerifyStamp(
+		proof, entryHash, "did:ortholog:wrong", 8,
+		admission.HashSHA256, nil,
+		0, 0,
+	)
+	if err == nil {
+		t.Fatal("stamp should fail against wrong log DID")
+	}
 }
 
 // ── Artifact encryption ────────────────────────────────────────────────
@@ -33,22 +76,36 @@ func TestAdmissionStamp_WrongLogDIDRejected(t *testing.T) {
 func TestArtifact_EncryptDecrypt(t *testing.T) {
 	plaintext := []byte("confidential credential data")
 	ciphertext, key, err := artifact.EncryptArtifact(plaintext)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	recovered, err := artifact.DecryptArtifact(ciphertext, key)
-	if err != nil { t.Fatal(err) }
-	if string(recovered) != string(plaintext) { t.Fatal("decrypted plaintext doesn't match") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(recovered) != string(plaintext) {
+		t.Fatal("decrypted plaintext doesn't match")
+	}
 }
 
 func TestArtifact_ReEncrypt(t *testing.T) {
 	plaintext := []byte("re-encryption test")
 	ciphertext, oldKey, _ := artifact.EncryptArtifact(plaintext)
 	newCT, newKey, err := artifact.ReEncryptArtifact(ciphertext, oldKey)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	recovered, err := artifact.DecryptArtifact(newCT, newKey)
-	if err != nil { t.Fatal(err) }
-	if string(recovered) != string(plaintext) { t.Fatal("re-encrypted plaintext doesn't match") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(recovered) != string(plaintext) {
+		t.Fatal("re-encrypted plaintext doesn't match")
+	}
 	_, err = artifact.DecryptArtifact(ciphertext, newKey)
-	if err == nil { t.Fatal("old ciphertext should not decrypt with new key") }
+	if err == nil {
+		t.Fatal("old ciphertext should not decrypt with new key")
+	}
 }
 
 // ── Escrow ─────────────────────────────────────────────────────────────
@@ -56,20 +113,28 @@ func TestArtifact_ReEncrypt(t *testing.T) {
 func TestEscrow_Shamir3of5AllSubsets(t *testing.T) {
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	shares, err := escrow.SplitGF256(secret, 3, 5)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	count := 0
 	for i := 0; i < 5; i++ {
 		for j := i + 1; j < 5; j++ {
 			for k := j + 1; k < 5; k++ {
 				subset := []escrow.Share{shares[i], shares[j], shares[k]}
 				recovered, err := escrow.ReconstructGF256(subset)
-				if err != nil { t.Fatalf("subset {%d,%d,%d}: %v", i, j, k, err) }
-				if string(recovered) != string(secret) { t.Fatalf("subset {%d,%d,%d}: wrong secret", i, j, k) }
+				if err != nil {
+					t.Fatalf("subset {%d,%d,%d}: %v", i, j, k, err)
+				}
+				if string(recovered) != string(secret) {
+					t.Fatalf("subset {%d,%d,%d}: wrong secret", i, j, k)
+				}
 				count++
 			}
 		}
 	}
-	if count != 10 { t.Fatalf("tested %d subsets, expected 10", count) }
+	if count != 10 {
+		t.Fatalf("tested %d subsets, expected 10", count)
+	}
 }
 
 func TestEscrow_TagValidation(t *testing.T) {
@@ -77,18 +142,28 @@ func TestEscrow_TagValidation(t *testing.T) {
 	shares, _ := escrow.SplitGF256(secret, 2, 3)
 	shares[0].FieldTag = 0x02
 	_, err := escrow.ReconstructGF256(shares[:2])
-	if err == nil { t.Fatal("expected error for unrecognized field tag") }
+	if err == nil {
+		t.Fatal("expected error for unrecognized field tag")
+	}
 }
 
 // ── Blind routing ──────────────────────────────────────────────────────
 
 func TestBlindRouting_MockAttestation(t *testing.T) {
 	apple := &escrow.MockAppleAttestation{}
-	if err := apple.VerifyAttestation([]byte("valid")); err != nil { t.Fatal(err) }
-	if err := apple.VerifyAttestation(nil); err == nil { t.Fatal("nil attestation should fail") }
-	if apple.Platform() != "apple_secure_enclave_mock" { t.Fatal("wrong platform") }
+	if err := apple.VerifyAttestation([]byte("valid")); err != nil {
+		t.Fatal(err)
+	}
+	if err := apple.VerifyAttestation(nil); err == nil {
+		t.Fatal("nil attestation should fail")
+	}
+	if apple.Platform() != "apple_secure_enclave_mock" {
+		t.Fatal("wrong platform")
+	}
 	android := &escrow.MockAndroidAttestation{}
-	if err := android.VerifyAttestation([]byte("valid")); err != nil { t.Fatal(err) }
+	if err := android.VerifyAttestation([]byte("valid")); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // ── Dead CID ───────────────────────────────────────────────────────────
@@ -100,11 +175,15 @@ func TestDeadCID_Irrecoverable(t *testing.T) {
 	cs.Push(cid, data)
 	cs.Delete(cid)
 	_, err := cs.Fetch(cid)
-	if err != storage.ErrNotFound { t.Fatalf("expected ErrNotFound, got: %v", err) }
+	if err != storage.ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
 	ciphertext, _, _ := artifact.EncryptArtifact([]byte("data"))
 	wrongKey := artifact.ArtifactKey{}
 	_, err = artifact.DecryptArtifact(ciphertext, wrongKey)
-	if !artifact.IsIrrecoverable(err) { t.Fatal("expected IrrecoverableError") }
+	if !artifact.IsIrrecoverable(err) {
+		t.Fatal("expected IrrecoverableError")
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -116,23 +195,23 @@ func TestVerifyAndDecrypt_ReEncryptPreservesContentDigest(t *testing.T) {
 
 	// Original encryption
 	ct1, key1, err := artifact.EncryptArtifact(plaintext)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	artifactCID1 := storage.Compute(ct1)
 	contentDigest := storage.Compute(plaintext)
 
 	// Re-encrypt (Tier 1 key rotation)
 	ct2, key2, err := artifact.ReEncryptArtifact(ct1, key1)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	artifactCID2 := storage.Compute(ct2)
 
 	// artifact_cid MUST change (different ciphertext)
 	if artifactCID1.Equal(artifactCID2) {
 		t.Fatal("re-encryption must produce different artifact_cid")
 	}
-
-	// content_digest (hash of plaintext) MUST be the same
-	// This is the core invariant: content_digest survives re-encryption
-	// because re-encryption changes the ciphertext, not the plaintext.
 
 	// VerifyAndDecrypt with new key, new CID, but SAME content_digest
 	recovered, err := artifact.VerifyAndDecrypt(ct2, key2, artifactCID2, contentDigest)
@@ -167,7 +246,9 @@ func TestCSPRNG_NonceUniqueness10K(t *testing.T) {
 
 	for i := 0; i < N; i++ {
 		_, key, err := artifact.EncryptArtifact([]byte("test"))
-		if err != nil { t.Fatalf("iteration %d: %v", i, err) }
+		if err != nil {
+			t.Fatalf("iteration %d: %v", i, err)
+		}
 		kn := keyNonce{key: key.Key, nonce: key.Nonce}
 		if seen[kn] {
 			t.Fatalf("duplicate key+nonce at iteration %d", i)
@@ -181,36 +262,44 @@ func TestCSPRNG_NonceUniqueness10K(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════════
 
 func TestECIES_EncryptDecryptRoundTrip(t *testing.T) {
-	// Generate escrow node key pair
 	nodeKey, err := signatures.GenerateKey()
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// Create a Shamir share and encrypt for node
 	secret := []byte("0123456789abcdef0123456789abcdef")
 	shares, err := escrow.SplitGF256(secret, 3, 5)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	// Encrypt share for node
 	encrypted, err := escrow.EncryptShareForNode(shares[0], &nodeKey.PublicKey)
-	if err != nil { t.Fatalf("EncryptShareForNode: %v", err) }
+	if err != nil {
+		t.Fatalf("EncryptShareForNode: %v", err)
+	}
 
-	// Decrypt share from node
 	recovered, err := escrow.DecryptShareFromNode(encrypted, nodeKey)
-	if err != nil { t.Fatalf("DecryptShareFromNode: %v", err) }
+	if err != nil {
+		t.Fatalf("DecryptShareFromNode: %v", err)
+	}
 
-	// Verify share content matches
-	if recovered.FieldTag != shares[0].FieldTag { t.Fatal("field tag mismatch") }
-	if recovered.Index != shares[0].Index { t.Fatal("index mismatch") }
+	if recovered.FieldTag != shares[0].FieldTag {
+		t.Fatal("field tag mismatch")
+	}
+	if recovered.Index != shares[0].Index {
+		t.Fatal("index mismatch")
+	}
 	for i := range recovered.Value {
 		if recovered.Value[i] != shares[0].Value[i] {
 			t.Fatalf("value byte %d mismatch", i)
 		}
 	}
 
-	// Wrong key should fail
 	wrongKey, _ := signatures.GenerateKey()
 	_, err = escrow.DecryptShareFromNode(encrypted, wrongKey)
-	if err == nil { t.Fatal("wrong key should fail decryption") }
+	if err == nil {
+		t.Fatal("wrong key should fail decryption")
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -221,29 +310,38 @@ func TestContentStore_PushFetchDelete(t *testing.T) {
 	store := storage.NewInMemoryContentStore()
 	data := []byte("artifact data for content store")
 
-	// SDK computes CID
 	cid := storage.Compute(data)
 
-	// Push
-	if err := store.Push(cid, data); err != nil { t.Fatal(err) }
+	if err := store.Push(cid, data); err != nil {
+		t.Fatal(err)
+	}
 
-	// Exists
 	exists, err := store.Exists(cid)
-	if err != nil { t.Fatal(err) }
-	if !exists { t.Fatal("CID should exist after push") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("CID should exist after push")
+	}
 
-	// Fetch
 	fetched, err := store.Fetch(cid)
-	if err != nil { t.Fatal(err) }
-	if string(fetched) != string(data) { t.Fatal("fetched data doesn't match") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(fetched) != string(data) {
+		t.Fatal("fetched data doesn't match")
+	}
 
-	// Pin
-	if err := store.Pin(cid); err != nil { t.Fatal(err) }
+	if err := store.Pin(cid); err != nil {
+		t.Fatal(err)
+	}
 
-	// Delete
-	if err := store.Delete(cid); err != nil { t.Fatal(err) }
+	if err := store.Delete(cid); err != nil {
+		t.Fatal(err)
+	}
 
-	// Fetch after delete -> not found
 	_, err = store.Fetch(cid)
-	if err != storage.ErrContentNotFound { t.Fatalf("expected ErrContentNotFound, got: %v", err) }
+	if err != storage.ErrContentNotFound {
+		t.Fatalf("expected ErrContentNotFound, got: %v", err)
+	}
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/builder"
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
+	"github.com/clearcompass-ai/ortholog-sdk/crypto/admission" // ← add this
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/artifact"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/signatures"
@@ -664,12 +665,13 @@ func TestArtifactAccess_NilSchemaParams_Error(t *testing.T) {
 // ═════════════════════════════════════════════════════════════════════
 // 6. Difficulty (3 tests)
 // ═════════════════════════════════════════════════════════════════════
-
 func TestDifficulty_GenerateAndVerify(t *testing.T) {
 	entryHash := [32]byte{1, 2, 3, 4}
 	cfg := lifecycle.DefaultDifficultyConfig("did:ortholog:testlog")
+	// Lower difficulty for test speed; default is 16.
+	cfg.Difficulty = 8
 
-	proof, err := lifecycle.GenerateAdmissionStamp(entryHash, cfg)
+	proof, err := lifecycle.GenerateAdmissionStamp(entryHash, cfg, nil)
 	if err != nil {
 		t.Fatalf("generate: %v", err)
 	}
@@ -688,9 +690,14 @@ func TestDifficulty_GenerateAndVerify(t *testing.T) {
 func TestDifficulty_WrongLogDIDRejected(t *testing.T) {
 	entryHash := [32]byte{5, 6, 7}
 	cfg := lifecycle.DefaultDifficultyConfig("did:ortholog:correct")
-	proof, _ := lifecycle.GenerateAdmissionStamp(entryHash, cfg)
+	cfg.Difficulty = 8
+	proof, err := lifecycle.GenerateAdmissionStamp(entryHash, cfg, nil)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
 
 	wrongCfg := lifecycle.DefaultDifficultyConfig("did:ortholog:wrong")
+	wrongCfg.Difficulty = 8
 	if err := lifecycle.VerifyAdmissionStamp(entryHash, proof, wrongCfg); err == nil {
 		t.Fatal("wrong log DID should be rejected")
 	}
@@ -698,10 +705,21 @@ func TestDifficulty_WrongLogDIDRejected(t *testing.T) {
 
 func TestDifficulty_BelowMinimum(t *testing.T) {
 	entryHash := [32]byte{8, 9}
-	lowCfg := lifecycle.DifficultyConfig{TargetLogDID: "did:test:log", Difficulty: 8}
-	proof, _ := lifecycle.GenerateAdmissionStamp(entryHash, lowCfg)
+	lowCfg := lifecycle.DifficultyConfig{
+		TargetLogDID: "did:test:log",
+		Difficulty:   8,
+		HashFunc:     admission.HashSHA256,
+	}
+	proof, err := lifecycle.GenerateAdmissionStamp(entryHash, lowCfg, nil)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
 
-	highCfg := lifecycle.DifficultyConfig{TargetLogDID: "did:test:log", Difficulty: 24}
+	highCfg := lifecycle.DifficultyConfig{
+		TargetLogDID: "did:test:log",
+		Difficulty:   24,
+		HashFunc:     admission.HashSHA256,
+	}
 	if err := lifecycle.VerifyAdmissionStamp(entryHash, proof, highCfg); err == nil {
 		t.Fatal("difficulty below minimum should be rejected")
 	}
@@ -1000,5 +1018,3 @@ func TestScope_ExecuteRemovalReducedTimeLock(t *testing.T) {
 		t.Fatal("should have objective trigger")
 	}
 }
-
-

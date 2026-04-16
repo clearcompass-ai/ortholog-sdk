@@ -174,6 +174,28 @@ func (r OverrideThresholdRule) RequiredApprovals(n int) int {
 	}
 }
 
+// String returns the canonical snake_case label for a threshold rule.
+// Used in operator logs (e.g., ArbitrationResult.Reason) so readers
+// can identify the policy in effect without mapping integers to names.
+//
+// The string values match the JSON enum parsed by
+// schema.JSONParameterExtractor's override_threshold field, so a rule
+// round-trips cleanly: schema JSON → typed enum → log message → schema JSON.
+//
+// Unknown rules render as "two_thirds" to match the fallback in
+// RequiredApprovals. The two methods stay consistent: any value that
+// behaves as two-thirds in the math also prints as two-thirds in logs.
+func (r OverrideThresholdRule) String() string {
+	switch r {
+	case ThresholdSimpleMajority:
+		return "simple_majority"
+	case ThresholdUnanimity:
+		return "unanimity"
+	default: // ThresholdTwoThirdsMajority + any unknown value
+		return "two_thirds"
+	}
+}
+
 // SchemaParameters holds domain-visible parameters extracted from a schema's
 // Domain Payload. Pure data type — no extraction logic here.
 //

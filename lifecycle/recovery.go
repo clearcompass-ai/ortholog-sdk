@@ -3,10 +3,11 @@ Package lifecycle — recovery.go implements three-phase key escrow recovery
 for the Ortholog protocol. Used when an exchange fails or a holder migrates.
 
 Three phases:
-  InitiateRecovery: publishes a recovery request commentary entry
-  CollectShares: gathers M-of-N escrow shares, validates field tags
-  ExecuteRecovery: reconstructs keys, re-encrypts artifacts, publishes
-    succession entries
+
+	InitiateRecovery: publishes a recovery request commentary entry
+	CollectShares: gathers M-of-N escrow shares, validates field tags
+	ExecuteRecovery: reconstructs keys, re-encrypts artifacts, publishes
+	  succession entries
 
 Additionally: EscalateToArbitration for custody disputes where the
 incumbent exchange contests the recovery. Requires schema-declared
@@ -461,8 +462,8 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 	}
 
 	if approvalCount < required {
-		result.Reason = fmt.Sprintf("%d of %d required escrow approvals (threshold %s over N=%d)",
-			approvalCount, required, overrideThresholdLabel(threshold), p.TotalEscrowNodes)
+		result.Reason = fmt.Sprintf("%d of %d escrow approvals (threshold %s requires %d)",
+			approvalCount, p.TotalEscrowNodes, threshold.String(), required)
 		return result, nil
 	}
 
@@ -480,25 +481,12 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 	}
 
 	result.OverrideAuthorized = true
-	result.Reason = fmt.Sprintf("override authorized: %d of %d escrow approvals (threshold %s)",
-		approvalCount, required, overrideThresholdLabel(threshold))
+	result.Reason = fmt.Sprintf("override authorized: %d of %d escrow approvals (threshold %s requires %d)",
+		approvalCount, p.TotalEscrowNodes, threshold.String(), required)
 	if requiresWitness {
 		result.Reason += " + independent witness cosignature"
 	}
 	return result, nil
-}
-
-// overrideThresholdLabel returns a human-readable label for a threshold rule.
-// Used in ArbitrationResult.Reason to make operator logs self-describing.
-func overrideThresholdLabel(t types.OverrideThresholdRule) string {
-	switch t {
-	case types.ThresholdSimpleMajority:
-		return "simple_majority"
-	case types.ThresholdUnanimity:
-		return "unanimity"
-	default:
-		return "two_thirds"
-	}
 }
 
 // ─────────────────────────────────────────────────────────────────────

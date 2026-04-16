@@ -106,7 +106,7 @@ type SingleLogConfig struct {
 	SignerDID string
 
 	// LogDID identifies the log these entries target. Embedded in the
-	// scope entity's payload as "log_did" for discovery.
+	// default scope payload as "log_did" for discovery.
 	LogDID string
 
 	// AuthoritySet is the initial set of authority DIDs for the scope.
@@ -121,6 +121,22 @@ type SingleLogConfig struct {
 	// Schemas defines the initial schemas to publish on this log.
 	// Same no-filter contract as Delegations.
 	Schemas []SchemaSpec
+
+	// ScopePayload is an optional Domain Payload for the scope entity.
+	//
+	// The SDK treats this as opaque bytes (SDK-D6) — same contract as
+	// DelegationSpec.ScopeLimit and SchemaSpec.Payload. Domain repos
+	// building on ProvisionSingleLog inject their own structured payload
+	// here (e.g., judicial networks recording the court DID, physician
+	// credentialing networks recording the institution).
+	//
+	// nil: SDK generates a minimal default of {"log_did": cfg.LogDID}.
+	// non-nil (including empty slice): passed through verbatim.
+	//
+	// The nil/non-nil distinction is deliberate — an explicit empty slice
+	// means "caller wants no payload" and the SDK respects that, while
+	// nil means "caller hasn't specified, use a sensible default."
+	ScopePayload []byte
 
 	// EventTime is the timestamp for all provisioning entries.
 	// Zero value means time.Now().UTC().UnixMicro() at call time.
@@ -154,11 +170,18 @@ func ProvisionSingleLog(cfg SingleLogConfig) (*LogProvision, error) {
 
 	provision := &LogProvision{LogDID: cfg.LogDID}
 
+	// Resolve scope payload. nil → minimal default; non-nil (including
+	// empty slice) → pass through verbatim. See ScopePayload docstring.
+	scopePayload := cfg.ScopePayload
+	if scopePayload == nil {
+		scopePayload = mustMarshalJSON(map[string]any{"log_did": cfg.LogDID})
+	}
+
 	// 1. Scope entity.
 	scopeEntry, err := builder.BuildScopeCreation(builder.ScopeCreationParams{
 		SignerDID:    cfg.SignerDID,
 		AuthoritySet: cfg.AuthoritySet,
-		Payload:      mustMarshalJSON(map[string]any{"log_did": cfg.LogDID}),
+		Payload:      scopePayload,
 		EventTime:    eventTime,
 	})
 	if err != nil {

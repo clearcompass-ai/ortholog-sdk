@@ -260,7 +260,6 @@ type GrantArtifactAccessParams struct {
 	LeafReader           smt.LeafReader
 
 	// PRE-specific fields. Nil/zero for AES-GCM mode.
-	// PRE-specific fields. Nil/zero for AES-GCM mode.
 	Capsule        *artifact.Capsule
 	OwnerSecretKey []byte // 32-byte secp256k1 private key scalar (unwrapped sk_del provided by caller)
 

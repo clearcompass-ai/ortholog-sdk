@@ -473,3 +473,42 @@ func TestTreeHeadClient_DefaultConfig(t *testing.T) {
 
 // Suppress unused import.
 var _ = types.TreeHead{}
+
+func TestFetchFromURL_DirectCall(t *testing.T) {
+	rootHash := sha256.Sum256([]byte("direct-fetch"))
+	server := newMockOperatorServer(12345, rootHash)
+	defer server.Close()
+
+	client := witness.NewTreeHeadClient(&witness.StaticEndpoints{}, witness.DefaultTreeHeadClientConfig())
+	head, fetchedAt, err := client.FetchFromURL(server.URL + "/v1/tree/head")
+	if err != nil {
+		t.Fatalf("FetchFromURL: %v", err)
+	}
+	if head.TreeSize != 12345 {
+		t.Errorf("tree size: expected 12345, got %d", head.TreeSize)
+	}
+	if head.RootHash != rootHash {
+		t.Errorf("root hash mismatch")
+	}
+	if fetchedAt.IsZero() {
+		t.Errorf("fetchedAt should be populated")
+	}
+
+	// Cache was NOT populated by this call.
+	if client.CacheSize() != 0 {
+		t.Errorf("FetchFromURL must not populate cache, got size %d", client.CacheSize())
+	}
+}
+
+func TestFetchFromURL_HTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	client := witness.NewTreeHeadClient(&witness.StaticEndpoints{}, witness.DefaultTreeHeadClientConfig())
+	_, _, err := client.FetchFromURL(server.URL + "/v1/tree/head")
+	if err == nil {
+		t.Fatal("expected error from 503, got nil")
+	}
+}

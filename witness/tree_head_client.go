@@ -146,7 +146,7 @@ func (tc *TreeHeadClient) FetchLatestTreeHead(logDID string) (types.CosignedTree
 	}
 
 	// (3) HTTP fetch from operator.
-	head, fetchedAt, err := tc.fetchFromURL(operatorURL + "/v1/tree/head")
+	head, fetchedAt, err := tc.FetchFromURL(operatorURL + "/v1/tree/head")
 	if err == nil {
 		tc.updateCache(logDID, head, fetchedAt)
 		return head, fetchedAt, nil
@@ -155,7 +155,7 @@ func (tc *TreeHeadClient) FetchLatestTreeHead(logDID string) (types.CosignedTree
 	// (4) Fallback to witness endpoints.
 	witnessEPs, _ := tc.endpoints.WitnessEndpoints(logDID)
 	for _, wep := range witnessEPs {
-		head, fetchedAt, wErr := tc.fetchFromURL(wep + "/v1/tree/head")
+		head, fetchedAt, wErr := tc.FetchFromURL(wep + "/v1/tree/head")
 		if wErr == nil {
 			tc.updateCache(logDID, head, fetchedAt)
 			return head, fetchedAt, nil
@@ -197,26 +197,40 @@ func (tc *TreeHeadClient) CacheSize() int {
 // Internal
 // ─────────────────────────────────────────────────────────────────────
 
-func (tc *TreeHeadClient) fetchFromURL(url string) (types.CosignedTreeHead, time.Time, error) {
+// FetchFromURL fetches a cosigned tree head from a specific endpoint URL.
+//
+// Unlike FetchLatestTreeHead which resolves endpoints via the injected
+// EndpointProvider and caches results by log DID, this takes the URL
+// directly and bypasses the cache. Used primarily by monitoring for
+// equivocation detection — comparing operator tree heads against
+// individual witness tree heads requires fresh, unrelated-to-cache fetches.
+//
+// The caller provides witness URLs from their own resolution
+// (e.g., did.DIDDocument.WitnessEndpointURLs()).
+//
+// No witness signature verification is performed here. Callers wanting
+// to verify the returned head should pass it to VerifyTreeHead or
+// DetectEquivocation.
+func (tc *TreeHeadClient) FetchFromURL(url string) (types.CosignedTreeHead, time.Time, error) {
 	resp, err := tc.client.Get(url)
 	if err != nil {
-		return types.CosignedTreeHead{}, time.Time{}, err
+		return types.CosignedTreeHead{}, time.Time{}, fmt.Errorf("witness/client: fetch %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return types.CosignedTreeHead{}, time.Time{},
-			fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+			fmt.Errorf("witness/client: HTTP %d from %s", resp.StatusCode, url)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return types.CosignedTreeHead{}, time.Time{}, err
+		return types.CosignedTreeHead{}, time.Time{}, fmt.Errorf("witness/client: read %s: %w", url, err)
 	}
 
 	head, err := parseTreeHeadResponse(body)
 	if err != nil {
-		return types.CosignedTreeHead{}, time.Time{}, err
+		return types.CosignedTreeHead{}, time.Time{}, fmt.Errorf("witness/client: parse %s: %w", url, err)
 	}
 
 	return head, time.Now().UTC(), nil
@@ -235,8 +249,8 @@ func parseTreeHeadResponse(data []byte) (types.CosignedTreeHead, error) {
 		RootHash string `json:"root_hash"`
 		HashAlgo int    `json:"hash_algo"`
 		Sigs     []struct {
-			Signer string `json:"signer"`
-			SigAlgo int   `json:"sig_algo"`
+			Signer  string `json:"signer"`
+			SigAlgo int    `json:"sig_algo"`
 			Sig     string `json:"signature"`
 		} `json:"signatures"`
 	}

@@ -939,14 +939,17 @@ func TestClassify_EvidenceCapExceeded_Error(t *testing.T) {
 	fetcher.Store(rootPos, rootEntry)
 	p6setLeaf(t, store, rootPos)
 
-	pointers := make([]types.LogPosition, 11)
+	// Construct an entry that exceeds the evidence cap without the
+	// authority-snapshot shape exemption. MaxEvidencePointers+1 pointers
+	// on a Path A entry (SameSigner, no PriorAuthority) must be rejected.
+	pointers := make([]types.LogPosition, envelope.MaxEvidencePointers+1)
 	for i := range pointers {
 		pointers[i] = pos(uint64(100 + i))
 	}
 	ap := envelope.AuthoritySameSigner
 	entry := &envelope.Entry{
 		Header: envelope.ControlHeader{
-			ProtocolVersion:  3,
+			ProtocolVersion:  5,
 			SignerDID:        "did:example:alice",
 			TargetRoot:       ptrTo(rootPos),
 			AuthorityPath:    &ap,
@@ -962,7 +965,8 @@ func TestClassify_EvidenceCapExceeded_Error(t *testing.T) {
 		LocalLogDID: testLogDID,
 	})
 	if result.Path != builder.PathResultRejected {
-		t.Fatalf("expected Rejected for evidence cap, got %d (%s)", result.Path, result.Reason)
+		t.Fatalf("expected Rejected for evidence cap (%d pointers), got %d (%s)",
+			len(pointers), result.Path, result.Reason)
 	}
 }
 

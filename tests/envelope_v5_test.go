@@ -206,3 +206,26 @@ func TestV5_NonASCIISignerDIDRejected(t *testing.T) {
 		t.Errorf("non-ASCII DID = %v, want ErrNonASCIIDID", err)
 	}
 }
+func TestV5_TooManyEvidencePointers(t *testing.T) {
+	t.Parallel()
+	pointers := make([]types.LogPosition, envelope.MaxEvidencePointers+1)
+	for i := range pointers {
+		pointers[i] = types.LogPosition{LogDID: "did:web:evidence", Sequence: uint64(i + 1)}
+	}
+	_, err := envelope.NewEntry(envelope.ControlHeader{
+		SignerDID:        "did:test:evcap",
+		EventTime:        1700000000,
+		EvidencePointers: pointers,
+	}, nil)
+	if !errors.Is(err, envelope.ErrTooManyEvidencePointers) {
+		t.Errorf("too many evidence pointers = %v, want ErrTooManyEvidencePointers", err)
+	}
+}
+
+func TestV5_ShortPreambleRejected(t *testing.T) {
+	t.Parallel()
+	_, err := envelope.Deserialize([]byte{0x00, 0x04, 0x00}) // 3 bytes < 6
+	if !errors.Is(err, envelope.ErrMalformedPreamble) {
+		t.Errorf("short preamble = %v, want ErrMalformedPreamble", err)
+	}
+}

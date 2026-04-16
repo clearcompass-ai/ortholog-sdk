@@ -5,18 +5,20 @@ SMT leaf and verifies delegation chain provenance.
 Two exported functions:
 
 EvaluateAuthority(leafKey, fetcher, extractor):
-  Walks the Prior_Authority chain backward from AuthorityTip. Each entry
-  is classified as active, pending (within activation delay per
-  SchemaParameterExtractor), or overridden. Handles authority snapshots
-  (O(active constraints) shortcut via Evidence_Pointers) and skip pointers
-  (O(log A) traversal via Authority_Skip).
-  Returns AuthorityEvaluation{ActiveConstraints, PendingCount}.
+
+	Walks the Prior_Authority chain backward from AuthorityTip. Each entry
+	is classified as active, pending (within activation delay per
+	SchemaParameterExtractor), or overridden. Handles authority snapshots
+	(O(active constraints) shortcut via Evidence_Pointers) and skip pointers
+	(O(log A) traversal via Authority_Skip).
+	Returns AuthorityEvaluation{ActiveConstraints, PendingCount}.
 
 VerifyDelegationProvenance(delegationPointers, fetcher, leafReader):
-  Walks Delegation_Pointers checking liveness at each hop. Same logic
-  the builder uses for Path B but returns structured provenance data
-  instead of pass/fail.
-  Returns []DelegationHop{Position, SignerDID, DelegateDID, IsLive, RevokedAt}.
+
+	Walks Delegation_Pointers checking liveness at each hop. Same logic
+	the builder uses for Path B but returns structured provenance data
+	instead of pass/fail.
+	Returns []DelegationHop{Position, SignerDID, DelegateDID, IsLive, RevokedAt}.
 
 Consumed by:
   - verification/delegation_chain.go in the judicial network
@@ -291,16 +293,23 @@ func classifyConstraint(
 	return ConstraintActive
 }
 
-// isAuthoritySnapshotEntry detects an authority snapshot entry.
-// Snapshot: AuthorityPath=ScopeAuthority AND TargetRoot set AND
-// PriorAuthority set AND Evidence_Pointers > MaxEvidencePointers.
+// isAuthoritySnapshotEntry detects an authority snapshot entry by shape.
+// A snapshot is a Path C entry that references a prior authority constraint
+// AND carries evidence pointers justifying the update. Regular enforcement
+// entries share the shape but carry no evidence pointers.
+//
+// The envelope writer grants these entries an exemption from MaxEvidencePointers
+// (isAuthoritySnapshotShape in core/envelope/serialize.go); the verifier treats
+// them as snapshot shortcuts for authority chain walking.
 func isAuthoritySnapshotEntry(entry *envelope.Entry) bool {
 	h := &entry.Header
 	if h.AuthorityPath == nil || *h.AuthorityPath != envelope.AuthorityScopeAuthority {
 		return false
 	}
-	return h.TargetRoot != nil && h.PriorAuthority != nil &&
-		len(h.EvidencePointers) > envelope.MaxEvidencePointers
+	if h.TargetRoot == nil || h.PriorAuthority == nil {
+		return false
+	}
+	return len(h.EvidencePointers) > 0
 }
 
 // ─────────────────────────────────────────────────────────────────────

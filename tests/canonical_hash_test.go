@@ -14,7 +14,9 @@ func TestCanonicalHash_Determinism(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", EventTime: 1700000000000000}, []byte("payload"))
 	h1 := crypto.CanonicalHash(entry)
 	h2 := crypto.CanonicalHash(entry)
-	if h1 != h2 { t.Fatal("same entry produced different hashes") }
+	if h1 != h2 {
+		t.Fatal("same entry produced different hashes")
+	}
 }
 
 func TestCanonicalHash_RoundTrip(t *testing.T) {
@@ -25,51 +27,87 @@ func TestCanonicalHash_RoundTrip(t *testing.T) {
 	}, []byte("round-trip-test"))
 	b1 := envelope.Serialize(entry)
 	entry2, err := envelope.Deserialize(b1)
-	if err != nil { t.Fatalf("Deserialize: %v", err) }
+	if err != nil {
+		t.Fatalf("Deserialize: %v", err)
+	}
 	b2 := envelope.Serialize(entry2)
-	if !bytes.Equal(b1, b2) { t.Fatalf("round-trip failed: %d vs %d bytes", len(b1), len(b2)) }
+	if !bytes.Equal(b1, b2) {
+		t.Fatalf("round-trip failed: %d vs %d bytes", len(b1), len(b2))
+	}
 }
 
 func TestCanonicalHash_ASCIINormalization(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:ascii-only-123"}, nil)
 	h := crypto.CanonicalHash(entry)
-	if h == [32]byte{} { t.Fatal("hash should not be zero") }
+	if h == [32]byte{} {
+		t.Fatal("hash should not be zero")
+	}
 }
 
 func TestCanonicalHash_NonASCIIRejected(t *testing.T) {
 	_, err := envelope.NewEntry(envelope.ControlHeader{SignerDID: "did:example:\x80bad"}, nil)
-	if err == nil { t.Fatal("expected error for non-ASCII byte in ASCII-only mode") }
+	if err == nil {
+		t.Fatal("expected error for non-ASCII byte in ASCII-only mode")
+	}
 }
 
 func TestCanonicalHash_EmptyDIDRejected(t *testing.T) {
 	_, err := envelope.NewEntry(envelope.ControlHeader{SignerDID: ""}, nil)
-	if err == nil { t.Fatal("expected error for empty Signer_DID") }
+	if err == nil {
+		t.Fatal("expected error for empty Signer_DID")
+	}
 }
-
 func TestCanonicalHash_PreambleForwardCompat(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:v3entry"}, []byte("original-payload"))
+	// Forward compatibility invariant: a v5 parser encountering unknown
+	// trailing bytes within the HBL region must tolerate them (simulating
+	// a future v6 entry with additive fields), skip them, and continue
+	// to parse the payload correctly.
+	//
+	// This test extends HBL by 8 bytes and injects 8 zero bytes between
+	// the known header fields and the payload length prefix. A tolerant
+	// parser must deserialize successfully and produce an entry with the
+	// original payload intact.
+	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:fwdcompat"}, []byte("original-payload"))
 	serialized := envelope.Serialize(entry)
+
 	hbl := binary.BigEndian.Uint32(serialized[2:6])
 	binary.BigEndian.PutUint32(serialized[2:6], hbl+8)
 	payloadStart := 6 + hbl
+
 	modified := make([]byte, 0, len(serialized)+8)
 	modified = append(modified, serialized[:payloadStart]...)
-	modified = append(modified, 0, 0, 0, 0, 0, 0, 0, 0)
+	modified = append(modified, 0, 0, 0, 0, 0, 0, 0, 0) // simulated v6 trailing bytes
 	modified = append(modified, serialized[payloadStart:]...)
-	_, err := envelope.Deserialize(modified)
-	if err == nil { t.Fatal("expected error: v3 parser consumed fewer bytes than extended HBL") }
+
+	recovered, err := envelope.Deserialize(modified)
+	if err != nil {
+		t.Fatalf("tolerant HBL parsing should accept unknown trailing bytes: %v", err)
+	}
+	if recovered.Header.SignerDID != "did:example:fwdcompat" {
+		t.Fatalf("SignerDID corrupted: got %q", recovered.Header.SignerDID)
+	}
+	if string(recovered.DomainPayload) != "original-payload" {
+		t.Fatalf("payload corrupted: got %q, want %q",
+			recovered.DomainPayload, "original-payload")
+	}
 }
 
 func TestCanonicalHash_PreambleStructure(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:preamble"}, []byte("test"))
 	b := envelope.Serialize(entry)
 	version := binary.BigEndian.Uint16(b[0:2])
-	if version != 3 { t.Fatalf("version: got %d, want 3", version) }
+	if version != 5 {
+		t.Fatalf("version: got %d, want 3", version)
+	}
 	hbl := binary.BigEndian.Uint32(b[2:6])
-	if hbl == 0 { t.Fatal("HBL should be > 0") }
+	if hbl == 0 {
+		t.Fatal("HBL should be > 0")
+	}
 	payloadStart := 6 + hbl
 	payloadLen := binary.BigEndian.Uint32(b[payloadStart : payloadStart+4])
-	if payloadLen != 4 { t.Fatalf("payload length: got %d, want 4", payloadLen) }
+	if payloadLen != 4 {
+		t.Fatalf("payload length: got %d, want 4", payloadLen)
+	}
 }
 
 func TestCanonicalHash_PreambleConsistency(t *testing.T) {
@@ -78,15 +116,21 @@ func TestCanonicalHash_PreambleConsistency(t *testing.T) {
 	hbl := binary.BigEndian.Uint32(b[2:6])
 	binary.BigEndian.PutUint32(b[2:6], hbl+100)
 	_, err := envelope.Deserialize(b)
-	if err == nil { t.Fatal("expected error for corrupt HBL") }
+	if err == nil {
+		t.Fatal("expected error for corrupt HBL")
+	}
 }
 
 func TestCanonicalHash_NegativeTimestamp(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:preepoch", EventTime: -86400000000}, nil)
 	b := envelope.Serialize(entry)
 	entry2, err := envelope.Deserialize(b)
-	if err != nil { t.Fatal(err) }
-	if entry2.Header.EventTime != -86400000000 { t.Fatalf("timestamp: got %d", entry2.Header.EventTime) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry2.Header.EventTime != -86400000000 {
+		t.Fatalf("timestamp: got %d", entry2.Header.EventTime)
+	}
 }
 
 func TestCanonicalHash_MaxSequence(t *testing.T) {
@@ -94,24 +138,34 @@ func TestCanonicalHash_MaxSequence(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:max", TargetRoot: &maxPos}, nil)
 	b := envelope.Serialize(entry)
 	entry2, err := envelope.Deserialize(b)
-	if err != nil { t.Fatal(err) }
-	if entry2.Header.TargetRoot.Sequence != ^uint64(0) { t.Fatal("max uint64 not preserved") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry2.Header.TargetRoot.Sequence != ^uint64(0) {
+		t.Fatal("max uint64 not preserved")
+	}
 }
 
 func TestCanonicalHash_AuthoritySet100(t *testing.T) {
 	set := make(map[string]struct{}, 100)
-	for i := 0; i < 100; i++ { set["did:example:auth"+zeroPad3(i)] = struct{}{} }
+	for i := 0; i < 100; i++ {
+		set["did:example:auth"+zeroPad3(i)] = struct{}{}
+	}
 	entry1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:scope", AuthoritySet: set}, nil)
 	b1 := envelope.Serialize(entry1)
 	entry2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:scope", AuthoritySet: set}, nil)
 	b2 := envelope.Serialize(entry2)
-	if !bytes.Equal(b1, b2) { t.Fatal("AuthoritySet serialization not deterministic") }
+	if !bytes.Equal(b1, b2) {
+		t.Fatal("AuthoritySet serialization not deterministic")
+	}
 }
 
 func TestCanonicalHash_AuthoritySetNilEquivalence(t *testing.T) {
 	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:nilset", AuthoritySet: nil}, nil)
 	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:nilset", AuthoritySet: map[string]struct{}{}}, nil)
-	if crypto.CanonicalHash(e1) != crypto.CanonicalHash(e2) { t.Fatal("nil and empty should produce identical hashes") }
+	if crypto.CanonicalHash(e1) != crypto.CanonicalHash(e2) {
+		t.Fatal("nil and empty should produce identical hashes")
+	}
 }
 
 func TestCanonicalHash_NullLogPosition(t *testing.T) {
@@ -120,7 +174,9 @@ func TestCanonicalHash_NullLogPosition(t *testing.T) {
 	targetRootOffset := 6 + 2 + len("did:example:nullpos") + 4
 	nullBytes := b[targetRootOffset : targetRootOffset+10]
 	for i, v := range nullBytes {
-		if v != 0 { t.Fatalf("null LogPosition byte %d = 0x%02x, want 0x00", i, v) }
+		if v != 0 {
+			t.Fatalf("null LogPosition byte %d = 0x%02x, want 0x00", i, v)
+		}
 	}
 }
 
@@ -128,20 +184,37 @@ func TestCanonicalHash_SignatureWireRoundTrip(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:sigtest"}, []byte("signed"))
 	canonical := envelope.Serialize(entry)
 	fakeSig := make([]byte, 64)
-	for i := range fakeSig { fakeSig[i] = byte(i) }
+	for i := range fakeSig {
+		fakeSig[i] = byte(i)
+	}
 	wire := envelope.AppendSignature(canonical, envelope.SigAlgoECDSA, fakeSig)
 	gotCanonical, gotAlgo, gotSig, err := envelope.StripSignature(wire)
-	if err != nil { t.Fatal(err) }
-	if !bytes.Equal(gotCanonical, canonical) { t.Fatal("stripped canonical bytes don't match") }
-	if gotAlgo != envelope.SigAlgoECDSA { t.Fatalf("algo mismatch") }
-	if !bytes.Equal(gotSig, fakeSig) { t.Fatal("stripped sig doesn't match") }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotCanonical, canonical) {
+		t.Fatal("stripped canonical bytes don't match")
+	}
+	if gotAlgo != envelope.SigAlgoECDSA {
+		t.Fatalf("algo mismatch")
+	}
+	if !bytes.Equal(gotSig, fakeSig) {
+		t.Fatal("stripped sig doesn't match")
+	}
 }
 
 func TestCanonicalHash_EntrySizeValidation(t *testing.T) {
-	pointers := make([]types.LogPosition, 11)
-	for i := range pointers { pointers[i] = pos(uint64(i + 1)) }
-	_, err := envelope.NewEntry(envelope.ControlHeader{SignerDID: "did:example:overcap", EvidencePointers: pointers}, nil)
-	if err == nil { t.Fatal("expected error for 11 Evidence_Pointers on non-snapshot") }
+	pointers := make([]types.LogPosition, envelope.MaxEvidencePointers+1)
+	for i := range pointers {
+		pointers[i] = pos(uint64(i + 1))
+	}
+	_, err := envelope.NewEntry(envelope.ControlHeader{
+		SignerDID:        "did:example:overcap",
+		EvidencePointers: pointers,
+	}, nil)
+	if err == nil {
+		t.Fatalf("expected error for %d Evidence_Pointers on non-snapshot", len(pointers))
+	}
 }
 
 // ── GAP 5: Test 16 — Subject_Identifier serialization ─────────────────

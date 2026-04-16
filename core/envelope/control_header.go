@@ -4,11 +4,13 @@ every protocol entry carries. The Control Header is the protocol's
 constitutional layer — its fields are read by the builder for path
 classification and by the verifier for state evaluation.
 
-Protocol v5 adds DomainManifestVersion to pin each entry to a specific
-domain manifest version (Option 1 — pinned per-entry versioning).
-This enables cross-version verification at scale: a verifier reading
-entries spanning 10 years can resolve each entry's governance semantics
-against the exact manifest version it was issued under.
+Protocol v5 is the current active wire-format version.
+
+Domain identity and versioning do NOT live in the Control Header.
+Per the protocol's domain/protocol separation principle, domain
+semantics travel via SchemaRef: each domain-governed entry points
+to an immutable schema entry whose Domain Payload is the manifest.
+The Control Header carries only protocol mechanics.
 
 Field discipline (Decision 25): the Control Header is locked to protocol
 governance. Adding fields requires unanimous scope authority approval
@@ -153,15 +155,6 @@ type ControlHeader struct {
 	// AuthoritySkip is the verifier hint (v3+) for fast authority chain
 	// traversal. Recorded by builder; read by verifier; opaque to SMT.
 	AuthoritySkip *types.LogPosition
-
-	// DomainManifestVersion pins this entry to a specific domain manifest
-	// version [major, minor, patch]. Nil indicates an entry that predates
-	// per-entry manifest pinning in its domain; verifiers resolve such
-	// entries against the latest-known manifest for the domain.
-	//
-	// NEW in protocol v5. On the wire: 1 presence byte + 6 fixed-width
-	// bytes (zero-filled slot when absent).
-	DomainManifestVersion *[3]uint16
 }
 
 // AuthoritySetContains reports whether a DID is a member of this header's

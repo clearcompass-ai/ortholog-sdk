@@ -3,36 +3,42 @@ Package envelope — serialize.go implements the canonical wire format.
 
 Three entry points:
 
-  NewEntry(header, payload) → (*Entry, error)
-    Validating constructor. Sets header.ProtocolVersion = currentProtocolVersion.
-    Enforces write-version policy, size caps, and structural invariants.
-    Only way to obtain an Entry at the ACTIVE protocol version.
+	NewEntry(header, payload) → (*Entry, error)
+	  Validating constructor. Sets header.ProtocolVersion = currentProtocolVersion.
+	  Enforces write-version policy, size caps, and structural invariants.
+	  Only way to obtain an Entry at the ACTIVE protocol version.
 
-  Serialize(e) → []byte
-    Total function. Emits canonical bytes at e.Header.ProtocolVersion.
-    Trusts caller: if the Entry was produced by NewEntry, always succeeds.
-    Hand-constructed entries with malformed fields produce bad bytes —
-    rejected at Deserialize, at operator admission, or at signature check.
+	Serialize(e) → []byte
+	  Total function. Emits canonical bytes at e.Header.ProtocolVersion.
+	  Trusts caller: if the Entry was produced by NewEntry, always succeeds.
+	  Hand-constructed entries with malformed fields produce bad bytes —
+	  rejected at Deserialize, at operator admission, or at signature check.
 
-  Deserialize(b) → (*Entry, error)
-    Validating parser. Enforces read-version policy, preamble structure,
-    and per-field decoding. Populates Header.ProtocolVersion from the wire.
+	Deserialize(b) → (*Entry, error)
+	  Validating parser. Enforces read-version policy, preamble structure,
+	  and per-field decoding. Populates Header.ProtocolVersion from the wire.
 
 Wire format (v5):
 
-  Preamble (6 bytes, bytes 0–5, permanent):
-    [uint16 Protocol_Version] [uint32 Header_Body_Length]
+	Preamble (6 bytes, bytes 0–5, permanent):
+	  [uint16 Protocol_Version] [uint32 Header_Body_Length]
 
-  Header body (HBL bytes):
-    Fields in declaration order. V5 adds DomainManifestVersion at the end
-    (1 presence byte + 6 fixed-width bytes). Admission proof is length-
-    prefixed to isolate it from Authority_Skip (SDK-3 guarantee).
+	Header body (HBL bytes):
+	  Fields in declaration order. Admission proof is length-prefixed to
+	  isolate it from Authority_Skip (SDK-3 guarantee).
 
-  Payload: [uint32 Payload_Length] [Payload_Bytes]
+	Payload: [uint32 Payload_Length] [Payload_Bytes]
 
-Forward compatibility: deserializers tolerate unknown trailing bytes within
-the HBL region. A v5 parser reading a future v6 entry consumes its known
-fields, skips any remaining HBL bytes, and reads the payload normally.
+Domain identity is NOT carried in the Control Header. Per the protocol's
+domain/protocol separation principle, domain semantics travel via
+SchemaRef: every domain-governed entry points to an immutable schema
+entry whose Domain Payload is the manifest. The Control Header is locked
+to protocol mechanics; domain vocabulary never crosses into it.
+
+Forward compatibility: deserializers tolerate unknown trailing bytes
+within the HBL region. A v5 parser reading a future v6 entry consumes
+its known fields, skips any remaining HBL bytes, and reads the payload
+normally.
 */
 package envelope
 
@@ -51,17 +57,16 @@ import (
 // ─────────────────────────────────────────────────────────────────────────
 
 var (
-	ErrCanonicalTooLarge          = errors.New("envelope: canonical bytes exceed MaxCanonicalBytes (1 MiB)")
-	ErrMalformedPreamble          = errors.New("envelope: malformed preamble")
-	ErrMalformedHeader            = errors.New("envelope: malformed header body")
-	ErrMalformedPayload           = errors.New("envelope: malformed payload")
-	ErrEmptySignerDID             = errors.New("envelope: Signer_DID must not be empty")
-	ErrNonASCIIDID                = errors.New("envelope: Signer_DID must be ASCII")
-	ErrTooManyDelegationPointers  = errors.New("envelope: DelegationPointers exceeds MaxDelegationPointers")
-	ErrTooManyEvidencePointers    = errors.New("envelope: EvidencePointers exceeds MaxEvidencePointers (non-snapshot)")
-	ErrInvalidPresenceByte        = errors.New("envelope: presence byte must be 0 or 1")
-	ErrAdmissionProofTooLarge     = errors.New("envelope: admission proof body exceeds MaxAdmissionProofBody")
-	ErrManifestVersionNonZeroSlot = errors.New("envelope: DomainManifestVersion absent but slot bytes non-zero")
+	ErrCanonicalTooLarge         = errors.New("envelope: canonical bytes exceed MaxCanonicalBytes (1 MiB)")
+	ErrMalformedPreamble         = errors.New("envelope: malformed preamble")
+	ErrMalformedHeader           = errors.New("envelope: malformed header body")
+	ErrMalformedPayload          = errors.New("envelope: malformed payload")
+	ErrEmptySignerDID            = errors.New("envelope: Signer_DID must not be empty")
+	ErrNonASCIIDID               = errors.New("envelope: Signer_DID must be ASCII")
+	ErrTooManyDelegationPointers = errors.New("envelope: DelegationPointers exceeds MaxDelegationPointers")
+	ErrTooManyEvidencePointers   = errors.New("envelope: EvidencePointers exceeds MaxEvidencePointers (non-snapshot)")
+	ErrInvalidPresenceByte       = errors.New("envelope: presence byte must be 0 or 1")
+	ErrAdmissionProofTooLarge    = errors.New("envelope: admission proof body exceeds MaxAdmissionProofBody")
 )
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -182,14 +187,6 @@ func serializeHeaderBody(h *ControlHeader) []byte {
 	b = binary.BigEndian.AppendUint64(b, uint64(h.EventTime))
 	b = appendAdmissionProof(b, h.AdmissionProof)
 	b = appendOptionalLogPosition(b, h.AuthoritySkip)
-
-	// v5+: DomainManifestVersion. A v5 writer always serializes this slot.
-	// Forward compat: a v5 parser reading a v6 entry would see this slot
-	// followed by unknown trailing bytes it skips.
-	if h.ProtocolVersion >= 5 {
-		b = appendOptionalManifestVersion(b, h.DomainManifestVersion)
-	}
-
 	return b
 }
 
@@ -226,7 +223,7 @@ func Deserialize(canonical []byte) (*Entry, error) {
 	headerBytes := canonical[6 : 6+hbl]
 	payloadRegion := canonical[6+hbl:]
 
-	header, err := deserializeHeaderBody(headerBytes, version)
+	header, err := deserializeHeaderBody(headerBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +237,7 @@ func Deserialize(canonical []byte) (*Entry, error) {
 	return &Entry{Header: *header, DomainPayload: payload}, nil
 }
 
-func deserializeHeaderBody(body []byte, version uint16) (*ControlHeader, error) {
+func deserializeHeaderBody(body []byte) (*ControlHeader, error) {
 	r := bytes.NewReader(body)
 	h := &ControlHeader{}
 
@@ -318,19 +315,11 @@ func deserializeHeaderBody(body []byte, version uint16) (*ControlHeader, error) 
 		return nil, wrapField("AuthoritySkip", err)
 	}
 
-	// v5+: DomainManifestVersion.
-	if version >= 5 {
-		if r.Len() < 1+manifestVersionBytes {
-			return nil, fmt.Errorf("%w: v5 entry missing DomainManifestVersion field", ErrMalformedHeader)
-		}
-		if h.DomainManifestVersion, err = readOptionalManifestVersion(r); err != nil {
-			return nil, wrapField("DomainManifestVersion", err)
-		}
-	}
-
-	// Forward compatibility: tolerate any trailing bytes (future additive fields).
-	// These bytes are covered by the canonical hash via the preamble's HBL.
-	// We do not attempt to interpret them.
+	// Forward compatibility: tolerate any trailing bytes beyond the fields
+	// this version knows about (future additive fields from a later
+	// protocol version). These bytes are covered by the canonical hash via
+	// the preamble's HBL, so they participate in entry identity, but this
+	// parser does not interpret them.
 
 	return h, nil
 }
@@ -556,49 +545,6 @@ func readAdmissionProof(r *bytes.Reader) (*AdmissionProofBody, error) {
 		return nil, err
 	}
 	return p, nil
-}
-
-// ─────────────────────────────────────────────────────────────────────────
-// DomainManifestVersion (NEW in v5) — fixed-width slot
-// ─────────────────────────────────────────────────────────────────────────
-
-func appendOptionalManifestVersion(b []byte, v *[3]uint16) []byte {
-	if v == nil {
-		b = append(b, 0)
-		return append(b, make([]byte, manifestVersionBytes)...) // zero-filled
-	}
-	b = append(b, 1)
-	b = binary.BigEndian.AppendUint16(b, v[0])
-	b = binary.BigEndian.AppendUint16(b, v[1])
-	b = binary.BigEndian.AppendUint16(b, v[2])
-	return b
-}
-
-func readOptionalManifestVersion(r *bytes.Reader) (*[3]uint16, error) {
-	presence, err := r.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-	if presence != 0 && presence != 1 {
-		return nil, ErrInvalidPresenceByte
-	}
-	slot := make([]byte, manifestVersionBytes)
-	if _, err := io.ReadFull(r, slot); err != nil {
-		return nil, err
-	}
-	if presence == 0 {
-		for _, v := range slot {
-			if v != 0 {
-				return nil, ErrManifestVersionNonZeroSlot
-			}
-		}
-		return nil, nil
-	}
-	var out [3]uint16
-	out[0] = binary.BigEndian.Uint16(slot[0:2])
-	out[1] = binary.BigEndian.Uint16(slot[2:4])
-	out[2] = binary.BigEndian.Uint16(slot[4:6])
-	return &out, nil
 }
 
 // ─────────────────────────────────────────────────────────────────────────

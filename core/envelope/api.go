@@ -2,19 +2,20 @@
 Package envelope — api.go defines protocol version constants and wire format
 limits.
 
-Protocol v5 adds DomainManifestVersion to ControlHeader: a three-uint16 tuple
-[major, minor, patch] that pins each entry to a specific domain manifest
-version. This enables deterministic cross-version verification at scale —
-a verifier reading entries spanning decades resolves each entry's governance
-semantics against the exact manifest version it was issued under.
-
 Wire format summary (v5):
-  Preamble (6 bytes, bytes 0–5, permanent across all versions):
-    [uint16 Protocol_Version] [uint32 Header_Body_Length]
-  Header body (variable, bytes 6 to 6+HBL):
-    Fields in declaration order.
-  Payload (variable):
-    [uint32 Payload_Length] [Payload_Bytes]
+
+	Preamble (6 bytes, bytes 0–5, permanent across all versions):
+	  [uint16 Protocol_Version] [uint32 Header_Body_Length]
+	Header body (variable, bytes 6 to 6+HBL):
+	  Fields in declaration order.
+	Payload (variable):
+	  [uint32 Payload_Length] [Payload_Bytes]
+
+Domain identity is NOT carried in the Control Header. Per the protocol's
+strict domain/protocol separation principle, domain semantics travel via
+SchemaRef: every domain-governed entry points to an immutable schema entry
+whose Domain Payload is the manifest. The Control Header is locked to
+protocol mechanics; domain vocabulary never crosses into it.
 
 Forward compatibility: parsers tolerate unknown trailing bytes within the
 HBL region. When v6 ships with a new field, v5 parsers read their known
@@ -44,10 +45,6 @@ const (
 	// Prevents Authority_Skip corruption by bounding the sub-reader region
 	// during deserialization.
 	MaxAdmissionProofBody = 4096
-
-	// manifestVersionBytes is the wire size of a serialized DomainManifestVersion
-	// field: 3 × uint16 big-endian. Internal.
-	manifestVersionBytes = 6
 )
 
 // CurrentProtocolVersion returns the protocol version that new entries are

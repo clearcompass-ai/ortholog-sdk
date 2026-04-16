@@ -1,107 +1,128 @@
-# Ortholog SDK — Authoritative Change Set
+# Ortholog SDK v5.0 — Wave 1: Wire Format & Version Policy
 
-This archive contains the production-grade implementation of SDK-1 through SDK-4.
-No backward-compatibility shims; no deprecated paths.
+This is Wave 1 of three waves that land the SDK v5.0 release. Wave 1
+establishes the v4→v5 wire format bump and the generational version
+policy. Waves 2 and 3 build on these foundations.
+
+## What Wave 1 delivers
+
+### Protocol version bump: v4 → v5
+
+The `ControlHeader` struct gains one new field:
+
+```go
+DomainManifestVersion *[3]uint16  // [major, minor, patch]; nil for legacy entries
+```
+
+This pins every entry to a specific domain manifest version (Option 1 —
+pinned per-entry versioning). Cross-version verification becomes
+deterministic at scale: a verifier reading entries spanning decades
+resolves each entry's governance semantics against the exact manifest
+version it was issued under.
+
+### Wire format changes
+
+- **Preamble**: bytes 0–5 unchanged (`uint16 Protocol_Version`,
+  `uint32 Header_Body_Length`). Version field now reads `5`.
+- **Header body**: `DomainManifestVersion` added at the end of v5
+  header bodies. 1 presence byte + 6-byte fixed-width slot (zero-filled
+  when absent). v4 header bodies stop at `AuthoritySkip` as before.
+- **Forward compatibility**: the Header_Body_Length preamble field
+  continues to delimit the header body, so v6+ additive fields will
+  not break v5 readers.
+
+### Generational version policy
+
+A new state machine governs read/write acceptance per protocol version:
+
+| State | Readers | Writers | Duration |
+|-------|---------|---------|----------|
+| ACTIVE | Accept | Emit | Current |
+| DEPRECATED | Accept | Reject | 12 months |
+| FROZEN | Accept | Reject | Forever |
+| REVOKED | Reject | Reject | Post-catastrophe only |
+
+At v5.0 ship: **v4 is DEPRECATED, v5 is ACTIVE**. Legacy v4 entries
+read normally (archive invariant). New v4 writes are blocked with
+`ErrVersionDeprecated`.
+
+At a future v6.0 ship: v4 moves to FROZEN, v5 moves to DEPRECATED,
+v6 becomes ACTIVE. The policy table in `version_policy.go` is the
+single source of truth — SDK releases update this table.
+
+### Migration override (narrow escape hatch)
+
+For domain migrations that must resubmit historical entries in their
+original wire format (county reorganization, court splits), the SDK
+exposes `NewEntryWithOverride` taking a `MigrationOverrideToken`:
+
+```go
+token := &envelope.MigrationOverrideToken{
+    Reason:         "Davidson→Metro North bulk case migration",
+    AuthorizingDID: "did:web:courts.tn.gov:migration-coordinator",
+}
+entry, err := envelope.NewEntryWithOverride(header, payload, 4, token)
+```
+
+The override unblocks DEPRECATED versions only. FROZEN and REVOKED
+remain blocked. Token with empty Reason or AuthorizingDID is invalid.
+
+### Error taxonomy for HTTP dispatch
+
+Named errors enable the operator admission pipeline to map version
+violations to HTTP status codes:
+
+| Error | HTTP | Meaning |
+|-------|------|---------|
+| `ErrVersionDeprecated` | 400 Bad Request | v4 writes after v5 ship |
+| `ErrVersionFrozen` | 410 Gone | v4 writes after v6 ship |
+| `ErrVersionRevoked` | 451 Unavailable | Cryptographic break |
+| `ErrUnknownVersion` | 400 Bad Request | Stale reader or corrupt entry |
 
 ## Files delivered
 
-| Path | Status | Purpose |
-|------|--------|---------|
-| `go.mod` | updated | Adds `golang.org/x/crypto` dependency for Argon2id |
-| `go.sum` | updated | Checksums for new dependencies |
-| `types/admission.go` | rewritten | `AdmissionProof` with `Epoch` and `SubmitterCommit *[32]byte` |
-| `crypto/admission/stamp.go` | rewritten | `StampParams`, direct Argon2id, named errors, fixed-length hash input |
-| `crypto/admission/stamp_test.go` | new | 34 test cases covering generate/verify, epochs, hash-input invariants |
-| `core/envelope/api.go` | updated | Protocol version 4; exports `MaxCanonicalBytes`, `MaxDelegationPointers` |
-| `core/envelope/serialize.go` | rewritten | Length-prefixed admission proof body; forward-compatible |
-| `core/envelope/serialize_test.go` | new | 14 test cases including Authority_Skip isolation invariant |
-| `lifecycle/difficulty.go` | rewritten | `DifficultyConfig` with epoch parameters |
-| `lifecycle/difficulty_test.go` | new | 10 test cases covering config validation and round-trip |
+| File | Size | Role |
+|------|------|------|
+| `core/envelope/version_policy.go` | New | Version state machine, enforcement, override |
+| `core/envelope/api.go` | New | Version constants, wire format limits |
+| `core/envelope/control_header.go` | Rewritten | Adds `DomainManifestVersion` field |
+| `core/envelope/serialize.go` | Rewritten | v5 wire format, policy enforcement at read/write |
+| `core/envelope/canonical_hash.go` | New | SHA-256 over canonical bytes (v5-aware) |
+| `tests/version_policy_test.go` | New | 23 test cases covering state machine |
+| `tests/envelope_serialize_test.go` | New | 12 test cases covering wire format + v4 compat |
 
-## Files that must be DELETED from the old SDK
+## Tests
 
-- Nothing from this change set creates the `crypto/admission/argon2id_default.go`
-  file from the first revision of the plan. Do not create it. Argon2id is called
-  directly from `computeStampHash`.
-
-## Breaking changes vs the current SDK
-
-1. **Protocol version bumped from 3 to 4.** Any v3 wire bytes are rejected.
-2. **`types.AdmissionProof`** gains `Epoch uint64` and `SubmitterCommit *[32]byte`.
-3. **`admission.GenerateStamp`** and **`admission.VerifyStamp`** take new signatures.
-   Old callers must migrate to `StampParams` and the new verification parameter list.
-4. **`admission.MemoryHardHasher` and `SetMemoryHardHasher` are deleted.**
-   Argon2id is wired directly through `golang.org/x/crypto/argon2`.
-5. **`lifecycle.DifficultyConfig`** gains `EpochWindowSeconds` and `EpochAcceptanceWindow`.
-   `GenerateAdmissionStamp` gains a required `submitterCommit *[32]byte` parameter
-   (pass `nil` when not using submitter binding).
-6. **Admission proof wire format is length-prefixed.** The outer reader now
-   consumes exactly the advertised number of bytes; future additions to the
-   admission proof body do not corrupt `Authority_Skip` or any field after it.
-
-## Verification performed
+All 32 test cases pass under `go test` and `go test -race`:
 
 ```
-$ go build ./...                   # clean, no warnings
-$ go vet ./...                     # clean, no findings
-$ go test ./...                    # 58/58 passing
-$ go test -race ./...              # 58/58 passing under race detector
+ok  github.com/clearcompass-ai/ortholog-sdk/tests  0.007s
+ok  github.com/clearcompass-ai/ortholog-sdk/tests  1.045s  (race)
 ```
 
-## Test inventory
+## What Wave 1 does NOT include
 
-- **`crypto/admission/stamp_test.go`**: 34 cases
-  - Round-trip SHA-256 with and without submitter commit
-  - Round-trip Argon2id
-  - Hash-below-target detection on nonce and entry-hash tampering
-  - Every named error path (`ErrStampDifficultyOutOfRange`, `ErrStampEmptyLogDID`,
-    `ErrStampLogDIDTooLong`, `ErrStampUnknownHashFunc`, `ErrStampNilProof`,
-    `ErrStampModeMismatch`, `ErrStampTargetLogMismatch`, `ErrStampDifficultyBelowMin`,
-    `ErrStampEpochOutOfWindow`, `ErrStampHashBelowTarget`)
-  - Epoch window boundary: inside window passes, outside window rejected,
-    window=0 disables check
-  - Hash-input uniqueness: absent commit vs present-zero commit produce
-    different hashes; DID length-prefix eliminates boundary collisions
-  - Leading-zero-bit correctness across edge cases
+Deliberately deferred to Waves 2 and 3:
 
-- **`core/envelope/serialize_test.go`**: 14 cases
-  - Round-trip for minimal, admission-proof-with-commit, admission-proof-without-commit
-  - **`TestAuthoritySkipUnaffectedByExtendedAdmissionProof`** — the critical
-    invariant test: an admission proof body extended by 20 unknown bytes still
-    parses correctly and `Authority_Skip` survives intact
-  - Protocol version rejection (v3 bytes fail to parse)
-  - Truncation detection (preamble, body, admission proof body)
-  - Invalid commit presence flag rejection
-  - `NewEntry` validation: empty `Signer_DID`, Mode B without `TargetLog`,
-    non-ASCII DID in strict mode, too many `Evidence_Pointers`
-  - Constants sanity check
+- `DomainManifest` struct, validation, registry (Wave 2)
+- Judicial/beautician/physician manifests (Wave 2)
+- `lifecycle.Provision` / `ProposeAmendment` manifest refactor (Wave 2)
+- `did/resolver.go` custody-transition helpers (Wave 3)
+- `verifier/contest_override.go` manifest integration (Wave 3)
+- Deletion of `ProvisionThreeLogs` / `CourtMapping` etc. (Wave 3)
 
-- **`lifecycle/difficulty_test.go`**: 10 cases
-  - Config validation for every invalid input
-  - Round-trip with and without submitter commit
-  - Epoch binding fully disabled (both sides `= 0`)
-  - Wrong target log rejection (`ErrStampTargetLogMismatch`)
-  - `DefaultDifficultyConfig` sanity
+## Post-Wave-1 invariants
 
-## Architectural invariants enforced
+After Wave 1 is merged:
 
-1. **Fail-fast, no silent fallbacks.** Argon2id failure is unreachable because
-   Argon2id is always compiled in; there is no "hasher not registered" condition
-   to fall back from.
-2. **Fixed-length hash input.** Every stamp hash input has a deterministic
-   layout: `entry_hash(32) || nonce(8) || did_len(2) || did(N) || epoch(8) ||
-   commit_present(1) || commit(32)`. The commit slot is always 32 bytes;
-   zero-filled when absent. The presence byte distinguishes absent from
-   present-and-zero.
-3. **DID length prefix in hash input.** Different DIDs of different lengths
-   cannot produce the same hash input through byte concatenation artifacts.
-4. **Domain-separation salt.** Argon2id uses the constant salt
-   `ortholog-admission-v1`. The version suffix is the anchor for any future
-   hash-input layout change.
-5. **Type-enforced commit width.** `SubmitterCommit *[32]byte` means "nil or
-   exactly 32 bytes" — no runtime length checks needed downstream.
-6. **Forward-compatible wire format.** The admission proof body is length-
-   prefixed; extending it in the future does not corrupt adjacent fields.
-7. **Acceptance-window-zero disables.** `EpochAcceptanceWindow = 0` means
-   "epoch check disabled." `0` is the intuitive default for "off" and removes
-   the footgun where a config-typo'd 0 would otherwise mean "strictest possible".
+1. New entries emit at v5 with optional `DomainManifestVersion`.
+2. Legacy v4 entries continue to deserialize indefinitely.
+3. v4 writes are blocked by default; migration tooling can override.
+4. Canonical hashes over v5 entries cover `DomainManifestVersion` —
+   changing the version changes the hash.
+5. The `Authority_Skip` field is unaffected by any admission proof
+   corruption (SDK-3 length-prefix guarantee preserved).
+6. All existing test suites must continue to pass after
+   the `currentProtocolVersion` constant update — if any break, they
+   reveal downstream code that hardcodes v4 semantics and must be
+   updated before Wave 2.

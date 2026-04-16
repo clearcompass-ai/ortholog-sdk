@@ -1,648 +1,785 @@
-// FILE PATH:
-//     core/envelope/serialize.go
-//
-// DESCRIPTION:
-//     Binary serialization and deserialization for Ortholog entries. Produces
-//     and consumes the canonical wire format: a 6-byte preamble followed by
-//     a length-prefixed Control Header body and a length-prefixed Domain
-//     Payload. Every variable-width field is explicitly length-prefixed; every
-//     fixed-width field uses big-endian byte order.
-//
-// KEY ARCHITECTURAL DECISIONS:
-//     - Admission proof body is length-prefixed with a uint16. This eliminates
-//       the historical corruption class where adding a field to the admission
-//       proof would silently shift every subsequent header field. A reader
-//       that encounters an admission proof body longer than it knows how to
-//       parse consumes the full length and moves on, leaving subsequent
-//       fields correctly aligned. A reader that encounters a body shorter
-//       than it expects detects the truncation immediately and errors.
-//     - Fixed-length buffer approach for hash input. The admission proof
-//       body carries: mode(1) || nonce(8) || did_len(2) || did(N) ||
-//       difficulty(4) || epoch(8) || commit_present(1) || commit(0 or 32).
-//       The commit slot is present as raw bytes only when the presence
-//       flag is 1; the hash input layout in crypto/admission zero-fills
-//       its commit slot when absent, but the wire layout elides those
-//       bytes to avoid wasting 32 bytes per entry that doesn't use commits.
-//     - Strict protocol version enforcement. Deserialize rejects any entry
-//       whose version is not currentProtocolVersion. No partial or forward-
-//       compatible parsing modes.
-//     - Sub-reader pattern for length-prefixed bodies. readAdmissionProof
-//       reads the length prefix, slices exactly that many bytes into a
-//       bounded sub-reader, and parses within the sub-reader. Any extra
-//       bytes beyond what the current code expects are consumed by the
-//       outer reader advancing past the full length, keeping future
-//       additions from corrupting adjacent fields.
-//
-// OVERVIEW:
-//     Wire format of a full entry:
-//
-//       version(2) || header_body_length(4) || header_body(H) ||
-//       payload_length(4) || payload(P)
-//
-//     Wire format of the header body:
-//
-//       signer_did || subject_identifier || target_root ||
-//       target_intermediate || authority_path || delegate_did ||
-//       authority_set || authority_did || schema_ref ||
-//       evidence_pointers || key_generation_mode ||
-//       commutative_operations || delegation_pointers ||
-//       scope_pointer || approval_pointers || prior_authority ||
-//       cosignature_of || event_time || admission_proof ||
-//       authority_skip
-//
-//     The admission proof sub-body (inside its uint16 length prefix) is:
-//
-//       mode(1) || [if Mode B] nonce(8) || did_len(2) || did(N) ||
-//                 difficulty(4) || epoch(8) ||
-//                 commit_present(1) || [if present] commit(32)
-//
-// KEY DEPENDENCIES:
-//     - types/log_position.go: LogPosition type used in position fields.
-//     - types/admission.go: AdmissionProof and AdmissionMode.
-//     - core/envelope/api.go: currentProtocolVersion constant.
-//     - core/envelope/control_header.go: ControlHeader struct.
+/*
+Package envelope — serialize.go implements the canonical wire format.
+
+Three entry points:
+
+  NewEntry(header, payload) → (*Entry, error)
+    Validating constructor. Sets header.ProtocolVersion = currentProtocolVersion.
+    Enforces write-version policy, size caps, and structural invariants.
+    Only way to obtain an Entry at the ACTIVE protocol version.
+
+  Serialize(e) → []byte
+    Total function. Emits canonical bytes at e.Header.ProtocolVersion.
+    Trusts caller: if the Entry was produced by NewEntry, always succeeds.
+    Hand-constructed entries with malformed fields produce bad bytes —
+    rejected at Deserialize, at operator admission, or at signature check.
+
+  Deserialize(b) → (*Entry, error)
+    Validating parser. Enforces read-version policy, preamble structure,
+    and per-field decoding. Populates Header.ProtocolVersion from the wire.
+
+Wire format (v5):
+
+  Preamble (6 bytes, bytes 0–5, permanent):
+    [uint16 Protocol_Version] [uint32 Header_Body_Length]
+
+  Header body (HBL bytes):
+    Fields in declaration order. V5 adds DomainManifestVersion at the end
+    (1 presence byte + 6 fixed-width bytes). Admission proof is length-
+    prefixed to isolate it from Authority_Skip (SDK-3 guarantee).
+
+  Payload: [uint32 Payload_Length] [Payload_Bytes]
+
+Forward compatibility: deserializers tolerate unknown trailing bytes within
+the HBL region. A v5 parser reading a future v6 entry consumes its known
+fields, skips any remaining HBL bytes, and reads the payload normally.
+*/
 package envelope
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"sort"
+	"io"
 
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
-// -------------------------------------------------------------------------------------------------
-// 1) Top-level serialize / deserialize
-// -------------------------------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────────
+// Errors
+// ─────────────────────────────────────────────────────────────────────────
 
-// Serialize encodes an Entry to its canonical wire bytes. The Entry's
-// ProtocolVersion is written as-is; callers obtain Entry values via
-// NewEntry, which sets ProtocolVersion to currentProtocolVersion.
-func Serialize(e *Entry) []byte {
-	hb := serializeHeaderBody(&e.Header)
-	total := 6 + len(hb) + 4 + len(e.DomainPayload)
-	buf := make([]byte, 0, total)
-	buf = appendUint16(buf, e.Header.ProtocolVersion)
-	buf = appendUint32(buf, uint32(len(hb)))
-	buf = append(buf, hb...)
-	buf = appendUint32(buf, uint32(len(e.DomainPayload)))
-	buf = append(buf, e.DomainPayload...)
-	return buf
+var (
+	ErrCanonicalTooLarge          = errors.New("envelope: canonical bytes exceed MaxCanonicalBytes (1 MiB)")
+	ErrMalformedPreamble          = errors.New("envelope: malformed preamble")
+	ErrMalformedHeader            = errors.New("envelope: malformed header body")
+	ErrMalformedPayload           = errors.New("envelope: malformed payload")
+	ErrEmptySignerDID             = errors.New("envelope: Signer_DID must not be empty")
+	ErrNonASCIIDID                = errors.New("envelope: Signer_DID must be ASCII")
+	ErrTooManyDelegationPointers  = errors.New("envelope: DelegationPointers exceeds MaxDelegationPointers")
+	ErrTooManyEvidencePointers    = errors.New("envelope: EvidencePointers exceeds MaxEvidencePointers (non-snapshot)")
+	ErrInvalidPresenceByte        = errors.New("envelope: presence byte must be 0 or 1")
+	ErrAdmissionProofTooLarge     = errors.New("envelope: admission proof body exceeds MaxAdmissionProofBody")
+	ErrManifestVersionNonZeroSlot = errors.New("envelope: DomainManifestVersion absent but slot bytes non-zero")
+)
+
+// ─────────────────────────────────────────────────────────────────────────
+// NewEntry — validating constructor
+// ─────────────────────────────────────────────────────────────────────────
+
+// NewEntry constructs a new Entry at the currently-active protocol version.
+// Validates structural invariants and size caps. Overwrites
+// header.ProtocolVersion to the active version — callers cannot pin a new
+// entry to a non-ACTIVE version through this API. For cross-version
+// migration, deserialize the old entry, transform the header, and call
+// NewEntry to produce a fresh entry at the active version.
+func NewEntry(header ControlHeader, payload []byte) (*Entry, error) {
+	active := currentProtocolVersion
+	if err := CheckWriteAllowed(active); err != nil {
+		// Programming error: versionPolicy out of sync with currentProtocolVersion.
+		return nil, err
+	}
+	header.ProtocolVersion = active
+
+	if err := validateHeaderForWrite(&header); err != nil {
+		return nil, err
+	}
+
+	entry := &Entry{
+		Header:        header,
+		DomainPayload: append([]byte(nil), payload...),
+	}
+
+	// Size check: serialize and measure. This also guarantees Serialize
+	// will succeed on this entry (all invariants that Serialize implicitly
+	// depends on have been verified).
+	if size := len(Serialize(entry)); size > MaxCanonicalBytes {
+		return nil, fmt.Errorf("%w: computed size %d", ErrCanonicalTooLarge, size)
+	}
+
+	return entry, nil
 }
 
-// serializeHeaderBody writes every Control Header field in canonical order.
-// Field order is wire-format-stable: reordering is a breaking change.
-func serializeHeaderBody(h *ControlHeader) []byte {
-	var buf []byte
-	buf = appendDID(buf, h.SignerDID)
-	buf = appendBytes(buf, h.SubjectIdentifier)
-	buf = appendOptionalPosition(buf, h.TargetRoot)
-	buf = appendOptionalPosition(buf, h.TargetIntermediate)
-	buf = appendOptionalEnum(buf, h.AuthorityPath)
-	buf = appendOptionalDID(buf, h.DelegateDID)
-	buf = appendAuthoritySet(buf, h.AuthoritySet)
-	buf = appendOptionalDID(buf, h.AuthorityDID)
-	buf = appendOptionalPosition(buf, h.SchemaRef)
-	buf = appendPositionSlice(buf, h.EvidencePointers)
-	buf = appendOptionalKeyGenMode(buf, h.KeyGenerationMode)
-	buf = appendUint32Slice(buf, h.CommutativeOperations)
-	buf = appendPositionSlice(buf, h.DelegationPointers)
-	buf = appendOptionalPosition(buf, h.ScopePointer)
-	buf = appendPositionSlice(buf, h.ApprovalPointers)
-	buf = appendOptionalPosition(buf, h.PriorAuthority)
-	buf = appendOptionalPosition(buf, h.CosignatureOf)
-	buf = appendInt64(buf, h.EventTime)
-	buf = appendAdmissionProof(buf, h.AdmissionProof)
-	buf = appendOptionalPosition(buf, h.AuthoritySkip)
-	return buf
+func validateHeaderForWrite(h *ControlHeader) error {
+	if h.SignerDID == "" {
+		return ErrEmptySignerDID
+	}
+	if !isASCII(h.SignerDID) {
+		return ErrNonASCIIDID
+	}
+	if len(h.DelegationPointers) > MaxDelegationPointers {
+		return ErrTooManyDelegationPointers
+	}
+	if len(h.EvidencePointers) > MaxEvidencePointers && !isAuthoritySnapshotShape(h) {
+		return ErrTooManyEvidencePointers
+	}
+	return nil
 }
 
-// Deserialize decodes canonical wire bytes into an Entry. Returns an error
-// for any structural inconsistency: wrong protocol version, truncated
-// preamble, truncated header body, truncated payload, or header body bytes
-// unaccounted-for after parsing all fields.
-func Deserialize(data []byte) (*Entry, error) {
-	if len(data) < 6 {
-		return nil, errors.New("entry too short for preamble")
-	}
-	version := binary.BigEndian.Uint16(data[0:2])
-	hbl := binary.BigEndian.Uint32(data[2:6])
-	if version != currentProtocolVersion {
-		return nil, fmt.Errorf("unsupported protocol version %d (expected %d)", version, currentProtocolVersion)
-	}
-	if uint32(len(data)) < 6+hbl+4 {
-		return nil, errors.New("entry too short for header body + payload length")
-	}
-	headerBody := data[6 : 6+hbl]
-
-	r := &reader{data: headerBody}
-	var h ControlHeader
-	h.ProtocolVersion = version
-
-	var err error
-	if h.SignerDID, err = r.readDID(); err != nil {
-		return nil, fmt.Errorf("Signer_DID: %w", err)
-	}
-	if h.SubjectIdentifier, err = r.readBytes(); err != nil {
-		return nil, fmt.Errorf("Subject_Identifier: %w", err)
-	}
-	if h.TargetRoot, err = r.readOptionalPosition(); err != nil {
-		return nil, fmt.Errorf("Target_Root: %w", err)
-	}
-	if h.TargetIntermediate, err = r.readOptionalPosition(); err != nil {
-		return nil, fmt.Errorf("Target_Intermediate: %w", err)
-	}
-	if h.AuthorityPath, err = r.readOptionalAuthorityPath(); err != nil {
-		return nil, fmt.Errorf("Authority_Path: %w", err)
-	}
-	if h.DelegateDID, err = r.readOptionalDID(); err != nil {
-		return nil, fmt.Errorf("Delegate_DID: %w", err)
-	}
-	if h.AuthoritySet, err = r.readAuthoritySet(); err != nil {
-		return nil, fmt.Errorf("Authority_Set: %w", err)
-	}
-	if h.AuthorityDID, err = r.readOptionalDID(); err != nil {
-		return nil, fmt.Errorf("Authority_DID: %w", err)
-	}
-	if h.SchemaRef, err = r.readOptionalPosition(); err != nil {
-		return nil, fmt.Errorf("Schema_Ref: %w", err)
-	}
-	if h.EvidencePointers, err = r.readPositionSlice(); err != nil {
-		return nil, fmt.Errorf("Evidence_Pointers: %w", err)
-	}
-	if h.KeyGenerationMode, err = r.readOptionalKeyGenMode(); err != nil {
-		return nil, fmt.Errorf("Key_Generation_Mode: %w", err)
-	}
-	if h.CommutativeOperations, err = r.readUint32Slice(); err != nil {
-		return nil, fmt.Errorf("Commutative_Operations: %w", err)
-	}
-	if h.DelegationPointers, err = r.readPositionSlice(); err != nil {
-		return nil, fmt.Errorf("Delegation_Pointers: %w", err)
-	}
-	if h.ScopePointer, err = r.readOptionalPosition(); err != nil {
-		return nil, fmt.Errorf("Scope_Pointer: %w", err)
-	}
-	if h.ApprovalPointers, err = r.readPositionSlice(); err != nil {
-		return nil, fmt.Errorf("Approval_Pointers: %w", err)
-	}
-	if h.PriorAuthority, err = r.readOptionalPosition(); err != nil {
-		return nil, fmt.Errorf("Prior_Authority: %w", err)
-	}
-	if h.CosignatureOf, err = r.readOptionalPosition(); err != nil {
-		return nil, fmt.Errorf("Cosignature_Of: %w", err)
-	}
-	if h.EventTime, err = r.readInt64(); err != nil {
-		return nil, fmt.Errorf("Event_Time: %w", err)
-	}
-	if h.AdmissionProof, err = r.readAdmissionProof(); err != nil {
-		return nil, fmt.Errorf("Admission_Proof: %w", err)
-	}
-	if h.AuthoritySkip, err = r.readOptionalPosition(); err != nil {
-		return nil, fmt.Errorf("Authority_Skip: %w", err)
-	}
-
-	if r.pos != len(r.data) {
-		return nil, fmt.Errorf("header body consumed %d bytes but HBL is %d", r.pos, len(r.data))
-	}
-
-	payloadStart := 6 + hbl
-	if uint32(len(data)) < payloadStart+4 {
-		return nil, errors.New("truncated payload length")
-	}
-	payloadLen := binary.BigEndian.Uint32(data[payloadStart : payloadStart+4])
-	payloadDataStart := payloadStart + 4
-	if uint32(len(data)) < payloadDataStart+payloadLen {
-		return nil, errors.New("truncated payload data")
-	}
-	var payload []byte
-	if payloadLen > 0 {
-		payload = make([]byte, payloadLen)
-		copy(payload, data[payloadDataStart:payloadDataStart+payloadLen])
-	}
-	return &Entry{Header: h, DomainPayload: payload}, nil
-}
-
-// -------------------------------------------------------------------------------------------------
-// 2) Primitive appenders
-// -------------------------------------------------------------------------------------------------
-
-func appendUint16(buf []byte, v uint16) []byte {
-	return append(buf, byte(v>>8), byte(v))
-}
-
-func appendUint32(buf []byte, v uint32) []byte {
-	return append(buf, byte(v>>24), byte(v>>16), byte(v>>8), byte(v))
-}
-
-func appendUint64(buf []byte, v uint64) []byte {
-	return append(buf,
-		byte(v>>56), byte(v>>48), byte(v>>40), byte(v>>32),
-		byte(v>>24), byte(v>>16), byte(v>>8), byte(v),
-	)
-}
-
-func appendInt64(buf []byte, v int64) []byte { return appendUint64(buf, uint64(v)) }
-
-func appendDID(buf []byte, did string) []byte {
-	b := []byte(did)
-	buf = appendUint16(buf, uint16(len(b)))
-	return append(buf, b...)
-}
-
-func appendOptionalDID(buf []byte, did *string) []byte {
-	if did == nil {
-		return appendUint16(buf, 0)
-	}
-	return appendDID(buf, *did)
-}
-
-func appendPosition(buf []byte, p types.LogPosition) []byte {
-	buf = appendDID(buf, p.LogDID)
-	return appendUint64(buf, p.Sequence)
-}
-
-func appendOptionalPosition(buf []byte, p *types.LogPosition) []byte {
-	if p == nil {
-		return append(buf, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-	}
-	return appendPosition(buf, *p)
-}
-
-func appendOptionalEnum(buf []byte, ap *AuthorityPath) []byte {
-	if ap == nil {
-		return append(buf, 0)
-	}
-	return append(buf, byte(*ap))
-}
-
-func appendOptionalKeyGenMode(buf []byte, k *KeyGenMode) []byte {
-	if k == nil {
-		return append(buf, 0)
-	}
-	return append(buf, byte(*k))
-}
-
-func appendBytes(buf []byte, data []byte) []byte {
-	buf = appendUint32(buf, uint32(len(data)))
-	return append(buf, data...)
-}
-
-func appendPositionSlice(buf []byte, positions []types.LogPosition) []byte {
-	buf = appendUint16(buf, uint16(len(positions)))
-	for _, p := range positions {
-		buf = appendPosition(buf, p)
-	}
-	return buf
-}
-
-func appendUint32Slice(buf []byte, values []uint32) []byte {
-	buf = appendUint16(buf, uint16(len(values)))
-	for _, v := range values {
-		buf = appendUint32(buf, v)
-	}
-	return buf
-}
-
-func appendAuthoritySet(buf []byte, set map[string]struct{}) []byte {
-	if len(set) == 0 {
-		return appendUint16(buf, 0)
-	}
-	dids := make([]string, 0, len(set))
-	for did := range set {
-		dids = append(dids, did)
-	}
-	sort.Strings(dids)
-	buf = appendUint16(buf, uint16(len(dids)))
-	for _, did := range dids {
-		buf = appendDID(buf, did)
-	}
-	return buf
-}
-
-// -------------------------------------------------------------------------------------------------
-// 3) AdmissionProof serialization
-// -------------------------------------------------------------------------------------------------
-
-// appendAdmissionProof writes a length-prefixed admission proof body.
-// The outer uint16 length prefix lets future readers skip unknown
-// trailing bytes; current readers validate that they consumed exactly
-// the advertised length.
-//
-// Body layout for Mode B:
-//
-//	mode(1) || nonce(8) || did_len(2) || did(N) ||
-//	difficulty(4) || epoch(8) ||
-//	commit_present(1) || [if present] commit(32)
-//
-// When the admission proof is nil (e.g., Mode A entries), we write a
-// zero length prefix with no body. This is the canonical representation
-// of "no admission proof".
-func appendAdmissionProof(buf []byte, ap *types.AdmissionProof) []byte {
-	if ap == nil {
-		return appendUint16(buf, 0)
-	}
-
-	// Build the body first so we can prefix it with its exact length.
-	var body []byte
-	body = append(body, byte(ap.Mode))
-	switch ap.Mode {
-	case types.AdmissionModeA:
-		// Mode A has no further fields. Body is a single mode byte.
-	case types.AdmissionModeB:
-		body = appendUint64(body, ap.Nonce)
-		body = appendDID(body, ap.TargetLog)
-		body = appendUint32(body, ap.Difficulty)
-		body = appendUint64(body, ap.Epoch)
-		if ap.SubmitterCommit != nil {
-			body = append(body, 1)
-			body = append(body, ap.SubmitterCommit[:]...)
-		} else {
-			body = append(body, 0)
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] > 0x7F {
+			return false
 		}
-	default:
-		// Unreachable after NewEntry validation, but if we ever serialize
-		// an unvalidated proof, we emit just the mode byte and let the
-		// receiver reject it. Fail-loud behavior at parse time.
 	}
-
-	if len(body) > 0xFFFF {
-		// An admission proof body exceeding 65535 bytes is pathological
-		// (the commit is 32 bytes, the DID is bounded to 65535 bytes,
-		// and fixed-width fields sum to 24 bytes). This branch exists
-		// only as a guard against a future protocol error where someone
-		// adds an unbounded field to the proof body.
-		panic(fmt.Sprintf("admission proof body length %d exceeds uint16 max", len(body)))
-	}
-	buf = appendUint16(buf, uint16(len(body)))
-	return append(buf, body...)
+	return true
 }
 
-// -------------------------------------------------------------------------------------------------
-// 4) Reader primitive and AdmissionProof deserialization
-// -------------------------------------------------------------------------------------------------
-
-// reader is a bounded sequential byte reader over a fixed input slice.
-// The pos field is the next byte to read; remaining() reports how many
-// bytes are still available.
-type reader struct {
-	data []byte
-	pos  int
-}
-
-func (r *reader) remaining() int { return len(r.data) - r.pos }
-
-func (r *reader) readUint8() (uint8, error) {
-	if r.remaining() < 1 {
-		return 0, errors.New("unexpected end of data reading uint8")
+// isAuthoritySnapshotShape reports whether the header has the structural
+// shape of a Path C authority snapshot (AuthorityScopeAuthority + TargetRoot
+// + PriorAuthority). Snapshots are exempt from the evidence cap.
+func isAuthoritySnapshotShape(h *ControlHeader) bool {
+	if h.AuthorityPath == nil || *h.AuthorityPath != AuthorityScopeAuthority {
+		return false
 	}
-	v := r.data[r.pos]
-	r.pos++
-	return v, nil
+	return h.TargetRoot != nil && h.PriorAuthority != nil
 }
 
-func (r *reader) readUint16() (uint16, error) {
-	if r.remaining() < 2 {
-		return 0, errors.New("unexpected end of data reading uint16")
+// ─────────────────────────────────────────────────────────────────────────
+// Serialize — total function
+// ─────────────────────────────────────────────────────────────────────────
+
+// Serialize emits the canonical wire bytes for an entry. Total function:
+// never returns an error. Entries constructed via NewEntry always serialize
+// to a valid byte sequence within MaxCanonicalBytes.
+//
+// Emits at the entry's Header.ProtocolVersion. For entries from NewEntry,
+// this is always currentProtocolVersion. Hand-constructed entries emit at
+// whatever version the caller set.
+func Serialize(e *Entry) []byte {
+	body := serializeHeaderBody(&e.Header)
+
+	total := 6 + len(body) + 4 + len(e.DomainPayload)
+	out := make([]byte, 0, total)
+	out = binary.BigEndian.AppendUint16(out, e.Header.ProtocolVersion)
+	out = binary.BigEndian.AppendUint32(out, uint32(len(body)))
+	out = append(out, body...)
+	out = binary.BigEndian.AppendUint32(out, uint32(len(e.DomainPayload)))
+	out = append(out, e.DomainPayload...)
+	return out
+}
+
+func serializeHeaderBody(h *ControlHeader) []byte {
+	var b []byte
+	b = appendLenPrefixedString(b, h.SignerDID)
+	b = appendOptionalLogPosition(b, h.TargetRoot)
+	b = appendOptionalLogPosition(b, h.TargetIntermediate)
+	b = appendOptionalAuthorityPath(b, h.AuthorityPath)
+	b = appendLogPositionList(b, h.DelegationPointers)
+	b = appendOptionalString(b, h.DelegateDID)
+	b = appendOptionalLogPosition(b, h.ScopePointer)
+	b = appendDIDSet(b, h.SortedDIDs())
+	b = appendOptionalString(b, h.AuthorityDID)
+	b = appendOptionalLogPosition(b, h.PriorAuthority)
+	b = appendLogPositionList(b, h.ApprovalPointers)
+	b = appendLogPositionList(b, h.EvidencePointers)
+	b = appendOptionalLogPosition(b, h.SchemaRef)
+	b = appendOptionalKeyGenMode(b, h.KeyGenerationMode)
+	b = appendUint32List(b, h.CommutativeOperations)
+	b = appendLenPrefixedBytes(b, h.SubjectIdentifier)
+	b = appendOptionalLogPosition(b, h.CosignatureOf)
+	b = binary.BigEndian.AppendUint64(b, uint64(h.EventTime))
+	b = appendAdmissionProof(b, h.AdmissionProof)
+	b = appendOptionalLogPosition(b, h.AuthoritySkip)
+
+	// v5+: DomainManifestVersion. A v5 writer always serializes this slot.
+	// Forward compat: a v5 parser reading a v6 entry would see this slot
+	// followed by unknown trailing bytes it skips.
+	if h.ProtocolVersion >= 5 {
+		b = appendOptionalManifestVersion(b, h.DomainManifestVersion)
 	}
-	v := binary.BigEndian.Uint16(r.data[r.pos : r.pos+2])
-	r.pos += 2
-	return v, nil
+
+	return b
 }
 
-func (r *reader) readUint32() (uint32, error) {
-	if r.remaining() < 4 {
-		return 0, errors.New("unexpected end of data reading uint32")
+// ─────────────────────────────────────────────────────────────────────────
+// Deserialize — validating parser
+// ─────────────────────────────────────────────────────────────────────────
+
+// Deserialize parses canonical bytes into an Entry. Validates preamble,
+// enforces read-version policy, and decodes per-field according to the
+// declared protocol version.
+//
+// Tolerant of unknown trailing bytes within the HBL region — forward
+// compatibility for future additive field additions.
+func Deserialize(canonical []byte) (*Entry, error) {
+	if len(canonical) > MaxCanonicalBytes {
+		return nil, ErrCanonicalTooLarge
 	}
-	v := binary.BigEndian.Uint32(r.data[r.pos : r.pos+4])
-	r.pos += 4
-	return v, nil
-}
-
-func (r *reader) readUint64() (uint64, error) {
-	if r.remaining() < 8 {
-		return 0, errors.New("unexpected end of data reading uint64")
+	if len(canonical) < 6 {
+		return nil, fmt.Errorf("%w: length %d < 6", ErrMalformedPreamble, len(canonical))
 	}
-	v := binary.BigEndian.Uint64(r.data[r.pos : r.pos+8])
-	r.pos += 8
-	return v, nil
-}
 
-func (r *reader) readInt64() (int64, error) {
-	v, err := r.readUint64()
-	return int64(v), err
-}
+	version := binary.BigEndian.Uint16(canonical[0:2])
+	hbl := binary.BigEndian.Uint32(canonical[2:6])
 
-func (r *reader) readDID() (string, error) {
-	length, err := r.readUint16()
-	if err != nil {
-		return "", err
+	if err := CheckReadAllowed(version); err != nil {
+		return nil, err
 	}
-	if r.remaining() < int(length) {
-		return "", errors.New("unexpected end of data reading DID bytes")
-	}
-	did := string(r.data[r.pos : r.pos+int(length)])
-	r.pos += int(length)
-	return did, nil
-}
 
-func (r *reader) readOptionalDID() (*string, error) {
-	did, err := r.readDID()
+	if 6+int(hbl) > len(canonical) {
+		return nil, fmt.Errorf("%w: header body length %d exceeds canonical length %d",
+			ErrMalformedHeader, hbl, len(canonical))
+	}
+
+	headerBytes := canonical[6 : 6+hbl]
+	payloadRegion := canonical[6+hbl:]
+
+	header, err := deserializeHeaderBody(headerBytes, version)
 	if err != nil {
 		return nil, err
 	}
-	if did == "" {
-		return nil, nil
+	header.ProtocolVersion = version
+
+	payload, err := deserializePayload(payloadRegion)
+	if err != nil {
+		return nil, err
 	}
-	return &did, nil
+
+	return &Entry{Header: *header, DomainPayload: payload}, nil
 }
 
-func (r *reader) readPosition() (types.LogPosition, error) {
-	did, err := r.readDID()
+func deserializeHeaderBody(body []byte, version uint16) (*ControlHeader, error) {
+	r := bytes.NewReader(body)
+	h := &ControlHeader{}
+
+	var err error
+	if h.SignerDID, err = readLenPrefixedString(r); err != nil {
+		return nil, wrapField("SignerDID", err)
+	}
+	if h.TargetRoot, err = readOptionalLogPosition(r); err != nil {
+		return nil, wrapField("TargetRoot", err)
+	}
+	if h.TargetIntermediate, err = readOptionalLogPosition(r); err != nil {
+		return nil, wrapField("TargetIntermediate", err)
+	}
+	if h.AuthorityPath, err = readOptionalAuthorityPath(r); err != nil {
+		return nil, wrapField("AuthorityPath", err)
+	}
+	if h.DelegationPointers, err = readLogPositionList(r); err != nil {
+		return nil, wrapField("DelegationPointers", err)
+	}
+	if len(h.DelegationPointers) > MaxDelegationPointers {
+		return nil, ErrTooManyDelegationPointers
+	}
+	if h.DelegateDID, err = readOptionalString(r); err != nil {
+		return nil, wrapField("DelegateDID", err)
+	}
+	if h.ScopePointer, err = readOptionalLogPosition(r); err != nil {
+		return nil, wrapField("ScopePointer", err)
+	}
+	dids, err := readDIDSet(r)
+	if err != nil {
+		return nil, wrapField("AuthoritySet", err)
+	}
+	if len(dids) > 0 {
+		h.AuthoritySet = make(map[string]struct{}, len(dids))
+		for _, d := range dids {
+			h.AuthoritySet[d] = struct{}{}
+		}
+	}
+	if h.AuthorityDID, err = readOptionalString(r); err != nil {
+		return nil, wrapField("AuthorityDID", err)
+	}
+	if h.PriorAuthority, err = readOptionalLogPosition(r); err != nil {
+		return nil, wrapField("PriorAuthority", err)
+	}
+	if h.ApprovalPointers, err = readLogPositionList(r); err != nil {
+		return nil, wrapField("ApprovalPointers", err)
+	}
+	if h.EvidencePointers, err = readLogPositionList(r); err != nil {
+		return nil, wrapField("EvidencePointers", err)
+	}
+	if h.SchemaRef, err = readOptionalLogPosition(r); err != nil {
+		return nil, wrapField("SchemaRef", err)
+	}
+	if h.KeyGenerationMode, err = readOptionalKeyGenMode(r); err != nil {
+		return nil, wrapField("KeyGenerationMode", err)
+	}
+	if h.CommutativeOperations, err = readUint32List(r); err != nil {
+		return nil, wrapField("CommutativeOperations", err)
+	}
+	if h.SubjectIdentifier, err = readLenPrefixedBytes(r); err != nil {
+		return nil, wrapField("SubjectIdentifier", err)
+	}
+	if h.CosignatureOf, err = readOptionalLogPosition(r); err != nil {
+		return nil, wrapField("CosignatureOf", err)
+	}
+	var eventTime uint64
+	if err = binary.Read(r, binary.BigEndian, &eventTime); err != nil {
+		return nil, wrapField("EventTime", err)
+	}
+	h.EventTime = int64(eventTime)
+	if h.AdmissionProof, err = readAdmissionProof(r); err != nil {
+		return nil, wrapField("AdmissionProof", err)
+	}
+	if h.AuthoritySkip, err = readOptionalLogPosition(r); err != nil {
+		return nil, wrapField("AuthoritySkip", err)
+	}
+
+	// v5+: DomainManifestVersion.
+	if version >= 5 {
+		if r.Len() < 1+manifestVersionBytes {
+			return nil, fmt.Errorf("%w: v5 entry missing DomainManifestVersion field", ErrMalformedHeader)
+		}
+		if h.DomainManifestVersion, err = readOptionalManifestVersion(r); err != nil {
+			return nil, wrapField("DomainManifestVersion", err)
+		}
+	}
+
+	// Forward compatibility: tolerate any trailing bytes (future additive fields).
+	// These bytes are covered by the canonical hash via the preamble's HBL.
+	// We do not attempt to interpret them.
+
+	return h, nil
+}
+
+func deserializePayload(region []byte) ([]byte, error) {
+	if len(region) < 4 {
+		return nil, fmt.Errorf("%w: payload region %d < 4", ErrMalformedPayload, len(region))
+	}
+	payloadLen := binary.BigEndian.Uint32(region[0:4])
+	if 4+int(payloadLen) > len(region) {
+		return nil, fmt.Errorf("%w: payload length %d exceeds region %d",
+			ErrMalformedPayload, payloadLen, len(region))
+	}
+	if payloadLen == 0 {
+		return []byte{}, nil
+	}
+	out := make([]byte, payloadLen)
+	copy(out, region[4:4+payloadLen])
+	return out, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Primitive writers (append-style, total)
+// ─────────────────────────────────────────────────────────────────────────
+
+func appendLenPrefixedString(b []byte, s string) []byte {
+	if len(s) > int(^uint16(0)) {
+		// Invariant violated by caller. Truncate defensively; the resulting
+		// bytes will fail to deserialize, surfacing the bug at read time.
+		s = s[:int(^uint16(0))]
+	}
+	b = binary.BigEndian.AppendUint16(b, uint16(len(s)))
+	b = append(b, s...)
+	return b
+}
+
+func appendLenPrefixedBytes(b, v []byte) []byte {
+	if len(v) > int(^uint16(0)) {
+		v = v[:int(^uint16(0))]
+	}
+	b = binary.BigEndian.AppendUint16(b, uint16(len(v)))
+	b = append(b, v...)
+	return b
+}
+
+func appendOptionalString(b []byte, s *string) []byte {
+	if s == nil {
+		return append(b, 0)
+	}
+	b = append(b, 1)
+	return appendLenPrefixedString(b, *s)
+}
+
+func appendOptionalLogPosition(b []byte, p *types.LogPosition) []byte {
+	if p == nil {
+		return append(b, 0)
+	}
+	b = append(b, 1)
+	return appendLogPosition(b, *p)
+}
+
+func appendLogPosition(b []byte, p types.LogPosition) []byte {
+	b = appendLenPrefixedString(b, p.LogDID)
+	return binary.BigEndian.AppendUint64(b, p.Sequence)
+}
+
+func appendLogPositionList(b []byte, ps []types.LogPosition) []byte {
+	n := len(ps)
+	if n > int(^uint16(0)) {
+		n = int(^uint16(0))
+	}
+	b = binary.BigEndian.AppendUint16(b, uint16(n))
+	for i := 0; i < n; i++ {
+		b = appendLogPosition(b, ps[i])
+	}
+	return b
+}
+
+func appendOptionalAuthorityPath(b []byte, ap *AuthorityPath) []byte {
+	if ap == nil {
+		return append(b, 0)
+	}
+	return append(b, 1, byte(*ap))
+}
+
+func appendOptionalKeyGenMode(b []byte, m *KeyGenMode) []byte {
+	if m == nil {
+		return append(b, 0)
+	}
+	return append(b, 1, byte(*m))
+}
+
+func appendDIDSet(b []byte, dids []string) []byte {
+	n := len(dids)
+	if n > int(^uint16(0)) {
+		n = int(^uint16(0))
+	}
+	b = binary.BigEndian.AppendUint16(b, uint16(n))
+	for i := 0; i < n; i++ {
+		b = appendLenPrefixedString(b, dids[i])
+	}
+	return b
+}
+
+func appendUint32List(b []byte, vs []uint32) []byte {
+	n := len(vs)
+	if n > int(^uint16(0)) {
+		n = int(^uint16(0))
+	}
+	b = binary.BigEndian.AppendUint16(b, uint16(n))
+	for i := 0; i < n; i++ {
+		b = binary.BigEndian.AppendUint32(b, vs[i])
+	}
+	return b
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Admission Proof (length-prefixed body — SDK-3 isolation)
+// ─────────────────────────────────────────────────────────────────────────
+
+func appendAdmissionProof(b []byte, p *AdmissionProofBody) []byte {
+	if p == nil {
+		b = append(b, 0)
+		return binary.BigEndian.AppendUint16(b, 0)
+	}
+	b = append(b, 1)
+
+	// Build body into a temporary slice to measure.
+	body := make([]byte, 0, 128)
+	body = append(body, p.Mode, p.Difficulty, p.HashFunc)
+	body = binary.BigEndian.AppendUint64(body, p.Epoch)
+	if p.SubmitterCommit == nil {
+		body = append(body, 0)
+		body = append(body, make([]byte, 32)...) // fixed-width zero slot (SDK-4)
+	} else {
+		body = append(body, 1)
+		body = append(body, p.SubmitterCommit[:]...)
+	}
+	body = binary.BigEndian.AppendUint64(body, p.Nonce)
+	body = append(body, p.Hash[:]...)
+
+	if len(body) > MaxAdmissionProofBody {
+		// Caller-side invariant violation. Truncate; bytes will fail to deserialize.
+		body = body[:MaxAdmissionProofBody]
+	}
+	b = binary.BigEndian.AppendUint16(b, uint16(len(body)))
+	return append(b, body...)
+}
+
+func readAdmissionProof(r *bytes.Reader) (*AdmissionProofBody, error) {
+	presence, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	if presence != 0 && presence != 1 {
+		return nil, ErrInvalidPresenceByte
+	}
+
+	var bodyLen uint16
+	if err := binary.Read(r, binary.BigEndian, &bodyLen); err != nil {
+		return nil, err
+	}
+	if presence == 0 {
+		if bodyLen != 0 {
+			return nil, fmt.Errorf("envelope: AdmissionProof absent but body_length=%d", bodyLen)
+		}
+		return nil, nil
+	}
+	if bodyLen > MaxAdmissionProofBody {
+		return nil, ErrAdmissionProofTooLarge
+	}
+	if int(bodyLen) > r.Len() {
+		return nil, fmt.Errorf("envelope: AdmissionProof body_length %d exceeds remaining %d",
+			bodyLen, r.Len())
+	}
+
+	// Bounded sub-reader — isolates admission proof from Authority_Skip.
+	bodyBytes := make([]byte, bodyLen)
+	if _, err := io.ReadFull(r, bodyBytes); err != nil {
+		return nil, err
+	}
+	sub := bytes.NewReader(bodyBytes)
+
+	p := &AdmissionProofBody{}
+	if p.Mode, err = sub.ReadByte(); err != nil {
+		return nil, err
+	}
+	if p.Difficulty, err = sub.ReadByte(); err != nil {
+		return nil, err
+	}
+	if p.HashFunc, err = sub.ReadByte(); err != nil {
+		return nil, err
+	}
+	if err := binary.Read(sub, binary.BigEndian, &p.Epoch); err != nil {
+		return nil, err
+	}
+	commitPresence, err := sub.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	commitBytes := make([]byte, 32)
+	if _, err := io.ReadFull(sub, commitBytes); err != nil {
+		return nil, err
+	}
+	switch commitPresence {
+	case 0:
+		for _, v := range commitBytes {
+			if v != 0 {
+				return nil, fmt.Errorf("envelope: commit_present=0 but slot non-zero")
+			}
+		}
+	case 1:
+		var c [32]byte
+		copy(c[:], commitBytes)
+		p.SubmitterCommit = &c
+	default:
+		return nil, ErrInvalidPresenceByte
+	}
+	if err := binary.Read(sub, binary.BigEndian, &p.Nonce); err != nil {
+		return nil, err
+	}
+	if _, err := io.ReadFull(sub, p.Hash[:]); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// DomainManifestVersion (NEW in v5) — fixed-width slot
+// ─────────────────────────────────────────────────────────────────────────
+
+func appendOptionalManifestVersion(b []byte, v *[3]uint16) []byte {
+	if v == nil {
+		b = append(b, 0)
+		return append(b, make([]byte, manifestVersionBytes)...) // zero-filled
+	}
+	b = append(b, 1)
+	b = binary.BigEndian.AppendUint16(b, v[0])
+	b = binary.BigEndian.AppendUint16(b, v[1])
+	b = binary.BigEndian.AppendUint16(b, v[2])
+	return b
+}
+
+func readOptionalManifestVersion(r *bytes.Reader) (*[3]uint16, error) {
+	presence, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	if presence != 0 && presence != 1 {
+		return nil, ErrInvalidPresenceByte
+	}
+	slot := make([]byte, manifestVersionBytes)
+	if _, err := io.ReadFull(r, slot); err != nil {
+		return nil, err
+	}
+	if presence == 0 {
+		for _, v := range slot {
+			if v != 0 {
+				return nil, ErrManifestVersionNonZeroSlot
+			}
+		}
+		return nil, nil
+	}
+	var out [3]uint16
+	out[0] = binary.BigEndian.Uint16(slot[0:2])
+	out[1] = binary.BigEndian.Uint16(slot[2:4])
+	out[2] = binary.BigEndian.Uint16(slot[4:6])
+	return &out, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Primitive readers
+// ─────────────────────────────────────────────────────────────────────────
+
+func readLenPrefixedString(r *bytes.Reader) (string, error) {
+	var n uint16
+	if err := binary.Read(r, binary.BigEndian, &n); err != nil {
+		return "", err
+	}
+	if n == 0 {
+		return "", nil
+	}
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
+
+func readLenPrefixedBytes(r *bytes.Reader) ([]byte, error) {
+	var n uint16
+	if err := binary.Read(r, binary.BigEndian, &n); err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, err
+	}
+	return buf, nil
+}
+
+func readOptionalString(r *bytes.Reader) (*string, error) {
+	presence, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	switch presence {
+	case 0:
+		return nil, nil
+	case 1:
+		s, err := readLenPrefixedString(r)
+		if err != nil {
+			return nil, err
+		}
+		return &s, nil
+	default:
+		return nil, ErrInvalidPresenceByte
+	}
+}
+
+func readOptionalLogPosition(r *bytes.Reader) (*types.LogPosition, error) {
+	presence, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	switch presence {
+	case 0:
+		return nil, nil
+	case 1:
+		p, err := readLogPosition(r)
+		if err != nil {
+			return nil, err
+		}
+		return &p, nil
+	default:
+		return nil, ErrInvalidPresenceByte
+	}
+}
+
+func readLogPosition(r *bytes.Reader) (types.LogPosition, error) {
+	did, err := readLenPrefixedString(r)
 	if err != nil {
 		return types.LogPosition{}, err
 	}
-	seq, err := r.readUint64()
-	if err != nil {
+	var seq uint64
+	if err := binary.Read(r, binary.BigEndian, &seq); err != nil {
 		return types.LogPosition{}, err
 	}
 	return types.LogPosition{LogDID: did, Sequence: seq}, nil
 }
 
-func (r *reader) readOptionalPosition() (*types.LogPosition, error) {
-	p, err := r.readPosition()
-	if err != nil {
+func readLogPositionList(r *bytes.Reader) ([]types.LogPosition, error) {
+	var n uint16
+	if err := binary.Read(r, binary.BigEndian, &n); err != nil {
 		return nil, err
 	}
-	if p.IsNull() {
+	if n == 0 {
 		return nil, nil
 	}
-	return &p, nil
-}
-
-func (r *reader) readPositionSlice() ([]types.LogPosition, error) {
-	count, err := r.readUint16()
-	if err != nil {
-		return nil, err
-	}
-	if count == 0 {
-		return nil, nil
-	}
-	result := make([]types.LogPosition, count)
-	for i := uint16(0); i < count; i++ {
-		result[i], err = r.readPosition()
+	out := make([]types.LogPosition, n)
+	for i := range out {
+		p, err := readLogPosition(r)
 		if err != nil {
 			return nil, err
 		}
+		out[i] = p
 	}
-	return result, nil
+	return out, nil
 }
 
-func (r *reader) readBytes() ([]byte, error) {
-	length, err := r.readUint32()
+func readOptionalAuthorityPath(r *bytes.Reader) (*AuthorityPath, error) {
+	presence, err := r.ReadByte()
 	if err != nil {
 		return nil, err
 	}
-	if length == 0 {
+	switch presence {
+	case 0:
 		return nil, nil
-	}
-	if r.remaining() < int(length) {
-		return nil, errors.New("unexpected end of data reading bytes")
-	}
-	result := make([]byte, length)
-	copy(result, r.data[r.pos:r.pos+int(length)])
-	r.pos += int(length)
-	return result, nil
-}
-
-func (r *reader) readOptionalAuthorityPath() (*AuthorityPath, error) {
-	v, err := r.readUint8()
-	if err != nil {
-		return nil, err
-	}
-	if v == 0 {
-		return nil, nil
-	}
-	ap := AuthorityPath(v)
-	return &ap, nil
-}
-
-func (r *reader) readOptionalKeyGenMode() (*KeyGenMode, error) {
-	v, err := r.readUint8()
-	if err != nil {
-		return nil, err
-	}
-	if v == 0 {
-		return nil, nil
-	}
-	k := KeyGenMode(v)
-	return &k, nil
-}
-
-func (r *reader) readAuthoritySet() (map[string]struct{}, error) {
-	count, err := r.readUint16()
-	if err != nil {
-		return nil, err
-	}
-	if count == 0 {
-		return nil, nil
-	}
-	set := make(map[string]struct{}, count)
-	for i := uint16(0); i < count; i++ {
-		did, err := r.readDID()
+	case 1:
+		v, err := r.ReadByte()
 		if err != nil {
 			return nil, err
 		}
-		set[did] = struct{}{}
-	}
-	return set, nil
-}
-
-func (r *reader) readUint32Slice() ([]uint32, error) {
-	count, err := r.readUint16()
-	if err != nil {
-		return nil, err
-	}
-	if count == 0 {
-		return nil, nil
-	}
-	result := make([]uint32, count)
-	for i := uint16(0); i < count; i++ {
-		result[i], err = r.readUint32()
-		if err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
-}
-
-// readAdmissionProof parses a length-prefixed admission proof body.
-// The outer length prefix governs how many bytes this method consumes
-// from the parent reader, regardless of how many bytes the mode-specific
-// body actually contains. This makes admission proof evolution safe:
-// adding fields to the body increases its length but cannot corrupt
-// any field serialized after the admission proof.
-func (r *reader) readAdmissionProof() (*types.AdmissionProof, error) {
-	bodyLen, err := r.readUint16()
-	if err != nil {
-		return nil, err
-	}
-	if bodyLen == 0 {
-		return nil, nil
-	}
-	if r.remaining() < int(bodyLen) {
-		return nil, errors.New("truncated admission proof body")
-	}
-	// Advance the outer reader past the full advertised length, then
-	// parse within a sub-reader bounded to exactly bodyLen bytes. Any
-	// bytes the current parser does not recognize are effectively
-	// skipped without corrupting subsequent header fields.
-	sub := &reader{data: r.data[r.pos : r.pos+int(bodyLen)]}
-	r.pos += int(bodyLen)
-
-	mode, err := sub.readUint8()
-	if err != nil {
-		return nil, err
-	}
-
-	ap := &types.AdmissionProof{Mode: types.AdmissionMode(mode)}
-	switch ap.Mode {
-	case types.AdmissionModeA:
-		// No further fields.
-	case types.AdmissionModeB:
-		if ap.Nonce, err = sub.readUint64(); err != nil {
-			return nil, fmt.Errorf("admission proof nonce: %w", err)
-		}
-		if ap.TargetLog, err = sub.readDID(); err != nil {
-			return nil, fmt.Errorf("admission proof target_log: %w", err)
-		}
-		if ap.Difficulty, err = sub.readUint32(); err != nil {
-			return nil, fmt.Errorf("admission proof difficulty: %w", err)
-		}
-		if ap.Epoch, err = sub.readUint64(); err != nil {
-			return nil, fmt.Errorf("admission proof epoch: %w", err)
-		}
-		presence, err := sub.readUint8()
-		if err != nil {
-			return nil, fmt.Errorf("admission proof commit_present: %w", err)
-		}
-		switch presence {
-		case 0:
-			// commit absent
-		case 1:
-			if sub.remaining() < 32 {
-				return nil, errors.New("admission proof commit truncated")
-			}
-			var commit [32]byte
-			copy(commit[:], sub.data[sub.pos:sub.pos+32])
-			sub.pos += 32
-			ap.SubmitterCommit = &commit
-		default:
-			return nil, fmt.Errorf("admission proof commit_present invalid: %d", presence)
-		}
+		ap := AuthorityPath(v)
+		return &ap, nil
 	default:
-		return nil, fmt.Errorf("unrecognized admission mode %d", ap.Mode)
+		return nil, ErrInvalidPresenceByte
 	}
+}
 
-	return ap, nil
+func readOptionalKeyGenMode(r *bytes.Reader) (*KeyGenMode, error) {
+	presence, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	switch presence {
+	case 0:
+		return nil, nil
+	case 1:
+		v, err := r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		m := KeyGenMode(v)
+		return &m, nil
+	default:
+		return nil, ErrInvalidPresenceByte
+	}
+}
+
+func readDIDSet(r *bytes.Reader) ([]string, error) {
+	var n uint16
+	if err := binary.Read(r, binary.BigEndian, &n); err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	out := make([]string, n)
+	for i := range out {
+		s, err := readLenPrefixedString(r)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = s
+	}
+	return out, nil
+}
+
+func readUint32List(r *bytes.Reader) ([]uint32, error) {
+	var n uint16
+	if err := binary.Read(r, binary.BigEndian, &n); err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, nil
+	}
+	out := make([]uint32, n)
+	for i := range out {
+		if err := binary.Read(r, binary.BigEndian, &out[i]); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func wrapField(field string, err error) error {
+	return fmt.Errorf("%w: field %s: %v", ErrMalformedHeader, field, err)
 }

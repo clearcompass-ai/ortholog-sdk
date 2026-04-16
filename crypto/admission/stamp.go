@@ -1,72 +1,82 @@
 // FILE PATH:
-//     crypto/admission/stamp.go
+//
+//	crypto/admission/stamp.go
 //
 // DESCRIPTION:
-//     Authoritative implementation of Ortholog Mode B admission stamps.
-//     Exposes GenerateStamp (submitter side) and VerifyStamp (operator side)
-//     over a StampParams struct that carries every input the hash function
-//     consumes. Implements Argon2id directly through golang.org/x/crypto —
-//     no indirection, no pluggable hasher interface, no silent SHA-256
-//     fallback. If HashArgon2id is requested, Argon2id is what runs.
+//
+//	Authoritative implementation of Ortholog Mode B admission stamps.
+//	Exposes GenerateStamp (submitter side) and VerifyStamp (operator side)
+//	over a StampParams struct that carries every input the hash function
+//	consumes. Implements Argon2id directly through golang.org/x/crypto —
+//	no indirection, no pluggable hasher interface, no silent SHA-256
+//	fallback. If HashArgon2id is requested, Argon2id is what runs.
 //
 // KEY ARCHITECTURAL DECISIONS:
-//     - StampParams struct over positional arguments. Eight parameters to
-//       a function is a readability failure; a named-field struct makes
-//       every call site self-documenting and makes future additions
-//       additive without breaking existing callers.
-//     - Argon2id is invoked directly via argon2.IDKey. The previous
-//       MemoryHardHasher indirection was hypothetical-HSM plumbing with
-//       no real caller. Pluggability ships when a real HSM integration
-//       ships, with its own tests.
-//     - Fixed-length hash input layout. Every field occupies a fixed
-//       position and width: entry_hash(32) || nonce(8) || did_len(2) ||
-//       did(N) || epoch(8) || commit_present(1) || commit(32). The DID
-//       is length-prefixed to eliminate DID-boundary collision classes.
-//       The submitter commit slot is ALWAYS 32 bytes; the presence byte
-//       distinguishes "absent" (byte=0, slot zero-filled) from
-//       "present and happens to be all zeros" (byte=1, slot zero-filled).
-//     - Protocol-versioned domain separation salt for Argon2id. The salt
-//       is "ortholog-admission-v1" and is a program constant. It does not
-//       change per-stamp; its role is to partition Argon2id outputs from
-//       this protocol from outputs of any other protocol reusing the
-//       same primitive.
-//     - Named errors for every failure mode. Callers dispatch on errors.Is
-//       to map failures to HTTP status codes or audit categories without
-//       string parsing.
-//     - acceptanceWindow = 0 disables the epoch check. This is the
-//       intuitive spelling of "disable this feature" and removes a
-//       config footgun where 0 would otherwise mean "strictest possible
-//       check" (exact epoch match).
+//   - StampParams struct over positional arguments. Eight parameters to
+//     a function is a readability failure; a named-field struct makes
+//     every call site self-documenting and makes future additions
+//     additive without breaking existing callers.
+//   - Argon2id is invoked directly via argon2.IDKey. The previous
+//     MemoryHardHasher indirection was hypothetical-HSM plumbing with
+//     no real caller. Pluggability ships when a real HSM integration
+//     ships, with its own tests.
+//   - Fixed-length hash input layout. Every field occupies a fixed
+//     position and width: entry_hash(32) || nonce(8) || did_len(2) ||
+//     did(N) || epoch(8) || commit_present(1) || commit(32). The DID
+//     is length-prefixed to eliminate DID-boundary collision classes.
+//     The submitter commit slot is ALWAYS 32 bytes; the presence byte
+//     distinguishes "absent" (byte=0, slot zero-filled) from
+//     "present and happens to be all zeros" (byte=1, slot zero-filled).
+//   - Protocol-versioned domain separation salt for Argon2id. The salt
+//     is "ortholog-admission-v1" and is a program constant. It does not
+//     change per-stamp; its role is to partition Argon2id outputs from
+//     this protocol from outputs of any other protocol reusing the
+//     same primitive.
+//   - Named errors for every failure mode. Callers dispatch on errors.Is
+//     to map failures to HTTP status codes or audit categories without
+//     string parsing.
+//   - acceptanceWindow = 0 disables the epoch check. This is the
+//     intuitive spelling of "disable this feature" and removes a
+//     config footgun where 0 would otherwise mean "strictest possible
+//     check" (exact epoch match).
+//   - Wire-byte aliases (WireByteHashSHA256, WireByteHashArgon2id) are
+//     exported as uint8 constants alongside the typed HashFunc values.
+//     External code that constructs envelope.AdmissionProofBody (whose
+//     HashFunc field is uint8 by wire-format constraint) uses these
+//     aliases to express intent without casting. The companion test in
+//     wire_encoding_test.go fails the SDK build if aliases ever drift
+//     from the typed constants' numeric values.
 //
 // OVERVIEW:
-//     Generation flow (submitter):
-//         1. Construct StampParams with entry hash, target log, difficulty,
-//            epoch, optional commit, and hash-function selector.
-//         2. GenerateStamp iterates nonces from 0 upward, computing the
-//            stamp hash at each and returning the first nonce whose hash
-//            has the required leading zero bits.
-//         3. The returned nonce populates AdmissionProof.Nonce. The caller
-//            fills Mode, TargetLog, Difficulty, Epoch, and SubmitterCommit
-//            from the same StampParams.
 //
-//     Verification flow (operator):
-//         1. Operator receives an entry carrying an AdmissionProof.
-//         2. VerifyStamp validates mode, target log match, difficulty
-//            floor, and epoch window.
-//         3. If all policy checks pass, VerifyStamp recomputes the hash
-//            with the claimed nonce and confirms the leading-zero count
-//            meets the claimed difficulty.
+//	Generation flow (submitter):
+//	    1. Construct StampParams with entry hash, target log, difficulty,
+//	       epoch, optional commit, and hash-function selector.
+//	    2. GenerateStamp iterates nonces from 0 upward, computing the
+//	       stamp hash at each and returning the first nonce whose hash
+//	       has the required leading zero bits.
+//	    3. The returned nonce populates AdmissionProof.Nonce. The caller
+//	       fills Mode, TargetLog, Difficulty, Epoch, and SubmitterCommit
+//	       from the same StampParams.
 //
-//     The hash input layout is deterministic and fully described above.
-//     Any change to the layout MUST be accompanied by a salt-version bump
-//     (ortholog-admission-v1 → -v2) to prevent cross-version confusion.
+//	Verification flow (operator):
+//	    1. Operator receives an entry carrying an AdmissionProof.
+//	    2. VerifyStamp validates mode, target log match, difficulty
+//	       floor, and epoch window.
+//	    3. If all policy checks pass, VerifyStamp recomputes the hash
+//	       with the claimed nonce and confirms the leading-zero count
+//	       meets the claimed difficulty.
+//
+//	The hash input layout is deterministic and fully described above.
+//	Any change to the layout MUST be accompanied by a salt-version bump
+//	(ortholog-admission-v1 → -v2) to prevent cross-version confusion.
 //
 // KEY DEPENDENCIES:
-//     - golang.org/x/crypto/argon2: Argon2id reference implementation. This
-//       is the canonical Go implementation of RFC 9106, maintained by the
-//       Go team. No wrapper is needed.
-//     - types/admission.go: provides the AdmissionProof wire type and
-//       AdmissionMode constants.
+//   - golang.org/x/crypto/argon2: Argon2id reference implementation. This
+//     is the canonical Go implementation of RFC 9106, maintained by the
+//     Go team. No wrapper is needed.
+//   - types/admission.go: provides the AdmissionProof wire type and
+//     AdmissionMode constants.
 package admission
 
 import (
@@ -103,6 +113,51 @@ const (
 	// economic gap between honest submitters and attackers running on
 	// general-purpose hardware.
 	HashArgon2id HashFunc = 1
+)
+
+// -------------------------------------------------------------------------------------------------
+// 1.5) HashFunc wire-byte aliases
+//
+// HashFunc is already a uint8, but consumers building wire bodies prefer
+// to express intent without a cast. These aliases let external code write
+//
+//     body.HashFunc = admission.WireByteHashSHA256
+//
+// instead of
+//
+//     body.HashFunc = uint8(admission.HashSHA256)
+//
+// Numerically identical to the typed constants by design — both layers
+// share the same encoding. The companion test in wire_encoding_test.go
+// asserts uint8(HashSHA256) == WireByteHashSHA256 (and likewise for
+// Argon2id) so any future renumbering of HashFunc breaks the SDK's own
+// build, not the consumers'.
+//
+// History: pre-v0.1.1, the wire encoding had to be discovered by reading
+// source. Operators routinely guessed wrong (assumed Mode B = wire byte 2
+// because of "0 = absent" framing) and only learned via ProofFromWire-
+// then-VerifyStamp test failures. The aliases plus the regression test
+// eliminate that discovery loop.
+// -------------------------------------------------------------------------------------------------
+
+const (
+	// WireByteHashSHA256 is the uint8 wire encoding of HashSHA256. Use this
+	// when constructing envelope.AdmissionProofBody from external code:
+	//
+	//     body := &envelope.AdmissionProofBody{
+	//         HashFunc: admission.WireByteHashSHA256,
+	//         ...
+	//     }
+	WireByteHashSHA256 uint8 = uint8(HashSHA256)
+
+	// WireByteHashArgon2id is the uint8 wire encoding of HashArgon2id. Use
+	// this when constructing envelope.AdmissionProofBody from external code:
+	//
+	//     body := &envelope.AdmissionProofBody{
+	//         HashFunc: admission.WireByteHashArgon2id,
+	//         ...
+	//     }
+	WireByteHashArgon2id uint8 = uint8(HashArgon2id)
 )
 
 // -------------------------------------------------------------------------------------------------

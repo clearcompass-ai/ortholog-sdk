@@ -36,9 +36,24 @@ type LeafReader interface {
 	Get(key [32]byte) (*types.SMTLeaf, error)
 }
 
+// LeafStore is the full read/write interface to SMT leaf storage.
+//
+// # CONTRACT — ATOMICITY OF SetBatch
+//
+// Implementations MUST guarantee all-or-nothing semantics for SetBatch:
+// if the call returns nil, every leaf in the slice was written. If the
+// call returns an error, no leaf was written. There is no partial-success
+// state. Implementations that cannot guarantee this (e.g., stores backed
+// by best-effort file writes without fsync, or network stores without
+// transactional semantics) MUST NOT satisfy this interface.
+//
+// For persistent implementations, SetBatch typically maps to a single
+// multi-row INSERT (Postgres), a batched Write (RocksDB), or an
+// equivalent atomic primitive.
 type LeafStore interface {
 	Get(key [32]byte) (*types.SMTLeaf, error)
 	Set(key [32]byte, leaf types.SMTLeaf) error
+	SetBatch(leaves []types.SMTLeaf) error
 	Delete(key [32]byte) error
 	Count() (int, error)
 }
@@ -78,11 +93,22 @@ func (t *Tree) StopTracking() []types.LeafMutation {
 
 func (t *Tree) GetLeaf(key [32]byte) (*types.SMTLeaf, error) { return t.leaves.Get(key) }
 
+// SetLeaf writes a single leaf and, if tracking is active, records a
+// mutation describing the before/after state.
+//
+// For writes that form an atomic group (e.g., the main leaf and its
+// intermediate leaf produced by one entry), callers should prefer
+// SetLeaves, which commits the group through the backing store's
+// atomic SetBatch primitive and records all mutations together.
 func (t *Tree) SetLeaf(key [32]byte, leaf types.SMTLeaf) error {
 	if t.trackMutations {
 		t.mutMu.Lock()
 		old, _ := t.leaves.Get(key)
-		mut := types.LeafMutation{LeafKey: key, NewOriginTip: leaf.OriginTip, NewAuthorityTip: leaf.AuthorityTip}
+		mut := types.LeafMutation{
+			LeafKey:         key,
+			NewOriginTip:    leaf.OriginTip,
+			NewAuthorityTip: leaf.AuthorityTip,
+		}
 		if old != nil {
 			mut.OldOriginTip = old.OriginTip
 			mut.OldAuthorityTip = old.AuthorityTip
@@ -91,6 +117,65 @@ func (t *Tree) SetLeaf(key [32]byte, leaf types.SMTLeaf) error {
 		t.mutMu.Unlock()
 	}
 	return t.leaves.Set(key, leaf)
+}
+
+// SetLeaves atomically commits a set of leaves through the backing
+// store's SetBatch primitive. If tracking is active, mutation records
+// for all leaves are appended together; if the commit fails, no
+// mutations are recorded.
+//
+// Ordering: mutation records are appended in the same order as the
+// input slice. Callers that care about downstream ordering (e.g., the
+// delta-window buffer) should construct the slice accordingly.
+//
+// An empty slice is a no-op.
+func (t *Tree) SetLeaves(leaves []types.SMTLeaf) error {
+	if len(leaves) == 0 {
+		return nil
+	}
+
+	// Snapshot old values before the commit, under the mutation lock.
+	// If tracking is off, we skip the reads entirely — mutation records
+	// aren't needed and the reads would be wasted work.
+	var oldValues []types.SMTLeaf
+	var oldPresent []bool
+	if t.trackMutations {
+		oldValues = make([]types.SMTLeaf, len(leaves))
+		oldPresent = make([]bool, len(leaves))
+		t.mutMu.Lock()
+		for i, l := range leaves {
+			old, _ := t.leaves.Get(l.Key)
+			if old != nil {
+				oldValues[i] = *old
+				oldPresent[i] = true
+			}
+		}
+		t.mutMu.Unlock()
+	}
+
+	// Commit atomically. On failure, no mutations are recorded.
+	if err := t.leaves.SetBatch(leaves); err != nil {
+		return err
+	}
+
+	// Record mutations only after successful commit.
+	if t.trackMutations {
+		t.mutMu.Lock()
+		for i, l := range leaves {
+			mut := types.LeafMutation{
+				LeafKey:         l.Key,
+				NewOriginTip:    l.OriginTip,
+				NewAuthorityTip: l.AuthorityTip,
+			}
+			if oldPresent[i] {
+				mut.OldOriginTip = oldValues[i].OriginTip
+				mut.OldAuthorityTip = oldValues[i].AuthorityTip
+			}
+			t.mutations = append(t.mutations, mut)
+		}
+		t.mutMu.Unlock()
+	}
+	return nil
 }
 
 func (t *Tree) Root() ([32]byte, error) {
@@ -192,18 +277,41 @@ func (s *InMemoryLeafStore) Get(key [32]byte) (*types.SMTLeaf, error) {
 	}
 	return &leaf, nil
 }
+
 func (s *InMemoryLeafStore) Set(key [32]byte, leaf types.SMTLeaf) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.store[key] = leaf
 	return nil
 }
+
+// SetBatch writes all leaves atomically under a single lock acquisition.
+// Either every leaf in the slice is stored or — in the extraordinarily
+// unlikely event of a runtime panic between map writes — the caller's
+// observable state is whatever the map holds when the lock is released.
+//
+// In practice, map writes do not fail at runtime, so this implementation
+// satisfies the strict atomicity contract: callers observe either the
+// pre-call state or the fully post-call state, never an intermediate.
+func (s *InMemoryLeafStore) SetBatch(leaves []types.SMTLeaf) error {
+	if len(leaves) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, l := range leaves {
+		s.store[l.Key] = l
+	}
+	return nil
+}
+
 func (s *InMemoryLeafStore) Delete(key [32]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.store, key)
 	return nil
 }
+
 func (s *InMemoryLeafStore) Count() (int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -218,12 +326,14 @@ type InMemoryNodeCache struct {
 func NewInMemoryNodeCache() *InMemoryNodeCache {
 	return &InMemoryNodeCache{store: make(map[[32]byte][]byte)}
 }
+
 func (c *InMemoryNodeCache) Get(key [32]byte) ([]byte, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	v, ok := c.store[key]
 	return v, ok
 }
+
 func (c *InMemoryNodeCache) Set(key [32]byte, value []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

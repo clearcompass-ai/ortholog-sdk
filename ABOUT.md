@@ -8,13 +8,13 @@ A complete reference for the `github.com/clearcompass-ai/ortholog-sdk` Go module
 
 This document serves three audiences. Each can skip sections the others need.
 
-**Domain network builder** — you want to use Ortholog as the substrate for a credentialing, governance, or recordkeeping system. Read Parts I, II, V, VI, VI.5, the first half of VII. Skim VIII. You can skip Part III (the builder internals) and most of XI unless you hit trouble.
+**Domain network builder** — you want to use Ortholog as the substrate for a credentialing, governance, or recordkeeping system. Read Parts I, II, V, VI, VI.5, the first half of VII. Skim VIII. You can skip Part III (the builder internals) and most of X unless you hit trouble.
 
-**Operator implementer** — you want to run a log-and-builder backed by this SDK. Read Parts I, II, III, VIII, IX, and XI in full. Skim IV and VII. You can skip VI.5.
+**Operator implementer** — you want to run a log-and-builder backed by this SDK. Read Parts I, II, III, VIII, IX, and X in full. Skim IV and VII. You can skip VI.5.
 
-**Verifier author** — you want to consume entries produced by operators and prove things about them. Read Parts I, II, VII, VIII. Skim III (you need to understand what the builder accepts, not implement it). Section XI.52 (determinism) matters to you more than it does to the other two audiences.
+**Verifier author** — you want to consume entries produced by operators and prove things about them. Read Parts I, II, VII, VIII. Skim III (you need to understand what the builder accepts, not implement it). Section X.30 (determinism) matters to you more than it does to the other two audiences.
 
-All three should read Part XI before shipping anything.
+All three should read Part X before shipping anything.
 
 ---
 
@@ -77,7 +77,7 @@ All three should read Part XI before shipping anything.
 27. [The injection contracts](#27-the-injection-contracts)
 28. [Vendor DID mapping with double-blind escrow](#28-vendor-did-mapping-with-double-blind-escrow)
 
-**Part XI — Cross-Cutting Concerns**
+**Part X — Cross-Cutting Concerns**
 
 29. [Domain / protocol separation](#29-domain--protocol-separation)
 30. [Determinism requirements](#30-determinism-requirements)
@@ -197,7 +197,7 @@ The Control Header is the protocol-level metadata a builder reads. Its fields ar
 - `SignerDID` — the DID whose signing key produced the signature over this entry.
 - `TargetRoot` — the root entity this entry acts on. Nil for new root entities and commentary.
 - `TargetIntermediate` — an optional intermediate entity whose `Origin_Tip` or `Authority_Tip` should also advance. This is the path-compression mechanism: one entry can update two leaves.
-- `AuthorityPath` — the discriminator for Path A / B / C. Nil for commentary.
+- `AuthorityPath` — the discriminator for Path A / B / C. Defined in `core/envelope/control_header.go` as a `uint8` enum: `AuthoritySameSigner = 1` (Path A), `AuthorityDelegation = 2` (Path B), `AuthorityScopeAuthority = 3` (Path C). Nil for commentary entries.
 - `DelegateDID` — names the delegate on delegation entries.
 - `DelegationPointers` — for Path B, the chain of delegation entries that connects signer to target. Capped at 3 hops.
 - `ScopePointer` — for Path C, the scope entity whose `AuthoritySet` governs this entry.
@@ -271,7 +271,7 @@ type SMTLeaf struct {
 }
 ```
 
-When a root entity is created, the builder initializes its leaf with `OriginTip = AuthorityTip = log_position of the creation entry` — the leaf points at itself. Subsequent entries advance one or the other tip:
+When a root entity is created, the builder initializes its leaf with `OriginTip = AuthorityTip = the creation entry's own LogPosition` — both lanes initially reference the entry that created the leaf. Subsequent entries advance one or the other tip:
 
 - Path A and Path B entries advance `OriginTip`. These are amendments, successions, revocations — changes to the entity's content.
 - Path C enforcement entries advance `AuthorityTip`. These are sealing orders, suspensions, scope-level constraints.
@@ -778,7 +778,7 @@ Signatures are wire-format-wrapped via `AppendSignature` / `StripSignature` in `
 A cosigned tree head carries K of N witness signatures. The scheme used is identified by a single-byte tag on the head:
 
 - `SchemeECDSA = 0x01` — K independent ECDSA signatures, 64 bytes each.
-- `SchemeBLS = 0x02` — K BLS signatures aggregated into a single 48-byte signature.
+- `SchemeBLS = 0x02` — BLS witness signatures. The wire format carries a slice of `types.WitnessSignature` entries; whether they're treated as K independent signatures, K shares of an aggregate, or some other interpretation is the injected `BLSVerifier`'s choice. The SDK does not pin a curve, signature group, or size — `WitnessSignature.SigBytes` is a variable-length `[]byte`. Common BLS12-381 G1 deployments produce 48-byte aggregated signatures; G2 deployments produce 96 bytes. Operators choosing BLS publish their curve choice in their DID Document or witness configuration so verifiers route to the matching `BLSVerifier` implementation.
 
 ```go
 func VerifyWitnessCosignatures(
@@ -992,7 +992,7 @@ Three design points worth understanding:
 
 **Fixed 32-byte commit slot with a separate presence byte.** An absent commit and a present-but-all-zero commit are semantically distinct (one is "unbound stamp," the other is "stamp bound to the submitter whose commit happens to be all zeros"). The presence byte distinguishes them; the 32-byte slot is zero-filled when absent. Two different semantic states, two different hash inputs.
 
-**Domain separation salt for Argon2id.** The salt is `"ortholog-admission-v1"`, a program constant. It partitions Argon2id outputs from this protocol from outputs of any other protocol that reuses Argon2id. The v1 suffix is versioned — any change to the hash input layout requires incrementing it (v2, v3, …).
+**Domain separation salt (Argon2id only).** The salt is `"ortholog-admission-v1"`, a program constant, applied exclusively inside the Argon2id branch of the hash function. It partitions Argon2id outputs from this protocol from outputs of any other protocol that reuses Argon2id. The v1 suffix is versioned — any change to the hash input layout requires incrementing it (v2, v3, …). SHA-256 hashing uses no additional salt; the entry hash, length-prefixed log DID, epoch, and commit slot in the input layout already provide domain separation for that branch.
 
 ### 16.3 Epoch binding
 
@@ -1015,14 +1015,21 @@ The hash function is not carried in the stamp wire format. The operator publishe
 
 ### 16.5 Wire-byte aliases
 
-The typed constants `HashSHA256`, `HashArgon2id` and `types.AdmissionModeA`, `types.AdmissionModeB` are enum values. But code that constructs the wire-format `envelope.AdmissionProofBody` needs `uint8` bytes. The SDK exports aliases so callers don't have to cast:
+The typed constants `HashSHA256`, `HashArgon2id` and `types.AdmissionModeA`, `types.AdmissionModeB` are enum values. But code that constructs the wire-format `envelope.AdmissionProofBody` needs `uint8` bytes. The SDK exports aliases so callers don't have to cast. In `crypto/admission/`:
 
 ```go
 const WireByteHashSHA256 uint8 = uint8(HashSHA256)
 const WireByteHashArgon2id uint8 = uint8(HashArgon2id)
-const types.WireByteModeA uint8 = uint8(types.AdmissionModeA)
-const types.WireByteModeB uint8 = uint8(types.AdmissionModeB)
 ```
+
+And in `types/`:
+
+```go
+const WireByteModeA uint8 = uint8(AdmissionModeA)
+const WireByteModeB uint8 = uint8(AdmissionModeB)
+```
+
+Callers in other packages reference them as `admission.WireByteHashSHA256`, `types.WireByteModeA`, and so on.
 
 A regression test (`wire_encoding_test.go`) asserts the alias values equal the typed constant values cast to `uint8`. If a future renumbering breaks the equivalence, the SDK build breaks — not every downstream operator's integration tests. This was added after several operators independently guessed wrong about the wire encoding and only discovered the error via runtime verification failures.
 
@@ -1444,7 +1451,7 @@ A domain network is a deployment of Ortholog where:
 
 **Payload schemas.** Define record types — for a licensing board: `license_issuance`, `license_suspension`, `license_transfer`, `license_renewal`. Publish them as schema entries in the log via `builder.BuildSchemaEntry`. Subsequent entries reference them via `SchemaRef` in the Control Header.
 
-**A DID hierarchy.** Decide who the root authorities are, how delegation flows downward, how scope authority sets are constituted. The SDK supports arbitrary topologies — the domain chooses. For a licensing board: the board is the scope authority; it delegates to field examiners who delegate to inspectors; licensees are root entities governed by the scope.
+**A DID hierarchy.** Decide who the root authorities are, how delegation flows downward, how scope authority sets are constituted. The SDK supports arbitrary topologies — the domain chooses. For a licensing board: the board is the scope authority; it delegates to licensing officers who delegate to field examiners; licensees are root entities governed by the scope.
 
 **Operator deployment.** Run an `ortholog-operator` instance configured with the log's DID, the schema catalog (or a bootstrap pointer), the witness set with K-of-N quorum, and storage backends (Postgres for index, Tessera for entry bytes, S3 or IPFS for artifacts). The operator is a separate binary; the SDK is the library it depends on.
 
@@ -1468,12 +1475,12 @@ A state licensing board regulates a profession — say, architecture. Licensees 
 
 ### 22.2 License issuance — Path A
 
-The field examiner verifies an applicant, the supervising officer approves, and the licensing officer publishes an issuance entry. Concretely:
+The board delegates to licensing officers; licensing officers delegate to field examiners. A field examiner verifies an applicant, the licensing officer reviews and approves, and the licensing officer publishes the issuance entry. Concretely:
 
-1. The officer constructs a Domain Payload — a JSON document conforming to `architect_license_v1`. Fields: license number, licensee DID, jurisdiction code, license class, date of issuance, expiration date, examiner ID, supervisor's sign-off hash.
+1. The licensing officer constructs a Domain Payload — a JSON document conforming to `architect_license_v1`. Fields: license number, licensee DID, jurisdiction code, license class, date of issuance, expiration date, examiner ID, officer sign-off hash.
 2. The officer calls `builder.BuildRootEntity` with `SignerDID = officer's DID`, the payload, and `SchemaRef` pointing at the schema entry's log position.
 3. The operator admits the entry; `ProcessBatch` classifies it as `PathResultNewLeaf` (no `TargetRoot`, `AuthorityPath` set). A new leaf is created with both tips pointing at the issuance entry's position.
-4. The officer cosigns the issuance through `builder.BuildCosignature` if the schema's `cosignature_threshold` is nonzero (typically it isn't for routine issuance; requiring a second officer's cosig is a policy choice the schema encodes).
+4. A second officer cosigns the issuance through `builder.BuildCosignature` if the schema's `cosignature_threshold` is nonzero (typically it isn't for routine issuance; requiring a second officer's cosig is a policy choice the schema encodes).
 
 The license is now in the SMT. A verifier asking "is license #AR-12345 currently valid?" computes the SMT key, fetches the leaf via `verifier.EvaluateOrigin`, and reads the tip entry.
 
@@ -1507,7 +1514,7 @@ An architect moves from California to Nevada. California's board records a trans
 1. Licensing officer constructs a `license_transfer_v1` Domain Payload recording the destination jurisdiction, effective date, and reciprocity authority.
 2. Calls `builder.BuildAmendment` with `SignerDID = officer's DID`, `TargetRoot = license issuance position`, payload, `SchemaRef = license_transfer_v1`.
 
-Because the officer is Path B (they hold delegated authority from the board scope, not Path A against the license — the license was issued under the scope, not by the officer personally), they actually use `builder.BuildPathBEntry` after calling `builder.AssemblePathB` to construct the delegation chain: board → officer's supervisor → officer. The chain connects back to the board's signer.
+Because the officer is Path B (they hold delegated authority from the board scope, not Path A against the license — the license was issued under the scope, not by the officer personally), they actually use `builder.BuildPathBEntry` after calling `builder.AssemblePathB` to construct the delegation chain: board → licensing officer. The chain connects back to the board's signer.
 
 This is where domain design matters: the board could have set up delegations so that officers sign issuances in their own name (Path A thereafter for amendments) or so that the board signs issuances and officers act by delegation (Path B for amendments). Both are valid Ortholog topologies. The choice affects how delegations revoke: if the officer later leaves, revoking their delegation disables their Path B authority on every license they'd handle — which may be exactly the point, or may not.
 
@@ -1578,6 +1585,8 @@ O(1). One leaf read, one entry fetch. Returns an `OriginEvaluation` with a class
 - `OriginPending` — reserved for activation-delay evaluation that the caller performs separately via `EvaluateConditions`.
 
 The evaluator returns the `TipEntry` and `TipPosition`, and if the tip entry uses path compression (`TargetIntermediate` set), it reports the `IntermediatePosition` so the caller can drill down.
+
+If the leaf doesn't exist for the requested key (entity never created on this log), `EvaluateOrigin` returns `ErrLeafNotFound` rather than classifying. The five states above apply only when a leaf is present.
 
 This is the fastest path to "is this credential currently valid?" — a single leaf read and entry fetch, deterministic and replayable anywhere.
 
@@ -2052,7 +2061,7 @@ The acknowledged caveat: the encrypted mapping blob is publicly addressable by C
 
 ---
 
-# Part XI — Cross-Cutting Concerns
+# Part X — Cross-Cutting Concerns
 
 These are the rules that don't fit anywhere but apply everywhere. Section 30 is arguably the most important section in the guide — it's what makes Ortholog implementations interoperable.
 

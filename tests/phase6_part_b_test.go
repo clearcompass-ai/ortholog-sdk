@@ -726,53 +726,14 @@ func TestDifficulty_BelowMinimum(t *testing.T) {
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// 7. Provision (4 tests)
+// 7. Provision (1 test)
 // ═════════════════════════════════════════════════════════════════════
-
-func TestProvision_ThreeLogsProducesEntries(t *testing.T) {
-	result, err := lifecycle.ProvisionThreeLogs(lifecycle.ProvisionConfig{
-		CourtDID:       "did:web:courts.nashville.gov",
-		OfficersLogDID: "did:web:courts.nashville.gov:officers",
-		CasesLogDID:    "did:web:courts.nashville.gov:cases",
-		PartiesLogDID:  "did:web:courts.nashville.gov:parties",
-		AuthoritySet:   map[string]struct{}{"did:web:courts.nashville.gov": {}},
-		InitialDelegations: []lifecycle.DelegationSpec{
-			{DelegateDID: "did:example:judge-mcclendon"},
-		},
-	})
-	if err != nil {
-		t.Fatalf("provision: %v", err)
-	}
-	if result.Officers.ScopeEntry == nil {
-		t.Fatal("officers scope should exist")
-	}
-	if result.Cases.ScopeEntry == nil {
-		t.Fatal("cases scope should exist")
-	}
-	if result.Parties.ScopeEntry == nil {
-		t.Fatal("parties scope should exist")
-	}
-	// Each log gets one delegation (empty LogDIDs = all logs).
-	if len(result.Officers.Delegations) != 1 {
-		t.Fatalf("officers delegations: %d", len(result.Officers.Delegations))
-	}
-	if result.EntryCount() < 6 {
-		t.Fatalf("total entries: %d (expected ≥6)", result.EntryCount())
-	}
-}
-
-func TestProvision_CourtDIDMustBeInAuthoritySet(t *testing.T) {
-	_, err := lifecycle.ProvisionThreeLogs(lifecycle.ProvisionConfig{
-		CourtDID:       "did:web:courts.nashville.gov",
-		OfficersLogDID: "did:web:courts.nashville.gov:officers",
-		CasesLogDID:    "did:web:courts.nashville.gov:cases",
-		PartiesLogDID:  "did:web:courts.nashville.gov:parties",
-		AuthoritySet:   map[string]struct{}{"did:example:other": {}},
-	})
-	if err == nil {
-		t.Fatal("court DID not in authority set should error")
-	}
-}
+//
+// Wave 3: ProvisionThreeLogs and its court-specific validation moved to
+// the judicial-network repo. The SDK keeps only ProvisionSingleLog,
+// which is domain-agnostic. Multi-log provisioning (judicial, physician
+// credentialing, insurance) composes this single-log primitive in the
+// downstream repo.
 
 func TestProvision_SingleLog(t *testing.T) {
 	result, err := lifecycle.ProvisionSingleLog(lifecycle.SingleLogConfig{
@@ -785,20 +746,6 @@ func TestProvision_SingleLog(t *testing.T) {
 	}
 	if result.ScopeEntry == nil {
 		t.Fatal("scope should exist")
-	}
-}
-
-func TestProvision_LogDIDs(t *testing.T) {
-	result, _ := lifecycle.ProvisionThreeLogs(lifecycle.ProvisionConfig{
-		CourtDID:       "did:web:court",
-		OfficersLogDID: "did:web:court:officers",
-		CasesLogDID:    "did:web:court:cases",
-		PartiesLogDID:  "did:web:court:parties",
-		AuthoritySet:   map[string]struct{}{"did:web:court": {}},
-	})
-	dids := result.LogDIDs()
-	if dids[0] != "did:web:court:officers" || dids[1] != "did:web:court:cases" || dids[2] != "did:web:court:parties" {
-		t.Fatalf("dids: %v", dids)
 	}
 }
 
@@ -910,7 +857,7 @@ func TestRecovery_ArbitrationBelowThreshold(t *testing.T) {
 func TestScope_ProposeAmendment(t *testing.T) {
 	proposal, err := lifecycle.ProposeAmendment(lifecycle.AmendmentProposalParams{
 		ProposerDID:  "did:example:authority-a",
-		ProposalType: "add_authority",
+		ProposalType: lifecycle.ProposalAddAuthority,
 		TargetDID:    "did:example:new-member",
 	})
 	if err != nil {
@@ -927,7 +874,7 @@ func TestScope_ProposeAmendment(t *testing.T) {
 func TestScope_ProposeRemovalNoUnanimity(t *testing.T) {
 	proposal, err := lifecycle.ProposeAmendment(lifecycle.AmendmentProposalParams{
 		ProposerDID:  "did:example:authority-a",
-		ProposalType: "remove_authority",
+		ProposalType: lifecycle.ProposalRemoveAuthority,
 		TargetDID:    "did:example:rogue",
 	})
 	if err != nil {

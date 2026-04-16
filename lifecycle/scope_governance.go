@@ -16,7 +16,7 @@ The time-lock mechanism:
   Default 90 days for N-1 scope removal.
   Reduced to 7 days with objective triggers (proven equivocation,
   missed SLA attestations, builder-rejected unauthorized actions,
-  escrow node liveness failure).
+  escrow node fire drill non-response within SLA window).
 
 Consumed by:
   - judicial-network/consortium/scope_governance.go
@@ -60,9 +60,75 @@ const (
 	// TriggerUnauthorizedAction: documented Path D rejections.
 	TriggerUnauthorizedAction ObjectiveTrigger = "builder_rejected_unauthorized"
 
-	// TriggerEscrowLiveness: fire drill non-response within SLA window.
+	// TriggerEscrowLiveness: escrow node fire drill non-response within SLA
+	// window (applies when recovery.go is in use).
 	TriggerEscrowLiveness ObjectiveTrigger = "escrow_node_liveness_failure"
 )
+
+// ─────────────────────────────────────────────────────────────────────
+// ProposalType — typed enum (Wave 2)
+// ─────────────────────────────────────────────────────────────────────
+//
+// ProposalType classifies a scope amendment proposal for the SDK's
+// unanimity-vs-N-1 routing. The SDK recognizes only protocol-level
+// proposal types; domain-specific proposal types (e.g., "add_access_tier"
+// in the judicial network) are encoded in the Domain Payload and do not
+// change SDK routing.
+//
+// Before Wave 2, ProposalType was a free-form string with a documented
+// set of allowed values and a branch (`!= "remove_authority"`) that
+// silently routed typos and domain-specific strings to unanimity. The
+// typed enum makes the routing exhaustive: every value is a declared
+// constant, and domain-specific types route explicitly via
+// ProposalDomainExtension.
+//
+// Same typed-enum pattern as ObjectiveTrigger (above), MigrationPolicyType,
+// and GrantAuthorizationMode.
+
+type ProposalType uint8
+
+const (
+	// ProposalAddAuthority adds a DID to the scope's Authority_Set.
+	// Requires unanimity of existing authorities.
+	ProposalAddAuthority ProposalType = 1
+
+	// ProposalRemoveAuthority removes a DID from Authority_Set.
+	// Requires N-1 approvals (the target cannot block its own removal).
+	ProposalRemoveAuthority ProposalType = 2
+
+	// ProposalChangeParameters modifies scope parameters without
+	// membership change. Requires unanimity.
+	ProposalChangeParameters ProposalType = 3
+
+	// ProposalDomainExtension is a catch-all for domain-specific
+	// proposal types that require unanimity but carry their specific
+	// semantics in Domain Payload. The SDK treats this as unanimity
+	// but does not otherwise interpret the proposal.
+	//
+	// Judicial network proposal types like "add_access_tier" route
+	// through this value — the tier name is recorded in ProposalPayload
+	// or Description, and the SDK's unanimity routing applies.
+	ProposalDomainExtension ProposalType = 4
+)
+
+// String returns the canonical snake_case label for a ProposalType.
+// Used when serializing the proposal commentary's Domain Payload so the
+// wire format remains string-based (readable by monitoring tools and
+// non-Go consumers) even though the in-memory type is enum-based.
+func (pt ProposalType) String() string {
+	switch pt {
+	case ProposalAddAuthority:
+		return "add_authority"
+	case ProposalRemoveAuthority:
+		return "remove_authority"
+	case ProposalChangeParameters:
+		return "change_parameters"
+	case ProposalDomainExtension:
+		return "domain_extension"
+	default:
+		return "unknown"
+	}
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Phase 1: Proposal
@@ -73,9 +139,10 @@ type AmendmentProposalParams struct {
 	// ProposerDID is the scope authority proposing the change.
 	ProposerDID string
 
-	// ProposalType describes the change: "add_authority", "remove_authority",
-	// "change_parameters", "add_access_tier".
-	ProposalType string
+	// ProposalType classifies the change for unanimity-vs-N-1 routing.
+	// Use ProposalDomainExtension for domain-specific proposal types;
+	// encode the domain-specific label in Description or ProposalPayload.
+	ProposalType ProposalType
 
 	// Description is a human-readable description of the proposed change.
 	Description string
@@ -99,11 +166,11 @@ type AmendmentProposal struct {
 	// Entry is the commentary entry to submit to the operator.
 	Entry *envelope.Entry
 
-	// ProposalType from the params.
-	ProposalType string
+	// ProposalType is the enum classifier for this proposal.
+	ProposalType ProposalType
 
-	// RequiresUnanimity is true for add_authority and change_parameters.
-	// False for remove_authority (N-1).
+	// RequiresUnanimity is true for add_authority, change_parameters,
+	// and domain_extension. False only for remove_authority (N-1).
 	RequiresUnanimity bool
 }
 
@@ -120,8 +187,11 @@ func ProposeAmendment(p AmendmentProposalParams) (*AmendmentProposal, error) {
 		eventTime = time.Now().UTC().UnixMicro()
 	}
 
+	// The proposal_type string on the wire is the enum's canonical label.
+	// Monitoring tools and non-Go consumers continue to see human-readable
+	// strings; only the typed enum is the in-memory representation.
 	payload := map[string]any{
-		"proposal_type": p.ProposalType,
+		"proposal_type": p.ProposalType.String(),
 		"description":   p.Description,
 	}
 	if p.TargetDID != "" {
@@ -149,7 +219,11 @@ func ProposeAmendment(p AmendmentProposalParams) (*AmendmentProposal, error) {
 		return nil, fmt.Errorf("lifecycle/scope: build proposal: %w", err)
 	}
 
-	requiresUnanimity := p.ProposalType != "remove_authority"
+	// Only ProposalRemoveAuthority uses the N-1 rule. Everything else —
+	// add, change_parameters, domain_extension, and any unrecognized
+	// future constant — requires unanimity. The conservative default
+	// matches the pre-Wave-2 branch `!= "remove_authority"` exactly.
+	requiresUnanimity := p.ProposalType != ProposalRemoveAuthority
 
 	return &AmendmentProposal{
 		Entry:             entry,

@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"math"
+	"time"
+)
 
 // MigrationPolicyType declares how schema succession is evaluated.
 type MigrationPolicyType uint8
@@ -108,6 +111,69 @@ const (
 	GrantAuthSealed GrantAuthorizationMode = 2
 )
 
+// ─────────────────────────────────────────────────────────────────────
+// Override threshold rule (Wave 2)
+// ─────────────────────────────────────────────────────────────────────
+//
+// OverrideThresholdRule declares how many authorities must approve an
+// override of a contested operation (scope enforcement, escrow recovery
+// arbitration). Read from the governing schema's Domain Payload via
+// SchemaParameterExtractor.
+//
+// Before Wave 2, the SDK hardcoded ⌈2N/3⌉ in verifier/contest_override.go
+// and lifecycle/recovery.go. Domains that wanted different override
+// thresholds (simple majority for low-stakes logs, unanimity for
+// high-stakes sealed evidence) had no way to express it. This enum
+// makes the threshold schema-declared and preserves ⌈2N/3⌉ as the
+// default (zero value) for backward compatibility.
+//
+// Same typed-enum pattern as EncryptionScheme, MigrationPolicyType,
+// and GrantAuthorizationMode.
+
+type OverrideThresholdRule uint8
+
+const (
+	// ThresholdTwoThirdsMajority: ⌈2N/3⌉ approvals required.
+	// SDK default (zero value). Matches pre-Wave-2 behavior.
+	ThresholdTwoThirdsMajority OverrideThresholdRule = 0
+
+	// ThresholdSimpleMajority: ⌈N/2⌉ + 1 approvals required.
+	// Appropriate for low-stakes enforcement where blocking a minority
+	// veto matters more than requiring broad consensus.
+	ThresholdSimpleMajority OverrideThresholdRule = 1
+
+	// ThresholdUnanimity: all N authorities must approve.
+	// Appropriate for high-stakes operations (sealed evidence access,
+	// escrow recovery for large credentialing records) where any single
+	// authority's dissent should block.
+	ThresholdUnanimity OverrideThresholdRule = 2
+)
+
+// RequiredApprovals returns the number of approvals needed under this
+// rule for an authority set of size n. Single source of truth — both
+// verifier/contest_override.go and lifecycle/recovery.go call this
+// method so the math cannot drift between call sites.
+//
+// Edge cases:
+//   - n <= 0: returns 0 (no authorities, nothing to approve).
+//   - ThresholdSimpleMajority with n == 1: returns 1 (trivially unanimous).
+//   - Unknown rule: falls back to the two-thirds default, which is the
+//     conservative choice for operators that upgrade the SDK before
+//     updating their schema payloads.
+func (r OverrideThresholdRule) RequiredApprovals(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	switch r {
+	case ThresholdSimpleMajority:
+		return n/2 + 1
+	case ThresholdUnanimity:
+		return n
+	default: // ThresholdTwoThirdsMajority + any unknown value
+		return int(math.Ceil(2.0 * float64(n) / 3.0))
+	}
+}
+
 // SchemaParameters holds domain-visible parameters extracted from a schema's
 // Domain Payload. Pure data type — no extraction logic here.
 //
@@ -117,26 +183,37 @@ const (
 //
 // Consumed by:
 //   - Phase 4 verifier: key_rotation reads MaturationEpoch,
-//     contest_override reads OverrideRequiresIndependentWitness,
-//     schema_succession reads MigrationPolicy and PredecessorSchema
+//     contest_override reads OverrideRequiresIndependentWitness
+//     and OverrideThreshold, schema_succession reads MigrationPolicy
+//     and PredecessorSchema
 //   - Phase 5 condition_evaluator: reads ActivationDelay and CosignatureThreshold
 //   - Phase 5 exchange/lifecycle/artifact_access.go: reads ArtifactEncryption,
 //     GrantEntryRequired, ReEncryptionThreshold
 //   - Phase 6 exchange/lifecycle/artifact_access.go: reads GrantAuthorizationMode,
 //     GrantRequiresAuditEntry
+//   - Wave 2 verifier/contest_override.go + lifecycle/recovery.go:
+//     reads OverrideThreshold
 //
 // Builder NEVER reads the operational fields (SDK-D6).
-// One struct for now, split at 15 fields.
 type SchemaParameters struct {
 	// ── Protocol-mechanical (verifier + condition_evaluator) ──────────
 
 	ActivationDelay                    time.Duration
 	CosignatureThreshold               int
 	MaturationEpoch                    time.Duration
-	CredentialValidityPeriod           *time.Duration      // nil = no expiry
+	CredentialValidityPeriod           *time.Duration // nil = no expiry
 	OverrideRequiresIndependentWitness bool
 	MigrationPolicy                    MigrationPolicyType
-	PredecessorSchema                  *LogPosition        // nil = no predecessor
+	PredecessorSchema                  *LogPosition // nil = no predecessor
+
+	// OverrideThreshold declares the supermajority rule for contest
+	// overrides and escrow arbitration. Zero value = ThresholdTwoThirdsMajority
+	// (⌈2N/3⌉, the SDK default preserving pre-Wave-2 behavior).
+	//
+	// Consumed by:
+	//   - verifier/contest_override.go EvaluateContest
+	//   - lifecycle/recovery.go EvaluateArbitration
+	OverrideThreshold OverrideThresholdRule
 
 	// ── Operational — artifact access control ─────────────────────────
 	// (exchange + domain, never builder or verifier)

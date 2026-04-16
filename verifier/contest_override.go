@@ -8,9 +8,16 @@ Given a pending operation position:
  2. Read entity leaf → get AuthorityTip
  3. Walk AuthorityTip chain for contest entries (CosignatureOf == pendingPos)
  4. If no contest → operation unblocked
- 5. If contest found → scan for override entries with ⌈2N/3⌉ supermajority
+ 5. If contest found → scan for override entries with schema-declared
+    supermajority (default ⌈2N/3⌉; simple majority and unanimity
+    available via schema override_threshold)
  6. If override_requires_witness → check for independent witness cosig
  7. Return ContestResult with positions and blocked status
+
+Wave 2: the hardcoded ⌈2N/3⌉ threshold moved to the schema's
+OverrideThreshold field, read via SchemaParameterExtractor. Default
+(missing field / old schemas) continues to be two-thirds, preserving
+all pre-Wave-2 behavior.
 
 Consumed by:
   - verifier/key_rotation.go (Tier 3 contest window)
@@ -20,7 +27,6 @@ package verifier
 
 import (
 	"fmt"
-	"math"
 
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
@@ -50,6 +56,14 @@ type ContestResult struct {
 
 // maxContestScanDepth limits authority chain walk during contest detection.
 const maxContestScanDepth = 200
+
+// defaultAuthoritySetSize is the fallback authority-set cardinality used
+// when the scope entry cannot be resolved. Three is the protocol's
+// canonical minimum scope size and produces a conservative threshold
+// under every OverrideThresholdRule (2-of-3 two-thirds, 2-of-3 simple
+// majority, 3-of-3 unanimity). This is a structural fallback, not a
+// domain assumption.
+const defaultAuthoritySetSize = 3
 
 // ─────────────────────────────────────────────────────────────────────
 // EvaluateContest
@@ -106,28 +120,28 @@ func EvaluateContest(
 		}, nil
 	}
 
-	// 5. Contest found — check for override.
+	// 5. Contest found — resolve schema-declared override policy.
+	//
+	// Both the override threshold rule and the independent-witness
+	// requirement live on the same SchemaParameters struct, so we extract
+	// once and reuse. If extraction fails for any reason, fall back to
+	// the SDK defaults: two-thirds threshold, no witness requirement.
+	// This is conservative — unknown schemas get the widely-used rule.
+	var threshold types.OverrideThresholdRule // zero = ThresholdTwoThirdsMajority
+	requiresWitness := false
+	if extractor != nil && pendingEntry.Header.SchemaRef != nil {
+		if params := fetchSchemaParams(*pendingEntry.Header.SchemaRef, fetcher, extractor); params != nil {
+			threshold = params.OverrideThreshold
+			requiresWitness = params.OverrideRequiresIndependentWitness
+		}
+	}
+
 	// Determine N from the scope entity's AuthoritySet size.
 	authoritySetSize := getAuthoritySetSize(pendingEntry, fetcher)
 	if authoritySetSize == 0 {
-		authoritySetSize = 3 // Safe default if scope not found.
+		authoritySetSize = defaultAuthoritySetSize // Safe default if scope not found.
 	}
-	requiredOverride := int(math.Ceil(2.0 * float64(authoritySetSize) / 3.0))
-
-	// Check if override_requires_witness.
-	requiresWitness := false
-	if extractor != nil && pendingEntry.Header.SchemaRef != nil {
-		schemaMeta, fetchErr := fetcher.Fetch(*pendingEntry.Header.SchemaRef)
-		if fetchErr == nil && schemaMeta != nil {
-			schemaEntry, desErr := envelope.Deserialize(schemaMeta.CanonicalBytes)
-			if desErr == nil {
-				params, extErr := extractor.Extract(schemaEntry)
-				if extErr == nil && params != nil {
-					requiresWitness = params.OverrideRequiresIndependentWitness
-				}
-			}
-		}
-	}
+	requiredOverride := threshold.RequiredApprovals(authoritySetSize)
 
 	// Extract authority set members for witness independence check.
 	authorityMembers := getAuthoritySetMembers(pendingEntry, fetcher)
@@ -152,6 +166,32 @@ func EvaluateContest(
 		ContestPos:       contestPos,
 		Reason:           "contested, no valid override",
 	}, nil
+}
+
+// fetchSchemaParams resolves a schema reference to SchemaParameters.
+// Returns nil if any step of the resolution fails — callers are
+// expected to fall back to defaults on nil.
+//
+// Extracted as a helper so the EvaluateContest body reads as policy
+// decisions rather than nested if-err chains.
+func fetchSchemaParams(
+	ref types.LogPosition,
+	fetcher EntryFetcher,
+	extractor schema.SchemaParameterExtractor,
+) *types.SchemaParameters {
+	schemaMeta, err := fetcher.Fetch(ref)
+	if err != nil || schemaMeta == nil {
+		return nil
+	}
+	schemaEntry, err := envelope.Deserialize(schemaMeta.CanonicalBytes)
+	if err != nil {
+		return nil
+	}
+	params, err := extractor.Extract(schemaEntry)
+	if err != nil {
+		return nil
+	}
+	return params
 }
 
 // findContest walks the authority chain backward from tip looking for

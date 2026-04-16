@@ -2,16 +2,17 @@
 Package schema — parameters_json.go implements the default JSON-based
 SchemaParameterExtractor.
 
-Reads all 12 well-known fields from a schema entry's Domain Payload:
+Reads all 13 well-known fields from a schema entry's Domain Payload:
   activation_delay, cosignature_threshold, maturation_epoch,
   credential_validity_period, override_requires_witness, migration_policy,
   predecessor_schema, artifact_encryption, grant_entry_required,
   re_encryption_threshold, grant_authorization_mode,
-  grant_requires_audit_entry.
+  grant_requires_audit_entry, override_threshold.
 
 Unknown fields are silently ignored (forward-compatible).
 Missing artifact fields default to aes_gcm / false / nil.
 Missing grant authorization fields default to open / false.
+Missing override_threshold defaults to two_thirds (pre-Wave-2 behavior).
 Every other Phase 5+ file consumes this.
 
 KEY ARCHITECTURAL DECISIONS:
@@ -21,6 +22,7 @@ KEY ARCHITECTURAL DECISIONS:
   - MigrationPolicy as string: "strict", "forward", "amendment".
   - ArtifactEncryption as string: "aes_gcm", "umbral_pre".
   - GrantAuthorizationMode as string: "open", "restricted", "sealed".
+  - OverrideThreshold as string: "two_thirds", "simple_majority", "unanimity".
   - PredecessorSchema as JSON object with log_did + sequence.
   - ReEncryptionThreshold as JSON object with m + n.
   - Malformed JSON and empty payload produce errors.
@@ -49,15 +51,15 @@ func NewJSONParameterExtractor() *JSONParameterExtractor {
 // jsonSchemaPayload is the intermediate JSON structure for deserialization.
 // Field names match the protocol's snake_case convention.
 type jsonSchemaPayload struct {
-	ActivationDelay          *int64              `json:"activation_delay"`
-	CosignatureThreshold     *int                `json:"cosignature_threshold"`
-	MaturationEpoch          *int64              `json:"maturation_epoch"`
-	CredentialValidityPeriod *int64              `json:"credential_validity_period"`
-	OverrideRequiresWitness  *bool               `json:"override_requires_witness"`
-	MigrationPolicy          *string             `json:"migration_policy"`
+	ActivationDelay          *int64               `json:"activation_delay"`
+	CosignatureThreshold     *int                 `json:"cosignature_threshold"`
+	MaturationEpoch          *int64               `json:"maturation_epoch"`
+	CredentialValidityPeriod *int64               `json:"credential_validity_period"`
+	OverrideRequiresWitness  *bool                `json:"override_requires_witness"`
+	MigrationPolicy          *string              `json:"migration_policy"`
 	PredecessorSchema        *jsonLogPosition     `json:"predecessor_schema"`
-	ArtifactEncryption       *string             `json:"artifact_encryption"`
-	GrantEntryRequired       *bool               `json:"grant_entry_required"`
+	ArtifactEncryption       *string              `json:"artifact_encryption"`
+	GrantEntryRequired       *bool                `json:"grant_entry_required"`
 	ReEncryptionThreshold    *jsonThresholdConfig `json:"re_encryption_threshold"`
 
 	// Phase 6 additions: grant authorization policy.
@@ -65,6 +67,12 @@ type jsonSchemaPayload struct {
 	// Same parsing pattern as artifact_encryption and migration_policy.
 	GrantAuthorizationMode  *string `json:"grant_authorization_mode"`
 	GrantRequiresAuditEntry *bool   `json:"grant_requires_audit_entry"`
+
+	// Wave 2 addition: override threshold rule.
+	// JSON string "two_thirds" | "simple_majority" | "unanimity" → typed enum.
+	// Missing or absent value means the SDK default (two-thirds), preserving
+	// pre-Wave-2 behavior for every schema that predates this field.
+	OverrideThreshold *string `json:"override_threshold"`
 }
 
 // jsonLogPosition is the JSON representation of types.LogPosition.
@@ -79,7 +87,7 @@ type jsonThresholdConfig struct {
 	N int `json:"n"`
 }
 
-// Extract reads all 12 well-known fields from the schema entry's Domain Payload.
+// Extract reads all 13 well-known fields from the schema entry's Domain Payload.
 // Unknown fields are silently ignored. Missing optional fields use defaults.
 //
 // Defaults for artifact fields:
@@ -90,6 +98,10 @@ type jsonThresholdConfig struct {
 // Defaults for grant authorization fields:
 //   - grant_authorization_mode: GrantAuthOpen (open) — no restriction
 //   - grant_requires_audit_entry: false
+//
+// Default for override threshold (Wave 2):
+//   - override_threshold: ThresholdTwoThirdsMajority (⌈2N/3⌉) — preserves
+//     pre-Wave-2 behavior for every existing schema.
 //
 // Errors:
 //   - Empty Domain Payload → error
@@ -117,6 +129,11 @@ func (e *JSONParameterExtractor) Extract(schemaEntry *envelope.Entry) (*types.Sc
 		// but we include it for documentation clarity.
 		GrantAuthorizationMode:  types.GrantAuthOpen,
 		GrantRequiresAuditEntry: false,
+		// Override threshold default (Wave 2).
+		// ThresholdTwoThirdsMajority is the zero value. Explicit assignment
+		// documents the intent — a reader shouldn't need to know which
+		// enum constant happens to be zero.
+		OverrideThreshold: types.ThresholdTwoThirdsMajority,
 	}
 
 	// ── Protocol-mechanical fields ───────────────────────────────────
@@ -208,6 +225,24 @@ func (e *JSONParameterExtractor) Extract(schemaEntry *envelope.Entry) (*types.Sc
 
 	if raw.GrantRequiresAuditEntry != nil {
 		params.GrantRequiresAuditEntry = *raw.GrantRequiresAuditEntry
+	}
+
+	// ── Wave 2: override threshold ──────────────────────────────────
+	//
+	// Same fail-closed parsing pattern. Missing field → default
+	// (ThresholdTwoThirdsMajority, already assigned above).
+
+	if raw.OverrideThreshold != nil {
+		switch *raw.OverrideThreshold {
+		case "two_thirds":
+			params.OverrideThreshold = types.ThresholdTwoThirdsMajority
+		case "simple_majority":
+			params.OverrideThreshold = types.ThresholdSimpleMajority
+		case "unanimity":
+			params.OverrideThreshold = types.ThresholdUnanimity
+		default:
+			return nil, fmt.Errorf("schema/parameters_json: unknown override_threshold %q", *raw.OverrideThreshold)
+		}
 	}
 
 	return params, nil

@@ -8,13 +8,47 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────
+// Inline mapping fixtures
+// ─────────────────────────────────────────────────────────────────────
+//
+// Wave 3: the did package no longer ships judicial mapping helpers
+// (CourtMapping, JNetMapping, CCRMapping). They moved to the
+// judicial-network repo. These tests continue to exercise the generic
+// VendorDIDResolver infrastructure using inline VendorMapping literals
+// equivalent to the old helpers.
+
+func courtMappingFixture() did.VendorMapping {
+	return did.VendorMapping{
+		Method:       "court",
+		DomainSuffix: ".court.gov",
+		TargetMethod: "web",
+	}
+}
+
+func jnetMappingFixture() did.VendorMapping {
+	return did.VendorMapping{
+		Method:       "jnet",
+		DomainSuffix: ".jnet.gov",
+		TargetMethod: "web",
+	}
+}
+
+func ccrMappingFixture() did.VendorMapping {
+	return did.VendorMapping{
+		Method:       "ccr",
+		DomainSuffix: ".ccr.org",
+		TargetMethod: "web",
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Tests: VendorDIDResolver
 // ─────────────────────────────────────────────────────────────────────
 
 func TestVendorDID_CourtMapping(t *testing.T) {
 	var resolved string
 	base := &captureDIDRes{resolved: &resolved, doc: makeSampleDIDDoc("did:web:test")}
-	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{did.CourtMapping()})
+	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{courtMappingFixture()})
 
 	resolver.Resolve("did:court:davidson-county")
 	if resolved != "did:web:davidson-county.court.gov" {
@@ -25,7 +59,7 @@ func TestVendorDID_CourtMapping(t *testing.T) {
 func TestVendorDID_JNetMapping(t *testing.T) {
 	var resolved string
 	base := &captureDIDRes{resolved: &resolved, doc: makeSampleDIDDoc("did:web:test")}
-	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{did.JNetMapping()})
+	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{jnetMappingFixture()})
 
 	resolver.Resolve("did:jnet:tn:criminal")
 	if resolved != "did:web:criminal.tn.jnet.gov" {
@@ -36,7 +70,7 @@ func TestVendorDID_JNetMapping(t *testing.T) {
 func TestVendorDID_CCRMapping(t *testing.T) {
 	var resolved string
 	base := &captureDIDRes{resolved: &resolved, doc: makeSampleDIDDoc("did:web:test")}
-	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{did.CCRMapping()})
+	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{ccrMappingFixture()})
 
 	resolver.Resolve("did:ccr:issuer:state-bar")
 	if resolved != "did:web:state-bar.issuer.ccr.org" {
@@ -47,7 +81,7 @@ func TestVendorDID_CCRMapping(t *testing.T) {
 func TestVendorDID_Passthrough(t *testing.T) {
 	var resolved string
 	base := &captureDIDRes{resolved: &resolved, doc: makeSampleDIDDoc("did:web:direct")}
-	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{did.CourtMapping()})
+	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{courtMappingFixture()})
 
 	// did:web is not a vendor mapping → passes through.
 	resolver.Resolve("did:web:direct.example.com")
@@ -120,7 +154,7 @@ func TestVendorDID_RegisterMapping(t *testing.T) {
 		t.Fatal("should not have court mapping initially")
 	}
 
-	resolver.RegisterMapping(did.CourtMapping())
+	resolver.RegisterMapping(courtMappingFixture())
 
 	if !resolver.HasMapping("court") {
 		t.Fatal("should have court mapping after register")
@@ -130,7 +164,7 @@ func TestVendorDID_RegisterMapping(t *testing.T) {
 func TestVendorDID_HasMapping(t *testing.T) {
 	resolver := did.NewVendorDIDResolver(
 		&staticDIDRes{doc: makeSampleDIDDoc("did:web:test")},
-		[]did.VendorMapping{did.CourtMapping(), did.JNetMapping()},
+		[]did.VendorMapping{courtMappingFixture(), jnetMappingFixture()},
 	)
 	if !resolver.HasMapping("court") {
 		t.Fatal("should have court")

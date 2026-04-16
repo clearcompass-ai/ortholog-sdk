@@ -9,15 +9,20 @@ Three phases:
     succession entries
 
 Additionally: EscalateToArbitration for custody disputes where the
-incumbent exchange contests the recovery. Requires ⌈2N/3⌉ supermajority
-of escrow nodes plus optional independent identity witness cosignature
-(when override_requires_independent_witness is true in the schema).
+incumbent exchange contests the recovery. Requires schema-declared
+supermajority (default ⌈2N/3⌉, per OverrideThresholdRule) of escrow
+nodes plus optional independent identity witness cosignature (when
+override_requires_independent_witness is true in the schema).
 
 Naming fix #1: uses ReconstructGF256 (the real Phase 1 function name),
 not "escrow.CombineShares".
 
 Naming fix #2: uses escrow.VerifyShare for per-share validation during
 collection, instead of inlining the tag check.
+
+Wave 2: the hardcoded ⌈2N/3⌉ in EvaluateArbitration is now schema-driven
+via SchemaParams.OverrideThreshold. Default (missing field) remains
+two-thirds, preserving all pre-Wave-2 behavior.
 
 Consumed by:
   - judicial-network/migration/ungraceful.go → InitiateRecovery → CollectShares → ExecuteRecovery
@@ -28,7 +33,6 @@ package lifecycle
 
 import (
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/clearcompass-ai/ortholog-sdk/builder"
@@ -44,13 +48,13 @@ import (
 // ─────────────────────────────────────────────────────────────────────
 
 var (
-	ErrRecoveryNotInitiated   = fmt.Errorf("lifecycle/recovery: recovery not initiated")
-	ErrInsufficientShares     = fmt.Errorf("lifecycle/recovery: insufficient valid shares")
-	ErrShareValidationFailed  = fmt.Errorf("lifecycle/recovery: share validation failed")
-	ErrReconstructionFailed   = fmt.Errorf("lifecycle/recovery: key reconstruction failed")
-	ErrArbitrationRequired    = fmt.Errorf("lifecycle/recovery: custody dispute requires arbitration")
-	ErrInsufficientOverride   = fmt.Errorf("lifecycle/recovery: override requires ⌈2N/3⌉ supermajority")
-	ErrMissingWitnessCosig    = fmt.Errorf("lifecycle/recovery: schema requires independent identity witness cosignature")
+	ErrRecoveryNotInitiated  = fmt.Errorf("lifecycle/recovery: recovery not initiated")
+	ErrInsufficientShares    = fmt.Errorf("lifecycle/recovery: insufficient valid shares")
+	ErrShareValidationFailed = fmt.Errorf("lifecycle/recovery: share validation failed")
+	ErrReconstructionFailed  = fmt.Errorf("lifecycle/recovery: key reconstruction failed")
+	ErrArbitrationRequired   = fmt.Errorf("lifecycle/recovery: custody dispute requires arbitration")
+	ErrInsufficientOverride  = fmt.Errorf("lifecycle/recovery: override requires schema-declared supermajority")
+	ErrMissingWitnessCosig   = fmt.Errorf("lifecycle/recovery: schema requires independent identity witness cosignature")
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -63,7 +67,6 @@ type InitiateRecoveryParams struct {
 	NewExchangeDID string
 
 	// HolderDID is the holder whose keys are being recovered.
-	// May be a real DID or vendor-specific DID.
 	HolderDID string
 
 	// Reason describes why recovery is needed (exchange failure, migration).
@@ -105,9 +108,9 @@ func InitiateRecovery(p InitiateRecoveryParams) (*InitiateRecoveryResult, error)
 	}
 
 	payload := map[string]any{
-		"recovery_type":     "escrow_key_recovery",
-		"holder_did":        p.HolderDID,
-		"reason":            p.Reason,
+		"recovery_type":      "escrow_key_recovery",
+		"holder_did":         p.HolderDID,
+		"reason":             p.Reason,
 		"escrow_package_cid": p.EscrowPackageCID.String(),
 	}
 
@@ -218,8 +221,9 @@ type ExecuteRecoveryParams struct {
 	Shares []escrow.Share
 
 	// ArtifactCIDs are the CIDs of artifacts to re-encrypt under the new key.
-	// For compliant exchanges using the double-blind escrow pattern, this
-	// includes the vendor-specific DID mapping artifact.
+	// Callers re-encrypt any artifacts whose keys were derived from the
+	// reconstructed material. The list is domain-specific; the SDK treats
+	// the CIDs opaquely.
 	ArtifactCIDs []storage.CID
 
 	// ContentStore fetches and pushes artifacts during re-encryption.
@@ -252,8 +256,10 @@ type RecoveryResult struct {
 	// The caller submits this to the operator.
 	SuccessionEntry *envelope.Entry
 
-	// VendorDIDMappingRecovered is true if the vendor-specific DID mapping
-	// was among the re-encrypted artifacts (compliant exchange pattern).
+	// VendorDIDMappingRecovered is retained for backward compatibility
+	// with callers that inspected it. The SDK does not set it (domain
+	// concern); domain code may populate it after inspecting its own
+	// artifact list.
 	VendorDIDMappingRecovered bool
 }
 
@@ -335,8 +341,8 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 			TargetRoot:   *p.TargetRoot,
 			NewSignerDID: p.NewExchangeDID,
 			Payload: mustMarshalJSON(map[string]any{
-				"succession_type":        "escrow_recovery",
-				"artifacts_reencrypted":  len(result.ReEncryptedArtifacts),
+				"succession_type":       "escrow_recovery",
+				"artifacts_reencrypted": len(result.ReEncryptedArtifacts),
 			}),
 			EventTime: eventTime,
 		})
@@ -380,7 +386,11 @@ type ArbitrationParams struct {
 	// Nil if not required.
 	WitnessCosignature *types.EntryWithMetadata
 
-	// SchemaParams provides the override_requires_independent_witness flag.
+	// SchemaParams provides the override policy. Two fields are read:
+	//   - OverrideThreshold: schema-declared supermajority rule
+	//     (default ThresholdTwoThirdsMajority = ⌈2N/3⌉)
+	//   - OverrideRequiresIndependentWitness: requires witness cosig when true
+	// Nil SchemaParams means both defaults apply.
 	SchemaParams *types.SchemaParameters
 }
 
@@ -393,7 +403,7 @@ type ArbitrationResult struct {
 	// ApprovalCount is the number of valid escrow node approvals.
 	ApprovalCount int
 
-	// RequiredCount is ⌈2N/3⌉.
+	// RequiredCount is the schema-declared supermajority (default ⌈2N/3⌉).
 	RequiredCount int
 
 	// HasWitnessCosig is true if an independent witness cosigned.
@@ -404,15 +414,26 @@ type ArbitrationResult struct {
 }
 
 // EvaluateArbitration checks whether an escrow arbitration override has
-// sufficient approvals. The governance doc requires ⌈2N/3⌉ supermajority
-// of escrow nodes. If the schema declares override_requires_independent_witness,
-// an additional identity witness cosignature is required.
+// sufficient approvals. The threshold is schema-declared via
+// SchemaParams.OverrideThreshold; the SDK default (two-thirds) applies
+// when SchemaParams is nil or when the schema omits the field.
+// If the schema declares override_requires_independent_witness, an
+// additional identity witness cosignature is required.
 func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 	if p.TotalEscrowNodes <= 0 {
 		return nil, fmt.Errorf("lifecycle/recovery: invalid escrow node count %d", p.TotalEscrowNodes)
 	}
 
-	required := int(math.Ceil(2.0 * float64(p.TotalEscrowNodes) / 3.0))
+	// Resolve schema-declared override policy. Nil SchemaParams or a
+	// zero-valued OverrideThreshold both map to ThresholdTwoThirdsMajority
+	// via the enum's zero-value semantics — no additional guards needed.
+	var threshold types.OverrideThresholdRule
+	requiresWitness := false
+	if p.SchemaParams != nil {
+		threshold = p.SchemaParams.OverrideThreshold
+		requiresWitness = p.SchemaParams.OverrideRequiresIndependentWitness
+	}
+	required := threshold.RequiredApprovals(p.TotalEscrowNodes)
 
 	// Count unique escrow node approvals.
 	seen := make(map[string]bool)
@@ -440,13 +461,12 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 	}
 
 	if approvalCount < required {
-		result.Reason = fmt.Sprintf("%d of %d required escrow approvals (need ⌈2×%d/3⌉ = %d)",
-			approvalCount, p.TotalEscrowNodes, p.TotalEscrowNodes, required)
+		result.Reason = fmt.Sprintf("%d of %d required escrow approvals (threshold %s over N=%d)",
+			approvalCount, required, overrideThresholdLabel(threshold), p.TotalEscrowNodes)
 		return result, nil
 	}
 
 	// Check witness cosignature if required.
-	requiresWitness := p.SchemaParams != nil && p.SchemaParams.OverrideRequiresIndependentWitness
 	if requiresWitness {
 		if p.WitnessCosignature == nil {
 			result.Reason = "supermajority met but independent witness cosignature required"
@@ -460,11 +480,25 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 	}
 
 	result.OverrideAuthorized = true
-	result.Reason = fmt.Sprintf("override authorized: %d of %d escrow approvals", approvalCount, required)
+	result.Reason = fmt.Sprintf("override authorized: %d of %d escrow approvals (threshold %s)",
+		approvalCount, required, overrideThresholdLabel(threshold))
 	if requiresWitness {
 		result.Reason += " + independent witness cosignature"
 	}
 	return result, nil
+}
+
+// overrideThresholdLabel returns a human-readable label for a threshold rule.
+// Used in ArbitrationResult.Reason to make operator logs self-describing.
+func overrideThresholdLabel(t types.OverrideThresholdRule) string {
+	switch t {
+	case types.ThresholdSimpleMajority:
+		return "simple_majority"
+	case types.ThresholdUnanimity:
+		return "unanimity"
+	default:
+		return "two_thirds"
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────

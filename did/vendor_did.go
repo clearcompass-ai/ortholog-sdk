@@ -2,17 +2,20 @@
 did/vendor_did.go — Vendor-specific DID method mapping and resolution.
 
 VendorDIDResolver transforms vendor-specific DID methods into standard
-methods before delegating to a base resolver. This allows the SDK to
-support non-standard DID methods used by specific judicial networks
-or credentialing platforms.
+methods before delegating to a base resolver. This allows downstream
+consumers (judicial networks, credentialing platforms) to support
+non-standard DID methods without changes to the SDK.
 
-Example mappings:
-  did:court:davidson-county → did:web:court.davidson-county.gov
-  did:jnet:tn:criminal      → did:web:criminal.tn.jnet.gov
-  did:ccr:issuer:state-bar  → did:web:state-bar.issuer.ccr.org
+Consumers register mappings via NewVendorDIDResolver or RegisterMapping.
+The SDK ships no default mappings — all method-specific transforms
+(did:court:*, did:jnet:*, etc.) are domain concerns and belong in
+domain repos.
 
-The mapping rules are configurable per deployment. The resolver
-delegates to the inner DIDResolver after transformation.
+Example construction from a domain repo:
+
+	resolver := did.NewVendorDIDResolver(baseResolver, []did.VendorMapping{
+	    {Method: "court", DomainSuffix: ".court.gov", TargetMethod: "web"},
+	})
 */
 package did
 
@@ -94,43 +97,6 @@ func (v *VendorDIDResolver) RegisterMapping(mapping VendorMapping) {
 func (v *VendorDIDResolver) HasMapping(method string) bool {
 	_, ok := v.mappings[method]
 	return ok
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Common vendor mappings
-// ─────────────────────────────────────────────────────────────────────
-
-// CourtMapping maps did:court:<jurisdiction> to did:web:<jurisdiction>.gov.
-//
-//	did:court:davidson-county → did:web:davidson-county.court.gov
-func CourtMapping() VendorMapping {
-	return VendorMapping{
-		Method:       "court",
-		DomainSuffix: ".court.gov",
-		TargetMethod: "web",
-	}
-}
-
-// JNetMapping maps did:jnet:<network>:<segment> to did:web:<segment>.<network>.jnet.gov.
-//
-//	did:jnet:tn:criminal → did:web:criminal.tn.jnet.gov
-func JNetMapping() VendorMapping {
-	return VendorMapping{
-		Method:       "jnet",
-		DomainSuffix: ".jnet.gov",
-		TargetMethod: "web",
-	}
-}
-
-// CCRMapping maps did:ccr:<role>:<name> to did:web:<name>.<role>.ccr.org.
-//
-//	did:ccr:issuer:state-bar → did:web:state-bar.issuer.ccr.org
-func CCRMapping() VendorMapping {
-	return VendorMapping{
-		Method:       "ccr",
-		DomainSuffix: ".ccr.org",
-		TargetMethod: "web",
-	}
 }
 
 // ─────────────────────────────────────────────────────────────────────

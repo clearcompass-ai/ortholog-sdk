@@ -1,0 +1,119 @@
+[
+  {
+    "rule": "R1-deleted-symbol",
+    "severity": "error",
+    "file": "onboarding/provision.go",
+    "line": 62,
+    "column": 77,
+    "message": "lifecycle.ProvisionResult was removed (Wave 3). This will not compile.",
+    "fix": "Use lifecycle.LogProvision; multi-log orchestration is now a domain concern"
+  },
+  {
+    "rule": "R1-deleted-symbol",
+    "severity": "error",
+    "file": "onboarding/provision.go",
+    "line": 98,
+    "column": 12,
+    "message": "lifecycle.ProvisionConfig was removed (Wave 3). This will not compile.",
+    "fix": "Use lifecycle.SingleLogConfig; multi-log orchestration is now a domain concern"
+  },
+  {
+    "rule": "R1-deleted-symbol",
+    "severity": "error",
+    "file": "onboarding/provision.go",
+    "line": 109,
+    "column": 17,
+    "message": "lifecycle.ProvisionThreeLogs was removed (Wave 3). This will not compile.",
+    "fix": "Call lifecycle.ProvisionSingleLog 3x and compose the results in domain code"
+  },
+  {
+    "rule": "R12-domainpayload-near-builder",
+    "severity": "warning",
+    "file": "appeals/record.go",
+    "line": 135,
+    "column": 25,
+    "message": "Access to .DomainPayload in a function that also calls builder APIs — possible SDK-D6 violation (builder must not read Domain Payload).",
+    "fix": "Move the DomainPayload read into verifier/domain code. Builder paths must rely on Control Header fields only."
+  },
+  {
+    "rule": "R12-domainpayload-near-builder",
+    "severity": "warning",
+    "file": "appeals/record.go",
+    "line": 145,
+    "column": 21,
+    "message": "Access to .DomainPayload in a function that also calls builder APIs — possible SDK-D6 violation (builder must not read Domain Payload).",
+    "fix": "Move the DomainPayload read into verifier/domain code. Builder paths must rely on Control Header fields only."
+  },
+  {
+    "rule": "R12-domainpayload-near-builder",
+    "severity": "warning",
+    "file": "exchange/handlers/entries.go",
+    "line": 92,
+    "column": 19,
+    "message": "Access to .DomainPayload in a function that also calls builder APIs — possible SDK-D6 violation (builder must not read Domain Payload).",
+    "fix": "Move the DomainPayload read into verifier/domain code. Builder paths must rely on Control Header fields only."
+  },
+  {
+    "rule": "R12-domainpayload-near-builder",
+    "severity": "warning",
+    "file": "exchange/handlers/entries.go",
+    "line": 102,
+    "column": 19,
+    "message": "Access to .DomainPayload in a function that also calls builder APIs — possible SDK-D6 violation (builder must not read Domain Payload).",
+    "fix": "Move the DomainPayload read into verifier/domain code. Builder paths must rely on Control Header fields only."
+  },
+  {
+    "rule": "R12-domainpayload-near-builder",
+    "severity": "warning",
+    "file": "exchange/handlers/entries.go",
+    "line": 107,
+    "column": 19,
+    "message": "Access to .DomainPayload in a function that also calls builder APIs — possible SDK-D6 violation (builder must not read Domain Payload).",
+    "fix": "Move the DomainPayload read into verifier/domain code. Builder paths must rely on Control Header fields only."
+  },
+  {
+    "rule": "R12-domainpayload-near-builder",
+    "severity": "warning",
+    "file": "exchange/handlers/entries.go",
+    "line": 112,
+    "column": 19,
+    "message": "Access to .DomainPayload in a function that also calls builder APIs — possible SDK-D6 violation (builder must not read Domain Payload).",
+    "fix": "Move the DomainPayload read into verifier/domain code. Builder paths must rely on Control Header fields only."
+  },
+  {
+    "rule": "R12-domainpayload-near-builder",
+    "severity": "warning",
+    "file": "exchange/handlers/management.go",
+    "line": 69,
+    "column": 18,
+    "message": "Access to .DomainPayload in a function that also calls builder APIs — possible SDK-D6 violation (builder must not read Domain Payload).",
+    "fix": "Move the DomainPayload read into verifier/domain code. Builder paths must rely on Control Header fields only."
+  },
+  {
+    "rule": "R12-domainpayload-near-builder",
+    "severity": "warning",
+    "file": "monitoring/evidence_grant_compliance.go",
+    "line": 84,
+    "column": 25,
+    "message": "Access to .DomainPayload in a function that also calls builder APIs — possible SDK-D6 violation (builder must not read Domain Payload).",
+    "fix": "Move the DomainPayload read into verifier/domain code. Builder paths must rely on Control Header fields only."
+  },
+  {
+    "rule": "R12-domainpayload-near-builder",
+    "severity": "warning",
+    "file": "monitoring/evidence_grant_compliance.go",
+    "line": 103,
+    "column": 21,
+    "message": "Access to .DomainPayload in a function that also calls builder APIs — possible SDK-D6 violation (builder must not read Domain Payload).",
+    "fix": "Move the DomainPayload read into verifier/domain code. Builder paths must rely on Control Header fields only."
+  },
+  {
+    "rule": "R12-domainpayload-near-builder",
+    "severity": "warning",
+    "file": "onboarding/schema_adoption.go",
+    "line": 131,
+    "column": 26,
+    "message": "Access to .DomainPayload in a function that also calls builder APIs — possible SDK-D6 violation (builder must not read Domain Payload).",
+    "fix": "Move the DomainPayload read into verifier/domain code. Builder paths must rely on Control Header fields only."
+  }
+]

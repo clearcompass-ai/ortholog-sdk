@@ -66,6 +66,7 @@ KEY DEPENDENCIES:
 package auth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -258,22 +259,6 @@ func appendUint64(dst []byte, v uint64) []byte {
 }
 
 // -------------------------------------------------------------------------------------------------
-// 5) NonceStore interface
-// -------------------------------------------------------------------------------------------------
-
-// NonceStore is the interface the verifier uses to enforce single-use nonces.
-//
-// CheckAndStore atomically:
-//   - returns nil if (did, nonce) is fresh, recording it for future rejection
-//   - returns an error if (did, nonce) has been seen before
-//
-// Implementations must be thread-safe and should expire entries after a TTL
-// matching MaxValidityWindow + DefaultClockSkew to prevent unbounded growth.
-type NonceStore interface {
-	CheckAndStore(did string, nonce string, expiresAt time.Time) error
-}
-
-// -------------------------------------------------------------------------------------------------
 // 6) VerifyRequest
 // -------------------------------------------------------------------------------------------------
 
@@ -355,7 +340,7 @@ func VerifyRequest(
 
 	// Nonce (reserve before signature verification — cheaper to fail fast
 	// on a replay than to run ecrecover first).
-	if err := nonces.CheckAndStore(env.DID, env.Nonce, env.ExpiresAt.Add(skew)); err != nil {
+	if err := nonces.Reserve(context.Background(), env.Nonce); err != nil {
 		return fmt.Errorf("%w: %v", ErrEnvelopeNonceReused, err)
 	}
 

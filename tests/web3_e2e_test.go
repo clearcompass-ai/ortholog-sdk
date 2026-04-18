@@ -41,6 +41,8 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/did"
 )
 
+const testDestinationDID = "did:web:test.exchange.example"
+
 // -------------------------------------------------------------------------------------------------
 // 1) E2E — did:key + Ed25519 + SigAlgoEd25519
 // -------------------------------------------------------------------------------------------------
@@ -265,7 +267,7 @@ func TestE2E_DIDWeb_Secp256k1_ECDSA(t *testing.T) {
 	}
 
 	resolver := &staticResolver{wantDID: didStr, doc: doc}
-	registry := did.DefaultVerifierRegistry(resolver)
+	registry := did.DefaultVerifierRegistry(testDestinationDID, resolver)
 
 	if err := registry.Verify(didStr, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
@@ -308,7 +310,7 @@ func TestE2E_DIDWeb_Ed25519(t *testing.T) {
 	}
 
 	resolver := &staticResolver{wantDID: didStr, doc: doc}
-	registry := did.DefaultVerifierRegistry(resolver)
+	registry := did.DefaultVerifierRegistry(testDestinationDID, resolver)
 
 	if err := registry.Verify(didStr, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
@@ -363,7 +365,7 @@ func TestE2E_DIDWeb_RecoveryMethod(t *testing.T) {
 	}
 
 	resolver := &staticResolver{wantDID: didStr, doc: doc}
-	registry := did.DefaultVerifierRegistry(resolver)
+	registry := did.DefaultVerifierRegistry(testDestinationDID, resolver)
 
 	if err := registry.Verify(didStr, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
@@ -434,5 +436,5 @@ func TestE2E_CrossMethodTampering_Rejected(t *testing.T) {
 // did:web tests construct their own registry with a static resolver.
 func newTestRegistry(t *testing.T) *did.VerifierRegistry {
 	t.Helper()
-	return did.DefaultVerifierRegistry(panicResolver{t: t})
+	return did.DefaultVerifierRegistry(testDestinationDID, panicResolver{t: t})
 }

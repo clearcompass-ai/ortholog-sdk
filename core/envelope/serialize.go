@@ -24,8 +24,13 @@ Wire format (v5):
 	  [uint16 Protocol_Version] [uint32 Header_Body_Length]
 
 	Header body (HBL bytes):
-	  Fields in declaration order. Admission proof is length-prefixed to
-	  isolate it from Authority_Skip (SDK-3 guarantee).
+	  Fields in declaration order:
+	    SignerDID, Destination, TargetRoot, ... (see serializeHeaderBody).
+	  Destination lies immediately after SignerDID; the canonical hash
+	  therefore commits to the destination exchange DID and an entry
+	  signed for exchange A will not verify against exchange B.
+	  Admission proof is length-prefixed to isolate it from Authority_Skip
+	  (SDK-3 guarantee).
 
 	Payload: [uint32 Payload_Length] [Payload_Bytes]
 
@@ -63,6 +68,7 @@ var (
 	ErrMalformedPayload          = errors.New("envelope: malformed payload")
 	ErrEmptySignerDID            = errors.New("envelope: Signer_DID must not be empty")
 	ErrNonASCIIDID               = errors.New("envelope: Signer_DID must be ASCII")
+	ErrNonASCIIDestination       = errors.New("envelope: Destination must be ASCII")
 	ErrTooManyDelegationPointers = errors.New("envelope: DelegationPointers exceeds MaxDelegationPointers")
 	ErrTooManyEvidencePointers   = errors.New("envelope: EvidencePointers exceeds MaxEvidencePointers (non-snapshot)")
 	ErrInvalidPresenceByte       = errors.New("envelope: presence byte must be 0 or 1")
@@ -112,6 +118,15 @@ func validateHeaderForWrite(h *ControlHeader) error {
 	}
 	if !isASCII(h.SignerDID) {
 		return ErrNonASCIIDID
+	}
+	// Destination binding: required field, validated for non-empty,
+	// non-whitespace, bounded length by ValidateDestination, plus ASCII
+	// conformance here (DIDs are ASCII by spec; consistent with SignerDID).
+	if err := ValidateDestination(h.Destination); err != nil {
+		return err
+	}
+	if !isASCII(h.Destination) {
+		return ErrNonASCIIDestination
 	}
 	if len(h.DelegationPointers) > MaxDelegationPointers {
 		return ErrTooManyDelegationPointers
@@ -168,6 +183,12 @@ func Serialize(e *Entry) []byte {
 func serializeHeaderBody(h *ControlHeader) []byte {
 	var b []byte
 	b = appendLenPrefixedString(b, h.SignerDID)
+	// Destination binding: written immediately after SignerDID so the
+	// canonical hash includes it. An entry signed for exchange A and
+	// replayed at exchange B recomputes a different hash at B and fails
+	// signature verification — cross-exchange replay is cryptographically
+	// impossible.
+	b = appendLenPrefixedString(b, h.Destination)
 	b = appendOptionalLogPosition(b, h.TargetRoot)
 	b = appendOptionalLogPosition(b, h.TargetIntermediate)
 	b = appendOptionalAuthorityPath(b, h.AuthorityPath)
@@ -244,6 +265,12 @@ func deserializeHeaderBody(body []byte) (*ControlHeader, error) {
 	var err error
 	if h.SignerDID, err = readLenPrefixedString(r); err != nil {
 		return nil, wrapField("SignerDID", err)
+	}
+	// Destination binding: read immediately after SignerDID. Must be
+	// non-empty on any v5+ entry; the builder/serializer ensures this
+	// for entries constructed through NewEntry.
+	if h.Destination, err = readLenPrefixedString(r); err != nil {
+		return nil, wrapField("Destination", err)
 	}
 	if h.TargetRoot, err = readOptionalLogPosition(r); err != nil {
 		return nil, wrapField("TargetRoot", err)

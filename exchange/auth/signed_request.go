@@ -28,12 +28,19 @@ KEY ARCHITECTURAL DECISIONS:
           nonce     prevents replay within the domain
           issuedAt  + expiresAt bound the validity window
       Any missing or malformed field fails the verify.
-    - Nonce freshness is delegated to an injected NonceStore. The store is
-      responsible for rejecting reused nonces. This package does not
-      prescribe a store implementation.
-    - Clock skew tolerance is configurable but defaults to 60 seconds on
-      each side of the validity window. Outside that window, verification
-      fails loudly.
+    - Validity windows are tempo-scoped (Automated / Interactive /
+      Deliberative) so callers pick a window matching the signing
+      tempo of the endpoint, not a role or domain-specific label. The
+      SDK enforces a hard MaxValidityWindow ceiling above which any
+      envelope is rejected unconditionally.
+    - Nonce freshness is delegated to an injected NonceStore with
+      strict-forever semantics (see exchange/auth/nonce_store.go). The
+      store is required UNLESS the caller explicitly opts into
+      no-replay-check via VerifyRequestOptions.AllowNoReplayCheck — a
+      conscious decision the caller must make, never a silent default.
+    - Clock skew tolerance is configurable but defaults to MaxClockSkew
+      (30s) on each side of the validity window. Outside that window,
+      verification fails loudly.
 
 OVERVIEW:
     Canonical envelope byte layout (all fields length-prefixed):
@@ -55,13 +62,16 @@ OVERVIEW:
         1. Parse envelope
         2. Check version, required fields
         3. Check expiry vs now (with skew tolerance)
-        4. Check nonce not reused (via store)
-        5. Compute canonical hash
-        6. Call registry.Verify(did, hash, sig, algoID)
+        4. Check validity window <= opts.ValidityWindow and MaxValidityWindow
+        5. Reserve the nonce in NonceStore (fails if reused)
+           — skipped only if opts.AllowNoReplayCheck is true
+        6. Compute canonical hash
+        7. Call registry.Verify(did, hash, sig, algoID)
 
 KEY DEPENDENCIES:
     - did/verifier_registry.go: VerifierRegistry for the actual signature check
     - crypto/sha256 (stdlib):   canonical hash
+    - exchange/auth/nonce_store.go: NonceStore interface
 */
 package auth
 
@@ -85,14 +95,44 @@ import (
 // this is a wire-breaking change across the ecosystem.
 const EnvelopeVersion uint8 = 1
 
-// DefaultClockSkew is the tolerance applied to IssuedAt/ExpiresAt comparison
-// to account for client/server clock drift.
-const DefaultClockSkew = 60 * time.Second
+// Validity windows are tempo-scoped. Callers pick a window matching the
+// signing tempo of the endpoint. The SDK is domain-agnostic; consumers
+// map their own signer categories onto these tempos. Illustrative mappings:
+//
+//   Automated   → service daemons, scheduled jobs, protocol actors
+//                 (witnesses, anchor publishers, cross-log mirrors)
+//   Interactive → humans at a UI executing routine input
+//   Deliberative → humans exercising judgment in review-and-decide flows
+const (
+	// ValidityAutomated is for machine-to-machine signed requests where
+	// no human is in the loop. Replays must be detected within seconds.
+	ValidityAutomated = 60 * time.Second
 
-// MaxValidityWindow is the maximum allowed span between IssuedAt and
-// ExpiresAt. Longer windows are rejected on verify. Signed requests are
-// intended to be short-lived.
-const MaxValidityWindow = 10 * time.Minute
+	// ValidityInteractive is for humans at a UI executing routine input.
+	// Accommodates UI latency and immediate human response.
+	ValidityInteractive = 5 * time.Minute
+
+	// ValidityDeliberative is for humans in a review-and-decide workflow.
+	// Accommodates a pause for consideration between opening a signing
+	// interface and committing.
+	ValidityDeliberative = 30 * time.Minute
+)
+
+// MaxValidityWindow is the hard ceiling the SDK will accept. Envelopes
+// whose ExpiresAt-IssuedAt span exceeds this are rejected unconditionally,
+// regardless of caller-level policy. Longer windows indicate either a
+// misconfiguration or a design that needs revisiting; pre-signed durable
+// actions should use a different mechanism.
+const MaxValidityWindow = 1 * time.Hour
+
+// MaxClockSkew is the tolerance applied to IssuedAt/ExpiresAt comparison
+// to account for client/server clock drift. Asymmetric on both sides of
+// the validity window.
+const MaxClockSkew = 30 * time.Second
+
+// DefaultClockSkew is retained for callers that read it directly. New
+// code should prefer MaxClockSkew (same value, clearer name).
+const DefaultClockSkew = MaxClockSkew
 
 // ZeroBodyHash is the canonical body-hash value for requests with no body.
 // A signer must use this value explicitly; the empty-string body hash differs
@@ -104,13 +144,15 @@ var ZeroBodyHash [32]byte
 // -------------------------------------------------------------------------------------------------
 
 var (
-	ErrEnvelopeMalformed      = errors.New("exchange/auth: envelope malformed")
-	ErrEnvelopeExpired        = errors.New("exchange/auth: envelope expired")
-	ErrEnvelopeNotYetValid    = errors.New("exchange/auth: envelope not yet valid")
+	ErrEnvelopeMalformed       = errors.New("exchange/auth: envelope malformed")
+	ErrEnvelopeExpired         = errors.New("exchange/auth: envelope expired")
+	ErrEnvelopeNotYetValid     = errors.New("exchange/auth: envelope not yet valid")
 	ErrEnvelopeValidityTooWide = errors.New("exchange/auth: envelope validity window exceeds MaxValidityWindow")
-	ErrEnvelopeDomainMismatch = errors.New("exchange/auth: envelope domain does not match expected")
-	ErrEnvelopeNonceReused    = errors.New("exchange/auth: envelope nonce reused")
-	ErrEnvelopeFieldMissing   = errors.New("exchange/auth: envelope required field missing")
+	ErrEnvelopeValidityTooWideForEndpoint = errors.New("exchange/auth: envelope validity window exceeds VerifyRequestOptions.ValidityWindow")
+	ErrEnvelopeDomainMismatch  = errors.New("exchange/auth: envelope domain does not match expected")
+	ErrEnvelopeNonceReused     = errors.New("exchange/auth: envelope nonce reused")
+	ErrEnvelopeFieldMissing    = errors.New("exchange/auth: envelope required field missing")
+	ErrNonceStoreRequired      = errors.New("exchange/auth: NonceStore required (or set VerifyRequestOptions.AllowNoReplayCheck=true)")
 )
 
 // -------------------------------------------------------------------------------------------------
@@ -191,7 +233,9 @@ func (e *SignedRequestEnvelope) CanonicalHash() ([32]byte, error) {
 	return sha256.Sum256(canonical), nil
 }
 
-// validateFields enforces required non-empty fields and field-shape rules.
+// validateFields enforces required non-empty fields and field-shape rules,
+// plus the SDK-level MaxValidityWindow ceiling. Endpoint-level narrower
+// windows (opts.ValidityWindow) are checked by VerifyRequest.
 func (e *SignedRequestEnvelope) validateFields() error {
 	if e.Version != EnvelopeVersion {
 		return fmt.Errorf("%w: version %d, expected %d",
@@ -259,7 +303,7 @@ func appendUint64(dst []byte, v uint64) []byte {
 }
 
 // -------------------------------------------------------------------------------------------------
-// 6) VerifyRequest
+// 5) VerifyRequest
 // -------------------------------------------------------------------------------------------------
 
 // VerifyRequestOptions configures VerifyRequest behavior.
@@ -269,8 +313,33 @@ type VerifyRequestOptions struct {
 	ExpectedDomain string
 
 	// ClockSkew is the tolerance applied on both sides of the validity
-	// window. Defaults to DefaultClockSkew if zero.
+	// window. Defaults to MaxClockSkew if zero.
 	ClockSkew time.Duration
+
+	// ValidityWindow is the maximum (ExpiresAt - IssuedAt) the caller
+	// accepts for this endpoint. If zero, defaults to MaxValidityWindow
+	// (no caller-side tightening). Values greater than MaxValidityWindow
+	// are rejected — the SDK hard ceiling always wins.
+	//
+	// Callers typically set this to one of the ValidityAutomated /
+	// ValidityInteractive / ValidityDeliberative constants based on the
+	// signing tempo of the endpoint.
+	ValidityWindow time.Duration
+
+	// AllowNoReplayCheck permits VerifyRequest to be called with a nil
+	// NonceStore. MUST be set deliberately — a nil store with
+	// AllowNoReplayCheck=false returns ErrNonceStoreRequired.
+	//
+	// Legitimate cases for setting this to true:
+	//   - The endpoint's signed request becomes a log entry; the log's
+	//     canonical-hash dedup + destination binding + freshness window
+	//     already provide replay protection.
+	//   - A test harness exercising verification without replay concerns.
+	//
+	// Never set this on endpoints that return private data, trigger side
+	// effects, or manipulate control-plane state without a backing
+	// NonceStore.
+	AllowNoReplayCheck bool
 
 	// Now returns the current time. Defaults to time.Now if nil.
 	// Exposed for testing.
@@ -280,12 +349,14 @@ type VerifyRequestOptions struct {
 // VerifyRequest verifies a signed request envelope end-to-end.
 //
 // Steps:
-//  1. Validate envelope structure and field shape.
-//  2. Check validity window against Now() with ClockSkew tolerance.
-//  3. Check Domain matches ExpectedDomain (if set).
-//  4. Reserve the nonce in NonceStore (fails if reused).
-//  5. Compute canonical hash.
-//  6. Call verifier.Verify(did, hash, sig, algoID).
+//  1. Validate envelope structure and field shape (includes SDK MaxValidityWindow).
+//  2. Check validity window against opts.ValidityWindow if set.
+//  3. Check Now() vs IssuedAt/ExpiresAt with ClockSkew tolerance.
+//  4. Check Domain matches ExpectedDomain (if set).
+//  5. Reserve the nonce in NonceStore (fails if reused) — skipped if
+//     nonces==nil AND opts.AllowNoReplayCheck==true.
+//  6. Compute canonical hash.
+//  7. Call registry.Verify(did, hash, sig, algoID).
 //
 // Any step failing fails the whole verification.
 func VerifyRequest(
@@ -302,8 +373,11 @@ func VerifyRequest(
 	if env == nil {
 		return fmt.Errorf("exchange/auth: envelope required")
 	}
-	if nonces == nil {
-		return fmt.Errorf("exchange/auth: NonceStore required")
+
+	// NonceStore discipline: require a store unless the caller has
+	// explicitly opted out of replay protection.
+	if nonces == nil && !opts.AllowNoReplayCheck {
+		return ErrNonceStoreRequired
 	}
 
 	now := time.Now
@@ -312,7 +386,18 @@ func VerifyRequest(
 	}
 	skew := opts.ClockSkew
 	if skew <= 0 {
-		skew = DefaultClockSkew
+		skew = MaxClockSkew
+	}
+
+	// Endpoint-level validity window: defaults to MaxValidityWindow. A
+	// caller-specified value above MaxValidityWindow is clamped (the SDK
+	// ceiling is authoritative), rejected by validateFields regardless.
+	endpointWindow := opts.ValidityWindow
+	if endpointWindow <= 0 {
+		endpointWindow = MaxValidityWindow
+	}
+	if endpointWindow > MaxValidityWindow {
+		endpointWindow = MaxValidityWindow
 	}
 
 	// Validate fields (also called by Canonicalize, but we want fast failure
@@ -321,7 +406,16 @@ func VerifyRequest(
 		return err
 	}
 
-	// Validity window.
+	// Endpoint-level narrower window check (validateFields already enforced
+	// the SDK-level MaxValidityWindow).
+	if env.ExpiresAt.Sub(env.IssuedAt) > endpointWindow {
+		return fmt.Errorf("%w: %s > %s",
+			ErrEnvelopeValidityTooWideForEndpoint,
+			env.ExpiresAt.Sub(env.IssuedAt),
+			endpointWindow)
+	}
+
+	// Validity window vs. wall clock.
 	t := now()
 	if t.Before(env.IssuedAt.Add(-skew)) {
 		return fmt.Errorf("%w: now=%s issuedAt=%s",
@@ -339,9 +433,12 @@ func VerifyRequest(
 	}
 
 	// Nonce (reserve before signature verification — cheaper to fail fast
-	// on a replay than to run ecrecover first).
-	if err := nonces.Reserve(context.Background(), env.Nonce); err != nil {
-		return fmt.Errorf("%w: %v", ErrEnvelopeNonceReused, err)
+	// on a replay than to run ecrecover first). Skipped if the caller
+	// opted out.
+	if nonces != nil {
+		if err := nonces.Reserve(context.Background(), env.Nonce); err != nil {
+			return fmt.Errorf("%w: %v", ErrEnvelopeNonceReused, err)
+		}
 	}
 
 	// Signature.

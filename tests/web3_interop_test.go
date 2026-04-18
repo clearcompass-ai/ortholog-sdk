@@ -35,6 +35,7 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/did"
 )
 
+
 // -------------------------------------------------------------------------------------------------
 // 1) Fixture schema
 // -------------------------------------------------------------------------------------------------
@@ -163,7 +164,7 @@ func TestInterop_EIP191Digest_MatchesExternal(t *testing.T) {
 // and have it verify.
 func TestInterop_VerifyExternalEIP712(t *testing.T) {
 	f := loadInteropFixtures(t)
-	registry := did.DefaultVerifierRegistry(panicResolver{t: t})
+	registry := did.DefaultVerifierRegistry(testDestinationDID, panicResolver{t: t})
 
 	for _, fx := range f.Fixtures {
 		t.Run(fx.Source+"/"+fx.Name, func(t *testing.T) {
@@ -180,7 +181,7 @@ func TestInterop_VerifyExternalEIP712(t *testing.T) {
 
 func TestInterop_VerifyExternalEIP191(t *testing.T) {
 	f := loadInteropFixtures(t)
-	registry := did.DefaultVerifierRegistry(panicResolver{t: t})
+	registry := did.DefaultVerifierRegistry(testDestinationDID, panicResolver{t: t})
 
 	for _, fx := range f.Fixtures {
 		t.Run(fx.Source+"/"+fx.Name, func(t *testing.T) {
@@ -207,7 +208,7 @@ func TestInterop_BitFlipRejection(t *testing.T) {
 	if len(f.Fixtures) == 0 {
 		t.Skip("no fixtures")
 	}
-	registry := did.DefaultVerifierRegistry(panicResolver{t: t})
+	registry := did.DefaultVerifierRegistry(testDestinationDID, panicResolver{t: t})
 	fx := f.Fixtures[0]
 	canonical := mustHex32(t, fx.CanonicalHex)
 	origSig := mustHex(t, fx.EIP712Sig)

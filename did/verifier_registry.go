@@ -12,6 +12,13 @@ KEY ARCHITECTURAL DECISIONS:
       import cycle: did/creation.go imports crypto/signatures for its key
       primitives, so crypto/signatures cannot import did/. The registry
       belongs with the other DID-aware logic.
+    - Destination-scoped: every registry instance is bound to a single
+      exchange DID at construction time. VerifyEntry asserts that an
+      incoming entry's Destination matches this registry's destination
+      before verifying the signature. This is the runtime enforcement
+      of the destination-binding defense — an attacker cannot present a
+      signed entry bound to exchange A to a registry scoped for exchange
+      B, even though the signature is cryptographically valid.
     - Registration is fail-loud (identical pattern to MethodRouter). No
       silent overwriting.
     - SignatureVerifier is a narrow interface with one method. Concrete
@@ -20,33 +27,38 @@ KEY ARCHITECTURAL DECISIONS:
     - The registry accepts both (did, message, sig, algoID) and dispatches
       on the DID method. It does NOT interpret the algoID — that is the
       verifier's job. The registry is pure routing.
-    - Consumers wire DefaultVerifierRegistry() at startup for the standard
-      three-method bundle (pkh, key, web) and extend with additional methods
-      if their deployment needs them.
+    - Consumers wire DefaultVerifierRegistry(destinationDID, resolver) at
+      startup for the standard three-method bundle (pkh, key, web) and
+      extend with additional methods if their deployment needs them.
 
 OVERVIEW:
     Wiring:
-        resolver := did.NewWebDIDResolver(nil)  // for did:web lookups
-        registry := did.DefaultVerifierRegistry(resolver)
-        // or
-        registry := did.NewVerifierRegistry()
-        registry.MustRegister("pkh", did.NewPKHVerifier())
-        registry.MustRegister("key", did.NewKeyVerifier())
-        registry.MustRegister("web", did.NewWebVerifier(resolver))
+        resolver := did.NewWebDIDResolver(nil)
+        registry := did.DefaultVerifierRegistry(
+            "did:web:exchange.example.com",
+            resolver,
+        )
 
-    Verification:
-        err := registry.Verify(did, message, sig, algoID)
+    Low-level verification (legacy callers who already have the hash):
+        err := registry.Verify(signerDID, canonicalHash, sig, algoID)
+
+    High-level verification (recommended — enforces destination binding):
+        err := registry.VerifyEntry(entry, sig, algoID)
 
 KEY DEPENDENCIES:
     - did/method_router.go: ExtractMethod
+    - core/envelope: Entry, Serialize, ValidateDestination
     - SignatureVerifier implementations in did/pkh_verifier.go etc.
 */
 package did
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 )
 
 // -------------------------------------------------------------------------------------------------
@@ -60,6 +72,14 @@ var ErrVerifierNotRegistered = errors.New("did/verifier: no verifier registered 
 // ErrAlgorithmNotSupported is returned by a verifier when it does not support
 // the requested signature algorithm ID.
 var ErrAlgorithmNotSupported = errors.New("did/verifier: algorithm not supported by this DID method")
+
+// ErrDestinationMismatch is returned by VerifyEntry when the entry's
+// Destination does not match the registry's scope. This is the runtime
+// signal of a cross-exchange replay attempt (or a misconfigured caller).
+var ErrDestinationMismatch = errors.New("did/verifier: destination mismatch")
+
+// ErrEntryNil is returned by VerifyEntry when passed a nil entry.
+var ErrEntryNil = errors.New("did/verifier: entry is nil")
 
 // -------------------------------------------------------------------------------------------------
 // 2) SignatureVerifier interface
@@ -88,29 +108,48 @@ type SignatureVerifier interface {
 // 3) VerifierRegistry
 // -------------------------------------------------------------------------------------------------
 
-// VerifierRegistry dispatches verification by DID method.
+// VerifierRegistry dispatches verification by DID method, scoped to a
+// single destination exchange identity.
 type VerifierRegistry struct {
-	mu        sync.RWMutex
-	verifiers map[string]SignatureVerifier
+	destination string
+	mu          sync.RWMutex
+	verifiers   map[string]SignatureVerifier
 }
 
-// NewVerifierRegistry creates an empty registry.
-func NewVerifierRegistry() *VerifierRegistry {
-	return &VerifierRegistry{verifiers: make(map[string]SignatureVerifier)}
+// NewVerifierRegistry creates an empty registry scoped to a destination DID.
+// Panics if destinationDID fails envelope.ValidateDestination — a registry
+// without a valid destination cannot enforce its security contract, so
+// construction with a bad destination is a programming error, not a
+// runtime condition to recover from.
+func NewVerifierRegistry(destinationDID string) *VerifierRegistry {
+	if err := envelope.ValidateDestination(destinationDID); err != nil {
+		panic(fmt.Sprintf("did/verifier: invalid destination DID: %v", err))
+	}
+	return &VerifierRegistry{
+		destination: destinationDID,
+		verifiers:   make(map[string]SignatureVerifier),
+	}
 }
 
-// DefaultVerifierRegistry returns a registry wired with the three built-in
-// verifiers: pkh, key, and web. The web verifier requires a resolver for
-// fetching remote DID documents.
-func DefaultVerifierRegistry(webResolver DIDResolver) *VerifierRegistry {
+// DefaultVerifierRegistry returns a registry scoped to destinationDID and
+// wired with the three built-in verifiers: pkh, key, and web. The web
+// verifier requires a resolver for fetching remote DID documents.
+func DefaultVerifierRegistry(destinationDID string, webResolver DIDResolver) *VerifierRegistry {
 	if webResolver == nil {
 		panic("did/verifier: DefaultVerifierRegistry requires a non-nil web resolver")
 	}
-	r := NewVerifierRegistry()
+	r := NewVerifierRegistry(destinationDID)
 	r.MustRegister("pkh", NewPKHVerifier())
 	r.MustRegister("key", NewKeyVerifier())
 	r.MustRegister("web", NewWebVerifier(webResolver))
 	return r
+}
+
+// Destination returns the DID this registry is scoped to. Diagnostic
+// accessor — production code should treat this as opaque except when
+// emitting audit log entries that need to record the verifier scope.
+func (r *VerifierRegistry) Destination() string {
+	return r.destination
 }
 
 // Register installs a verifier for the given DID method. Returns an error if
@@ -164,6 +203,13 @@ func (r *VerifierRegistry) Methods() []string {
 }
 
 // Verify dispatches to the verifier registered for the DID's method.
+//
+// Low-level primitive: takes a canonical hash (message) and a signature,
+// and asks the method-specific verifier to check them. Does NOT check
+// destination binding — that is VerifyEntry's job. Callers who already
+// have a canonical hash in hand (e.g., SIWE signed-request flow, test
+// harnesses that forge known hashes) use this method; callers with an
+// *envelope.Entry should use VerifyEntry instead.
 func (r *VerifierRegistry) Verify(did string, message []byte, sig []byte, algoID uint16) error {
 	method, err := ExtractMethod(did)
 	if err != nil {
@@ -176,4 +222,38 @@ func (r *VerifierRegistry) Verify(did string, message []byte, sig []byte, algoID
 		return fmt.Errorf("%w: %q", ErrVerifierNotRegistered, method)
 	}
 	return v.Verify(did, message, sig, algoID)
+}
+
+// VerifyEntry verifies an *envelope.Entry end-to-end against this
+// registry's destination scope. The steps are:
+//
+//  1. Check entry is non-nil.
+//  2. Check entry.Header.Destination matches r.destination. If not, return
+//     ErrDestinationMismatch — this is the cross-exchange replay defense.
+//  3. Compute the canonical hash as sha256(envelope.Serialize(entry)).
+//  4. Dispatch to the DID-method-specific verifier for entry.Header.SignerDID.
+//
+// Callers who have an entry plus its detached signature and algorithm ID
+// should use this method. It is strictly preferred over the low-level
+// Verify for entry-signature verification, because it enforces the
+// destination-binding contract.
+func (r *VerifierRegistry) VerifyEntry(entry *envelope.Entry, sig []byte, algoID uint16) error {
+	if entry == nil {
+		return ErrEntryNil
+	}
+	if entry.Header.Destination != r.destination {
+		return fmt.Errorf(
+			"%w: entry bound to %q, registry is scoped to %q",
+			ErrDestinationMismatch,
+			entry.Header.Destination,
+			r.destination,
+		)
+	}
+	// Canonical hash: sha256 over the canonical wire bytes. By construction,
+	// the canonical bytes include Destination (serialize.go writes it
+	// after SignerDID), so the hash the signer signed cannot be
+	// reconstructed against a different destination.
+	canonical := envelope.Serialize(entry)
+	hash := sha256.Sum256(canonical)
+	return r.Verify(entry.Header.SignerDID, hash[:], sig, algoID)
 }

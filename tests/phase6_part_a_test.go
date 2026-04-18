@@ -43,6 +43,7 @@ func p6setLeaf(t *testing.T, store *smt.InMemoryLeafStore, p types.LogPosition) 
 func p6storeDelegation(t *testing.T, fetcher *MockFetcher, store *smt.InMemoryLeafStore, p types.LogPosition, signerDID, delegateDID string) {
 	t.Helper()
 	entry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     signerDID,
 		AuthorityPath: sameSigner(),
 		DelegateDID:   &delegateDID,
@@ -66,6 +67,7 @@ func padSecretKeyTo32(b []byte) []byte {
 
 func TestBuild_RootEntity_Valid(t *testing.T) {
 	entry, err := builder.BuildRootEntity(builder.RootEntityParams{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:alice",
 		Payload:   []byte("entity-data"),
 		EventTime: 1700000000,
@@ -88,7 +90,7 @@ func TestBuild_RootEntity_Valid(t *testing.T) {
 }
 
 func TestBuild_RootEntity_MissingSignerDID_Error(t *testing.T) {
-	_, err := builder.BuildRootEntity(builder.RootEntityParams{Payload: []byte("x")})
+	_, err := builder.BuildRootEntity(builder.RootEntityParams{Destination: testDestinationDID, Payload: []byte("x")})
 	if !errors.Is(err, builder.ErrEmptySignerDID) {
 		t.Fatalf("expected ErrEmptySignerDID, got: %v", err)
 	}
@@ -97,6 +99,7 @@ func TestBuild_RootEntity_MissingSignerDID_Error(t *testing.T) {
 func TestBuild_Amendment_Valid(t *testing.T) {
 	target := pos(1)
 	entry, err := builder.BuildAmendment(builder.AmendmentParams{
+		Destination: testDestinationDID,
 		SignerDID:  "did:example:alice",
 		TargetRoot: target,
 		Payload:    []byte("amended"),
@@ -115,6 +118,7 @@ func TestBuild_Amendment_Valid(t *testing.T) {
 
 func TestBuild_Amendment_MissingTargetRoot_Error(t *testing.T) {
 	_, err := builder.BuildAmendment(builder.AmendmentParams{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:alice",
 	})
 	if !errors.Is(err, builder.ErrMissingTargetRoot) {
@@ -124,6 +128,7 @@ func TestBuild_Amendment_MissingTargetRoot_Error(t *testing.T) {
 
 func TestBuild_Delegation_Valid(t *testing.T) {
 	entry, err := builder.BuildDelegation(builder.DelegationParams{
+		Destination: testDestinationDID,
 		SignerDID:   "did:example:owner",
 		DelegateDID: "did:example:delegate",
 		EventTime:   1700000002,
@@ -138,6 +143,7 @@ func TestBuild_Delegation_Valid(t *testing.T) {
 
 func TestBuild_Delegation_MissingDelegateDID_Error(t *testing.T) {
 	_, err := builder.BuildDelegation(builder.DelegationParams{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:owner",
 	})
 	if !errors.Is(err, builder.ErrMissingDelegateDID) {
@@ -147,6 +153,7 @@ func TestBuild_Delegation_MissingDelegateDID_Error(t *testing.T) {
 
 func TestBuild_Succession_Valid(t *testing.T) {
 	entry, err := builder.BuildSuccession(builder.SuccessionParams{
+		Destination: testDestinationDID,
 		SignerDID:  "did:example:alice",
 		TargetRoot: pos(1),
 		Payload:    []byte("succession"),
@@ -161,6 +168,7 @@ func TestBuild_Succession_Valid(t *testing.T) {
 
 func TestBuild_Enforcement_Valid(t *testing.T) {
 	entry, err := builder.BuildEnforcement(builder.EnforcementParams{
+		Destination: testDestinationDID,
 		SignerDID:    "did:example:judge",
 		TargetRoot:   pos(1),
 		ScopePointer: pos(2),
@@ -180,6 +188,7 @@ func TestBuild_Enforcement_Valid(t *testing.T) {
 
 func TestBuild_Enforcement_MissingScopePointer_Error(t *testing.T) {
 	_, err := builder.BuildEnforcement(builder.EnforcementParams{
+		Destination: testDestinationDID,
 		SignerDID:  "did:example:judge",
 		TargetRoot: pos(1),
 	})
@@ -190,6 +199,7 @@ func TestBuild_Enforcement_MissingScopePointer_Error(t *testing.T) {
 
 func TestBuild_ScopeCreation_Valid(t *testing.T) {
 	entry, err := builder.BuildScopeCreation(builder.ScopeCreationParams{
+		Destination: testDestinationDID,
 		SignerDID:    "did:example:admin",
 		AuthoritySet: map[string]struct{}{"did:example:admin": {}, "did:example:judge": {}},
 		Payload:      []byte("scope"),
@@ -204,6 +214,7 @@ func TestBuild_ScopeCreation_Valid(t *testing.T) {
 
 func TestBuild_ScopeCreation_EmptyAuthoritySet_Error(t *testing.T) {
 	_, err := builder.BuildScopeCreation(builder.ScopeCreationParams{
+		Destination: testDestinationDID,
 		SignerDID:    "did:example:admin",
 		AuthoritySet: map[string]struct{}{},
 	})
@@ -215,6 +226,7 @@ func TestBuild_ScopeCreation_EmptyAuthoritySet_Error(t *testing.T) {
 func TestBuild_ScopeAmendment_Valid(t *testing.T) {
 	scopePos := pos(1)
 	entry, err := builder.BuildScopeAmendment(builder.ScopeAmendmentParams{
+		Destination: testDestinationDID,
 		SignerDID:       "did:example:admin",
 		TargetRoot:      scopePos,
 		ScopePointer:    scopePos,
@@ -233,6 +245,7 @@ func TestBuild_ScopeAmendment_Valid(t *testing.T) {
 
 func TestBuild_Commentary_Valid_ZeroSMTImpact(t *testing.T) {
 	entry, err := builder.BuildCommentary(builder.CommentaryParams{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:witness",
 		Payload:   []byte("attestation"),
 	})
@@ -250,6 +263,7 @@ func TestBuild_Commentary_Valid_ZeroSMTImpact(t *testing.T) {
 func TestBuild_Cosignature_Valid(t *testing.T) {
 	cosigOf := pos(42)
 	entry, err := builder.BuildCosignature(builder.CosignatureParams{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:cosigner",
 		CosignatureOf: cosigOf,
 	})
@@ -263,6 +277,7 @@ func TestBuild_Cosignature_Valid(t *testing.T) {
 
 func TestBuild_Cosignature_MissingCosignatureOf_Error(t *testing.T) {
 	_, err := builder.BuildCosignature(builder.CosignatureParams{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:cosigner",
 	})
 	if !errors.Is(err, builder.ErrMissingCosignatureOf) {
@@ -272,6 +287,7 @@ func TestBuild_Cosignature_MissingCosignatureOf_Error(t *testing.T) {
 
 func TestBuild_KeyRotation_Valid(t *testing.T) {
 	entry, err := builder.BuildKeyRotation(builder.KeyRotationParams{
+		Destination: testDestinationDID,
 		SignerDID:    "did:example:holder",
 		TargetRoot:   pos(1),
 		NewPublicKey: []byte{0x04, 0x01, 0x02},
@@ -289,6 +305,7 @@ func TestBuild_KeyRotation_Valid(t *testing.T) {
 
 func TestBuild_KeyPrecommit_Valid(t *testing.T) {
 	entry, err := builder.BuildKeyPrecommit(builder.KeyPrecommitParams{
+		Destination: testDestinationDID,
 		SignerDID:   "did:example:holder",
 		TargetRoot:  pos(1),
 		NextKeyHash: "abcdef0123456789",
@@ -303,6 +320,7 @@ func TestBuild_KeyPrecommit_Valid(t *testing.T) {
 
 func TestBuild_PathBEntry_Valid(t *testing.T) {
 	entry, err := builder.BuildPathBEntry(builder.PathBParams{
+		Destination: testDestinationDID,
 		SignerDID:          "did:example:delegate",
 		TargetRoot:         pos(1),
 		DelegationPointers: []types.LogPosition{pos(10)},
@@ -321,6 +339,7 @@ func TestBuild_PathBEntry_Valid(t *testing.T) {
 
 func TestBuild_Revocation_Valid(t *testing.T) {
 	entry, err := builder.BuildRevocation(builder.RevocationParams{
+		Destination: testDestinationDID,
 		SignerDID:  "did:example:owner",
 		TargetRoot: pos(1),
 		Payload:    []byte("revoke-delegation"),
@@ -339,6 +358,7 @@ func TestBuild_Revocation_Valid(t *testing.T) {
 
 func TestBuild_Revocation_MissingSignerDID_Error(t *testing.T) {
 	_, err := builder.BuildRevocation(builder.RevocationParams{
+		Destination: testDestinationDID,
 		TargetRoot: pos(1),
 	})
 	if !errors.Is(err, builder.ErrEmptySignerDID) {
@@ -348,6 +368,7 @@ func TestBuild_Revocation_MissingSignerDID_Error(t *testing.T) {
 
 func TestBuild_Revocation_MissingTargetRoot_Error(t *testing.T) {
 	_, err := builder.BuildRevocation(builder.RevocationParams{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:owner",
 	})
 	if !errors.Is(err, builder.ErrMissingTargetRoot) {
@@ -357,6 +378,7 @@ func TestBuild_Revocation_MissingTargetRoot_Error(t *testing.T) {
 
 func TestBuild_ScopeRemoval_Valid(t *testing.T) {
 	entry, err := builder.BuildScopeRemoval(builder.ScopeRemovalParams{
+		Destination: testDestinationDID,
 		SignerDID:    "did:example:judge",
 		ScopePointer: pos(2),
 		TargetRoot:   pos(1),
@@ -378,6 +400,7 @@ func TestBuild_ScopeRemoval_Valid(t *testing.T) {
 
 func TestBuild_ScopeRemoval_MissingScopePointer_Error(t *testing.T) {
 	_, err := builder.BuildScopeRemoval(builder.ScopeRemovalParams{
+		Destination: testDestinationDID,
 		SignerDID:  "did:example:judge",
 		TargetRoot: pos(1),
 	})
@@ -388,6 +411,7 @@ func TestBuild_ScopeRemoval_MissingScopePointer_Error(t *testing.T) {
 
 func TestBuild_RecoveryRequest_Valid(t *testing.T) {
 	entry, err := builder.BuildRecoveryRequest(builder.RecoveryRequestParams{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:recovery-agent",
 		Payload:   []byte("recovery-params"),
 		EventTime: 1700000012,
@@ -408,6 +432,7 @@ func TestBuild_RecoveryRequest_Valid(t *testing.T) {
 
 func TestBuild_AnchorEntry_Valid(t *testing.T) {
 	entry, err := builder.BuildAnchorEntry(builder.AnchorParams{
+		Destination: testDestinationDID,
 		SignerDID:    "did:example:operator",
 		SourceLogDID: "did:ortholog:foreign-log",
 		TreeHeadRef:  "abcdef0123456789",
@@ -433,6 +458,7 @@ func TestBuild_AnchorEntry_Valid(t *testing.T) {
 
 func TestBuild_AnchorEntry_MissingSourceLogDID_Error(t *testing.T) {
 	_, err := builder.BuildAnchorEntry(builder.AnchorParams{
+		Destination: testDestinationDID,
 		SignerDID:   "did:example:operator",
 		TreeHeadRef: "abcdef",
 	})
@@ -443,6 +469,7 @@ func TestBuild_AnchorEntry_MissingSourceLogDID_Error(t *testing.T) {
 
 func TestBuild_MirrorEntry_Valid(t *testing.T) {
 	entry, err := builder.BuildMirrorEntry(builder.MirrorParams{
+		Destination: testDestinationDID,
 		SignerDID:    "did:example:relay",
 		SourceLogDID: "did:ortholog:foreign-court",
 		Payload:      []byte("mirror-proof"),
@@ -461,6 +488,7 @@ func TestBuild_MirrorEntry_Valid(t *testing.T) {
 
 func TestBuild_MirrorEntry_MissingSourceLogDID_Error(t *testing.T) {
 	_, err := builder.BuildMirrorEntry(builder.MirrorParams{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:relay",
 		Payload:   []byte("mirror-proof"),
 	})
@@ -471,6 +499,7 @@ func TestBuild_MirrorEntry_MissingSourceLogDID_Error(t *testing.T) {
 
 func TestBuild_SchemaEntry_Valid(t *testing.T) {
 	entry, err := builder.BuildSchemaEntry(builder.SchemaEntryParams{
+		Destination: testDestinationDID,
 		SignerDID:             "did:example:schema-author",
 		Payload:               []byte(`{"activation_delay":100}`),
 		CommutativeOperations: []uint32{1, 2},
@@ -497,6 +526,7 @@ func TestAssemblePathB_ThreeDeep_Valid(t *testing.T) {
 
 	rootPos := pos(1)
 	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -540,6 +570,7 @@ func TestAssemblePathB_SingleHop_Valid(t *testing.T) {
 
 	rootPos := pos(1)
 	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -569,6 +600,7 @@ func TestAssemblePathB_ExceedsMaxDepth_Error(t *testing.T) {
 
 	rootPos := pos(1)
 	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -599,6 +631,7 @@ func TestAssemblePathB_CycleDetected_Error(t *testing.T) {
 
 	rootPos := pos(1)
 	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -627,6 +660,7 @@ func TestAssemblePathB_DeadDelegation_MarkedNotLive(t *testing.T) {
 
 	rootPos := pos(1)
 	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -634,6 +668,7 @@ func TestAssemblePathB_DeadDelegation_MarkedNotLive(t *testing.T) {
 
 	d1 := pos(10)
 	delegEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   ptrTo("did:example:delegate"),
@@ -707,6 +742,7 @@ func TestValidateChainLiveness_FirstDeadLink(t *testing.T) {
 
 func TestClassify_RootEntity_NewLeaf(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:alice",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -734,6 +770,7 @@ func TestClassify_Amendment_PathA(t *testing.T) {
 
 	rootPos := pos(1)
 	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:alice",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -741,6 +778,7 @@ func TestClassify_Amendment_PathA(t *testing.T) {
 	p6setLeaf(t, store, rootPos)
 
 	amendment, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:alice",
 		TargetRoot:    ptrTo(rootPos),
 		AuthorityPath: sameSigner(),
@@ -767,6 +805,7 @@ func TestClassify_DelegatedFiling_PathB(t *testing.T) {
 
 	rootPos := pos(1)
 	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -777,6 +816,7 @@ func TestClassify_DelegatedFiling_PathB(t *testing.T) {
 	p6storeDelegation(t, fetcher, store, delegPos, "did:example:owner", "did:example:delegate")
 
 	pathBEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:          "did:example:delegate",
 		TargetRoot:         ptrTo(rootPos),
 		AuthorityPath:      delegation(),
@@ -807,6 +847,7 @@ func TestClassify_Enforcement_PathC(t *testing.T) {
 
 	entityPos := pos(1)
 	entityEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:entity",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -815,6 +856,7 @@ func TestClassify_Enforcement_PathC(t *testing.T) {
 
 	scopePos := pos(2)
 	scopeEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:judge",
 		AuthorityPath: sameSigner(),
 		AuthoritySet:  map[string]struct{}{"did:example:judge": {}},
@@ -823,6 +865,7 @@ func TestClassify_Enforcement_PathC(t *testing.T) {
 	p6setLeaf(t, store, scopePos)
 
 	enforcement, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -846,6 +889,7 @@ func TestClassify_Enforcement_PathC(t *testing.T) {
 
 func TestClassify_Commentary_ZeroImpact(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:witness",
 	}, []byte("attestation"))
 
@@ -869,6 +913,7 @@ func TestClassify_Commentary_ZeroImpact(t *testing.T) {
 
 func TestClassify_ForeignTarget_PathD(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:alice",
 		TargetRoot:    ptrTo(foreignPos(1)),
 		AuthorityPath: sameSigner(),
@@ -892,6 +937,7 @@ func TestClassify_RevokedDelegation_PathD(t *testing.T) {
 
 	rootPos := pos(1)
 	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -900,6 +946,7 @@ func TestClassify_RevokedDelegation_PathD(t *testing.T) {
 
 	delegPos := pos(10)
 	delegEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   ptrTo("did:example:delegate"),
@@ -909,6 +956,7 @@ func TestClassify_RevokedDelegation_PathD(t *testing.T) {
 	store.Set(key, types.SMTLeaf{Key: key, OriginTip: pos(99), AuthorityTip: delegPos})
 
 	pathBEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:          "did:example:delegate",
 		TargetRoot:         ptrTo(rootPos),
 		AuthorityPath:      delegation(),
@@ -933,6 +981,7 @@ func TestClassify_EvidenceCapExceeded_Error(t *testing.T) {
 
 	rootPos := pos(1)
 	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:alice",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -949,6 +998,7 @@ func TestClassify_EvidenceCapExceeded_Error(t *testing.T) {
 	ap := envelope.AuthoritySameSigner
 	entry := &envelope.Entry{
 		Header: envelope.ControlHeader{
+			Destination: testDestinationDID,
 			ProtocolVersion:  5,
 			SignerDID:        "did:example:alice",
 			TargetRoot:       ptrTo(rootPos),
@@ -976,6 +1026,7 @@ func TestClassify_SnapshotExempt_PathC(t *testing.T) {
 
 	entityPos := pos(1)
 	entityEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:entity",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -986,6 +1037,7 @@ func TestClassify_SnapshotExempt_PathC(t *testing.T) {
 
 	scopePos := pos(2)
 	scopeEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:judge",
 		AuthorityPath: sameSigner(),
 		AuthoritySet:  map[string]struct{}{"did:example:judge": {}},
@@ -998,6 +1050,7 @@ func TestClassify_SnapshotExempt_PathC(t *testing.T) {
 		pointers[i] = pos(uint64(100 + i))
 	}
 	snapshot, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:        "did:example:judge",
 		TargetRoot:       ptrTo(entityPos),
 		AuthorityPath:    scopeAuth(),
@@ -1024,6 +1077,7 @@ func TestClassifyBatch_MixedPaths(t *testing.T) {
 
 	rootPos := pos(1)
 	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:alice",
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -1031,14 +1085,17 @@ func TestClassifyBatch_MixedPaths(t *testing.T) {
 	p6setLeaf(t, store, rootPos)
 
 	commentary, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:witness",
 	}, nil)
 	amendment, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:alice",
 		TargetRoot:    ptrTo(rootPos),
 		AuthorityPath: sameSigner(),
 	}, nil)
 	foreign, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:bob",
 		TargetRoot:    ptrTo(foreignPos(99)),
 		AuthorityPath: sameSigner(),

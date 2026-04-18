@@ -32,6 +32,7 @@ func TestV5_CanonicalHashDeterministic(t *testing.T) {
 	// determinism property — every other protocol invariant
 	// (replayability, fraud proofs, SMT identity) depends on it.
 	header := envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:test:determinism",
 		AuthorityPath: sameSigner(),
 		EventTime:     1700000000,
@@ -61,6 +62,7 @@ func TestV5_RoundTripPreservesAllFields(t *testing.T) {
 	eventTime := int64(1700000000)
 
 	entry, err := envelope.NewEntry(envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:test:roundtrip",
 		TargetRoot:    &targetRoot,
 		AuthorityPath: sameSigner(),
@@ -113,6 +115,7 @@ func TestV5_AuthoritySkipIsolatedFromAdmissionProof(t *testing.T) {
 	}
 
 	entry, err := envelope.NewEntry(envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:test:isolation",
 		EventTime: 1700000000,
 		AdmissionProof: &envelope.AdmissionProofBody{
@@ -166,6 +169,7 @@ func TestV5_OversizedPayloadRejected(t *testing.T) {
 	// its post-serialize size check before returning the entry to the caller.
 	oversized := make([]byte, envelope.MaxCanonicalBytes+1)
 	_, err := envelope.NewEntry(envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:test",
 		EventTime: 1700000000,
 	}, oversized)
@@ -179,6 +183,7 @@ func TestV5_EmptySignerDIDRejected(t *testing.T) {
 	// Every entry requires a Signer_DID. NewEntry refuses empty strings
 	// to prevent unsigned or ambiguously-attributed entries entering the log.
 	_, err := envelope.NewEntry(envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "",
 		EventTime: 1700000000,
 	}, nil)
@@ -192,6 +197,7 @@ func TestV5_NonASCIISignerDIDRejected(t *testing.T) {
 	// Decision 15: SDK enforces ASCII-only DIDs in strict mode.
 	// The 0x80 byte is the first invalid high-bit character.
 	_, err := envelope.NewEntry(envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:test:\x80",
 		EventTime: 1700000000,
 	}, nil)
@@ -210,6 +216,7 @@ func TestV5_TooManyEvidencePointers(t *testing.T) {
 		pointers[i] = types.LogPosition{LogDID: "did:web:evidence", Sequence: uint64(i + 1)}
 	}
 	_, err := envelope.NewEntry(envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:        "did:test:evcap",
 		EventTime:        1700000000,
 		EvidencePointers: pointers,

@@ -25,6 +25,11 @@ Wave 2: the hardcoded ⌈2N/3⌉ in EvaluateArbitration is now schema-driven
 via SchemaParams.OverrideThreshold. Default (missing field) remains
 two-thirds, preserving all pre-Wave-2 behavior.
 
+Destination binding: every public Params struct that produces an entry
+carries a Destination field (DID of the target exchange). The lifecycle
+validates it via envelope.ValidateDestination and threads it into every
+builder.*Params literal so the canonical hash commits to the destination.
+
 Consumed by:
   - judicial-network/migration/ungraceful.go → InitiateRecovery → CollectShares → ExecuteRecovery
   - Exchange migration tooling
@@ -64,6 +69,10 @@ var (
 
 // InitiateRecoveryParams configures a recovery request.
 type InitiateRecoveryParams struct {
+	// Destination is the DID of the target exchange for the produced
+	// entry. Required. Validated by envelope.ValidateDestination.
+	Destination string
+
 	// NewExchangeDID is the DID of the exchange initiating recovery.
 	NewExchangeDID string
 
@@ -96,6 +105,9 @@ type InitiateRecoveryResult struct {
 //
 // Returns the entry for the caller to submit to the operator.
 func InitiateRecovery(p InitiateRecoveryParams) (*InitiateRecoveryResult, error) {
+	if err := envelope.ValidateDestination(p.Destination); err != nil {
+		return nil, fmt.Errorf("lifecycle/recovery: %w", err)
+	}
 	if p.NewExchangeDID == "" {
 		return nil, fmt.Errorf("lifecycle/recovery: empty new exchange DID")
 	}
@@ -116,9 +128,10 @@ func InitiateRecovery(p InitiateRecoveryParams) (*InitiateRecoveryResult, error)
 	}
 
 	entry, err := builder.BuildRecoveryRequest(builder.RecoveryRequestParams{
-		SignerDID: p.NewExchangeDID,
-		Payload:   mustMarshalJSON(payload),
-		EventTime: eventTime,
+		Destination: p.Destination,
+		SignerDID:   p.NewExchangeDID,
+		Payload:     mustMarshalJSON(payload),
+		EventTime:   eventTime,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("lifecycle/recovery: build request: %w", err)
@@ -218,6 +231,10 @@ func CollectShares(p CollectSharesParams) (*CollectedShares, error) {
 
 // ExecuteRecoveryParams configures key reconstruction and re-encryption.
 type ExecuteRecoveryParams struct {
+	// Destination is the DID of the target exchange for any succession
+	// entry produced. Required. Validated by envelope.ValidateDestination.
+	Destination string
+
 	// Shares are the validated shares from CollectShares.
 	Shares []escrow.Share
 
@@ -282,6 +299,9 @@ type RecoveryResult struct {
 //  4. Build succession entry for the holder's entity
 //  5. Zero reconstructed key material
 func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
+	if err := envelope.ValidateDestination(p.Destination); err != nil {
+		return nil, fmt.Errorf("lifecycle/recovery: %w", err)
+	}
 	if len(p.Shares) == 0 {
 		return nil, ErrInsufficientShares
 	}
@@ -338,6 +358,7 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 		}
 
 		succEntry, err := builder.BuildSuccession(builder.SuccessionParams{
+			Destination:  p.Destination,
 			SignerDID:    p.NewExchangeDID,
 			TargetRoot:   *p.TargetRoot,
 			NewSignerDID: p.NewExchangeDID,

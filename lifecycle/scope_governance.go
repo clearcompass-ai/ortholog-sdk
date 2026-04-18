@@ -18,6 +18,11 @@ The time-lock mechanism:
   missed SLA attestations, builder-rejected unauthorized actions,
   escrow node fire drill non-response within SLA window).
 
+Destination binding: every public *Params struct that produces an entry
+carries a Destination field (DID of the target exchange). Lifecycle
+validates it via envelope.ValidateDestination and threads it into every
+builder.*Params literal so the canonical hash commits to the destination.
+
 Consumed by:
   - judicial-network/consortium/scope_governance.go
   - Domain governance tooling
@@ -136,6 +141,10 @@ func (pt ProposalType) String() string {
 
 // AmendmentProposalParams configures a scope amendment proposal.
 type AmendmentProposalParams struct {
+	// Destination is the DID of the target exchange. Required.
+	// Validated by envelope.ValidateDestination.
+	Destination string
+
 	// ProposerDID is the scope authority proposing the change.
 	ProposerDID string
 
@@ -178,6 +187,9 @@ type AmendmentProposal struct {
 // The proposal does not update the SMT (Target_Root is null, no
 // Authority_Path). It's a commentary entry announcing intent.
 func ProposeAmendment(p AmendmentProposalParams) (*AmendmentProposal, error) {
+	if err := envelope.ValidateDestination(p.Destination); err != nil {
+		return nil, fmt.Errorf("lifecycle/scope: %w", err)
+	}
 	if p.ProposerDID == "" {
 		return nil, fmt.Errorf("lifecycle/scope: empty proposer DID")
 	}
@@ -211,9 +223,10 @@ func ProposeAmendment(p AmendmentProposalParams) (*AmendmentProposal, error) {
 	}
 
 	entry, err := builder.BuildCommentary(builder.CommentaryParams{
-		SignerDID: p.ProposerDID,
-		Payload:   finalPayload,
-		EventTime: eventTime,
+		Destination: p.Destination,
+		SignerDID:   p.ProposerDID,
+		Payload:     finalPayload,
+		EventTime:   eventTime,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("lifecycle/scope: build proposal: %w", err)
@@ -362,6 +375,10 @@ func CollectApprovals(p CollectApprovalsParams) (*ApprovalStatus, error) {
 
 // ExecuteAmendmentParams configures the amendment execution entry.
 type ExecuteAmendmentParams struct {
+	// Destination is the DID of the target exchange. Required.
+	// Validated by envelope.ValidateDestination.
+	Destination string
+
 	// ExecutorDID is any authority executing the amendment.
 	ExecutorDID string
 
@@ -396,6 +413,9 @@ type ExecuteAmendmentParams struct {
 // ScopePointer == TargetRoot AND AuthoritySet present → OriginTip update
 // (membership change, not enforcement).
 func ExecuteAmendment(p ExecuteAmendmentParams) (*envelope.Entry, error) {
+	if err := envelope.ValidateDestination(p.Destination); err != nil {
+		return nil, fmt.Errorf("lifecycle/scope: %w", err)
+	}
 	if p.ExecutorDID == "" {
 		return nil, fmt.Errorf("lifecycle/scope: empty executor DID")
 	}
@@ -412,6 +432,7 @@ func ExecuteAmendment(p ExecuteAmendmentParams) (*envelope.Entry, error) {
 	}
 
 	return builder.BuildScopeAmendment(builder.ScopeAmendmentParams{
+		Destination:      p.Destination,
 		SignerDID:        p.ExecutorDID,
 		TargetRoot:       p.ScopePos,
 		ScopePointer:     p.ScopePos,
@@ -430,6 +451,10 @@ func ExecuteAmendment(p ExecuteAmendmentParams) (*envelope.Entry, error) {
 
 // RemovalParams configures an N-1 scope removal execution.
 type RemovalParams struct {
+	// Destination is the DID of the target exchange. Required.
+	// Validated by envelope.ValidateDestination.
+	Destination string
+
 	// ExecutorDID is any authority (other than the target) executing removal.
 	ExecutorDID string
 
@@ -482,6 +507,9 @@ type RemovalExecution struct {
 //  - Can sign Path C actions
 //  - Can publish contest entries
 func ExecuteRemoval(p RemovalParams) (*RemovalExecution, error) {
+	if err := envelope.ValidateDestination(p.Destination); err != nil {
+		return nil, fmt.Errorf("lifecycle/scope: %w", err)
+	}
 	if p.ExecutorDID == "" {
 		return nil, fmt.Errorf("lifecycle/scope: empty executor DID")
 	}
@@ -504,6 +532,7 @@ func ExecuteRemoval(p RemovalParams) (*RemovalExecution, error) {
 	}
 
 	removalEntry, err := builder.BuildScopeRemoval(builder.ScopeRemovalParams{
+		Destination:    p.Destination,
 		SignerDID:      p.ExecutorDID,
 		TargetRoot:     p.ScopePos,
 		ScopePointer:   p.ScopePos,
@@ -539,6 +568,10 @@ func ExecuteRemoval(p RemovalParams) (*RemovalExecution, error) {
 
 // ActivateRemovalParams configures the activation entry for a removal.
 type ActivateRemovalParams struct {
+	// Destination is the DID of the target exchange. Required.
+	// Validated by envelope.ValidateDestination.
+	Destination string
+
 	// ExecutorDID is the authority publishing the activation.
 	ExecutorDID string
 
@@ -572,6 +605,9 @@ type ActivateRemovalParams struct {
 // The builder processes this as Path C with AuthoritySet present →
 // OriginTip update (the removal activation changes membership).
 func ActivateRemoval(p ActivateRemovalParams) (*envelope.Entry, error) {
+	if err := envelope.ValidateDestination(p.Destination); err != nil {
+		return nil, fmt.Errorf("lifecycle/scope: %w", err)
+	}
 	if p.ExecutorDID == "" {
 		return nil, fmt.Errorf("lifecycle/scope: empty executor DID")
 	}
@@ -582,6 +618,7 @@ func ActivateRemoval(p ActivateRemovalParams) (*envelope.Entry, error) {
 	}
 
 	return builder.BuildScopeAmendment(builder.ScopeAmendmentParams{
+		Destination:      p.Destination,
 		SignerDID:        p.ExecutorDID,
 		TargetRoot:       p.ScopePos,
 		ScopePointer:     p.ScopePos,
@@ -602,11 +639,25 @@ func ActivateRemoval(p ActivateRemovalParams) (*envelope.Entry, error) {
 
 // BuildApprovalCosignature creates a cosignature entry for a proposal.
 // Convenience wrapper around builder.BuildCosignature.
-func BuildApprovalCosignature(signerDID string, proposalPos types.LogPosition, eventTime int64) (*envelope.Entry, error) {
+//
+// SIGNATURE CHANGE: now takes destination as a required argument (second
+// parameter). Every caller must supply the destination DID of the target
+// exchange. The destination is validated via envelope.ValidateDestination
+// and threaded into builder.CosignatureParams.
+func BuildApprovalCosignature(
+	signerDID string,
+	destination string,
+	proposalPos types.LogPosition,
+	eventTime int64,
+) (*envelope.Entry, error) {
+	if err := envelope.ValidateDestination(destination); err != nil {
+		return nil, fmt.Errorf("lifecycle/scope: %w", err)
+	}
 	if eventTime == 0 {
 		eventTime = time.Now().UTC().UnixMicro()
 	}
 	return builder.BuildCosignature(builder.CosignatureParams{
+		Destination:   destination,
 		SignerDID:     signerDID,
 		CosignatureOf: proposalPos,
 		EventTime:     eventTime,

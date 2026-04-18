@@ -16,6 +16,12 @@ officers/cases/parties triple) composes this function — a domain
 repo calls ProvisionSingleLog three times with per-log configuration
 and assembles the results into a domain-specific structure.
 
+Destination binding: SingleLogConfig carries a Destination field (DID of
+the target exchange). Every entry produced (scope creation, each
+delegation, each schema) is bound to this destination via the canonical
+hash. Cross-exchange replay of provisioning entries is cryptographically
+impossible.
+
 Consumed by:
   - Domain onboarding scripts (single-log)
   - Domain-specific multi-log provisioners (composing this for each log)
@@ -101,6 +107,11 @@ func (lp *LogProvision) AllEntries() []*envelope.Entry {
 // This creates a new SMT leaf with both Origin_Tip and Authority_Tip
 // pointing to itself.
 type SingleLogConfig struct {
+	// Destination is the DID of the target exchange. Required.
+	// Validated by envelope.ValidateDestination. Threaded into every
+	// provisioning entry (scope creation, delegations, schemas).
+	Destination string
+
 	// SignerDID is the creator of the scope entity and (conventionally)
 	// the first member of AuthoritySet.
 	SignerDID string
@@ -153,6 +164,9 @@ type SingleLogConfig struct {
 // submits them to the operator's API. The operator's builder processes
 // them through ProcessBatch, creating the initial SMT leaves.
 func ProvisionSingleLog(cfg SingleLogConfig) (*LogProvision, error) {
+	if err := envelope.ValidateDestination(cfg.Destination); err != nil {
+		return nil, fmt.Errorf("lifecycle/provision: %w", err)
+	}
 	if cfg.SignerDID == "" {
 		return nil, fmt.Errorf("lifecycle/provision: empty signer DID")
 	}
@@ -179,6 +193,7 @@ func ProvisionSingleLog(cfg SingleLogConfig) (*LogProvision, error) {
 
 	// 1. Scope entity.
 	scopeEntry, err := builder.BuildScopeCreation(builder.ScopeCreationParams{
+		Destination:  cfg.Destination,
 		SignerDID:    cfg.SignerDID,
 		AuthoritySet: cfg.AuthoritySet,
 		Payload:      scopePayload,
@@ -192,6 +207,7 @@ func ProvisionSingleLog(cfg SingleLogConfig) (*LogProvision, error) {
 	// 2. Delegations.
 	for _, d := range cfg.Delegations {
 		delegEntry, err := builder.BuildDelegation(builder.DelegationParams{
+			Destination: cfg.Destination,
 			SignerDID:   cfg.SignerDID,
 			DelegateDID: d.DelegateDID,
 			Payload:     d.ScopeLimit,
@@ -206,6 +222,7 @@ func ProvisionSingleLog(cfg SingleLogConfig) (*LogProvision, error) {
 	// 3. Schemas.
 	for _, s := range cfg.Schemas {
 		schemaEntry, err := builder.BuildSchemaEntry(builder.SchemaEntryParams{
+			Destination:           cfg.Destination,
 			SignerDID:             cfg.SignerDID,
 			Payload:               s.Payload,
 			CommutativeOperations: s.CommutativeOperations,

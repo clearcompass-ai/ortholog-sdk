@@ -22,17 +22,17 @@ func setupOCCHarness(t *testing.T) (*testHarness, types.LogPosition, types.LogPo
 
 func TestOCC_StrictMatch(t *testing.T) {
 	h, entityPos, scopePos := setupOCCHarness(t)
-	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
 	e1Pos := pos(3); h.process(t, e1, e1Pos)
-	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
+	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
 	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 { t.Fatal("strict OCC match should succeed") }
 }
 
 func TestOCC_StrictMismatch(t *testing.T) {
 	h, entityPos, scopePos := setupOCCHarness(t)
-	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
 	h.process(t, e1, pos(3))
-	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(pos(999))}, nil)
+	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(pos(999))}, nil)
 	if r := h.process(t, e2, pos(4)); r.RejectedCounts != 1 { t.Fatal("strict OCC mismatch should reject") }
 }
 
@@ -40,11 +40,11 @@ func TestOCC_CommutativeWithinWindow(t *testing.T) {
 	h, entityPos, scopePos := setupOCCHarness(t)
 	h.schema = &mockSchemaResolver{commutative: true}
 	schemaPos := pos(10)
-	schemaEntry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:schema-author", AuthorityPath: sameSigner(), CommutativeOperations: []uint32{1, 2}}, nil)
+	schemaEntry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:schema-author", AuthorityPath: sameSigner(), CommutativeOperations: []uint32{1, 2}}, nil)
 	h.fetcher.Store(schemaPos, schemaEntry)
-	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), SchemaRef: ptrTo(schemaPos)}, nil)
+	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), SchemaRef: ptrTo(schemaPos)}, nil)
 	e1Pos := pos(3); h.process(t, e1, e1Pos)
-	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), SchemaRef: ptrTo(schemaPos), PriorAuthority: ptrTo(e1Pos)}, nil)
+	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), SchemaRef: ptrTo(schemaPos), PriorAuthority: ptrTo(e1Pos)}, nil)
 	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 { t.Fatal("commutative within window should succeed") }
 }
 
@@ -54,11 +54,11 @@ func TestOCC_CommutativeOutsideWindow(t *testing.T) {
 	h.buffer = builder.NewDeltaWindowBuffer(2)
 	prevPos := types.LogPosition{}
 	for i := uint64(3); i <= 7; i++ {
-		hdr := envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}
+		hdr := envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}
 		if !prevPos.IsNull() { hdr.PriorAuthority = &prevPos }
 		e, _ := makeEntry(t, hdr, nil); h.process(t, e, pos(i)); prevPos = pos(i)
 	}
-	e, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(pos(3))}, nil)
+	e, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(pos(3))}, nil)
 	if r := h.process(t, e, pos(8)); r.RejectedCounts != 1 { t.Fatal("outside window should reject") }
 }
 
@@ -66,17 +66,17 @@ func TestOCC_ColdStart(t *testing.T) {
 	h, entityPos, scopePos := setupOCCHarness(t)
 	h.schema = &mockSchemaResolver{commutative: true}
 	h.buffer = builder.NewDeltaWindowBuffer(10)
-	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
 	e1Pos := pos(3); h.process(t, e1, e1Pos)
-	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
+	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
 	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 { t.Fatal("cold start with current tip should succeed") }
 }
 
 func TestOCC_NullSchemaRef(t *testing.T) {
 	h, entityPos, scopePos := setupOCCHarness(t)
-	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
 	e1Pos := pos(3); h.process(t, e1, e1Pos)
-	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
+	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
 	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 { t.Fatal("null Schema_Ref should use strict OCC") }
 }
 
@@ -101,8 +101,8 @@ func TestOCC_MixedSchemas(t *testing.T) {
 	h := newHarness()
 	entityPos := pos(1); h.addRootEntity(t, entityPos, "did:example:entity")
 	scopePos := pos(2); h.addScopeEntity(t, scopePos, "did:example:judge", map[string]struct{}{"did:example:judge": {}})
-	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
 	e1Pos := pos(3); h.process(t, e1, e1Pos)
-	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
+	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
 	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 { t.Fatal("strict OCC with correct prior should succeed") }
 }

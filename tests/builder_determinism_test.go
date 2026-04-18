@@ -10,7 +10,7 @@ import (
 
 func TestBuilderCommitment_MatchesMutations(t *testing.T) {
 	h := newHarness(); rootBefore, _ := h.tree.Root()
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
 	entryPos := pos(1); result := h.process(t, entry, entryPos)
 	commitment := builder.GenerateBatchCommitment(entryPos, entryPos, rootBefore, result)
 	if commitment.MutationCount != uint32(len(result.Mutations)) { t.Fatal("mutation count mismatch") }
@@ -21,7 +21,7 @@ func TestBuilderCommitment_ReplayConsistent(t *testing.T) {
 	h := newHarness(); rootBefore, _ := h.tree.Root()
 	entries := make([]*envelope.Entry, 5); positions := make([]types.LogPosition, 5)
 	for i := 0; i < 5; i++ {
-		e, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
+		e, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
 		entries[i] = e; positions[i] = pos(uint64(i+1)); h.fetcher.Store(positions[i], e)
 	}
 	result, _ := builder.ProcessBatch(h.tree, entries, positions, h.fetcher, nil, testLogDID, h.buffer)
@@ -47,12 +47,12 @@ func TestBuilderDeterminism_1000Entries(t *testing.T) {
 		seq := uint64(i + 1); positions[i] = pos(seq)
 		switch {
 		case i%10 == 0:
-			entries[i], _ = makeEntry(t, envelope.ControlHeader{SignerDID: didForIndex(i), AuthorityPath: sameSigner(), EventTime: int64(i) * 1000000}, []byte{byte(i)})
+			entries[i], _ = makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: didForIndex(i), AuthorityPath: sameSigner(), EventTime: int64(i) * 1000000}, []byte{byte(i)})
 		case i%10 == 1 && i > 10:
 			rootSeq := uint64(i - i%10 + 1); signer := didForIndex(i - i%10)
-			entries[i], _ = makeEntry(t, envelope.ControlHeader{SignerDID: signer, TargetRoot: ptrTo(pos(rootSeq)), AuthorityPath: sameSigner(), EventTime: int64(i) * 1000000}, []byte{byte(i)})
+			entries[i], _ = makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signer, TargetRoot: ptrTo(pos(rootSeq)), AuthorityPath: sameSigner(), EventTime: int64(i) * 1000000}, []byte{byte(i)})
 		default:
-			entries[i], _ = makeEntry(t, envelope.ControlHeader{SignerDID: didForIndex(i), EventTime: int64(i) * 1000000}, []byte{byte(i)})
+			entries[i], _ = makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: didForIndex(i), EventTime: int64(i) * 1000000}, []byte{byte(i)})
 		}
 	}
 	tree1 := smt.NewTree(smt.NewInMemoryLeafStore(), smt.NewInMemoryNodeCache())

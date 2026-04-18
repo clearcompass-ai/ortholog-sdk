@@ -2,6 +2,7 @@ package tests
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 )
 
 func TestCanonicalHash_Determinism(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", EventTime: 1700000000000000}, []byte("payload"))
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", EventTime: 1700000000000000}, []byte("payload"))
 	h1 := crypto.CanonicalHash(entry)
 	h2 := crypto.CanonicalHash(entry)
 	if h1 != h2 {
@@ -21,7 +22,8 @@ func TestCanonicalHash_Determinism(t *testing.T) {
 
 func TestCanonicalHash_RoundTrip(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{
-		SignerDID: "did:example:bob", TargetRoot: ptrTo(pos(42)), AuthorityPath: sameSigner(),
+		Destination: testDestinationDID,
+		SignerDID:   "did:example:bob", TargetRoot: ptrTo(pos(42)), AuthorityPath: sameSigner(),
 		EventTime: -1000000, AuthoritySet: map[string]struct{}{"did:example:a": {}, "did:example:b": {}},
 		DelegateDID: ptrTo("did:example:delegate"), EvidencePointers: []types.LogPosition{pos(1), pos(2)},
 	}, []byte("round-trip-test"))
@@ -37,7 +39,7 @@ func TestCanonicalHash_RoundTrip(t *testing.T) {
 }
 
 func TestCanonicalHash_ASCIINormalization(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:ascii-only-123"}, nil)
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:ascii-only-123"}, nil)
 	h := crypto.CanonicalHash(entry)
 	if h == [32]byte{} {
 		t.Fatal("hash should not be zero")
@@ -45,14 +47,14 @@ func TestCanonicalHash_ASCIINormalization(t *testing.T) {
 }
 
 func TestCanonicalHash_NonASCIIRejected(t *testing.T) {
-	_, err := envelope.NewEntry(envelope.ControlHeader{SignerDID: "did:example:\x80bad"}, nil)
+	_, err := envelope.NewEntry(envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:\x80bad"}, nil)
 	if err == nil {
 		t.Fatal("expected error for non-ASCII byte in ASCII-only mode")
 	}
 }
 
 func TestCanonicalHash_EmptyDIDRejected(t *testing.T) {
-	_, err := envelope.NewEntry(envelope.ControlHeader{SignerDID: ""}, nil)
+	_, err := envelope.NewEntry(envelope.ControlHeader{Destination: testDestinationDID, SignerDID: ""}, nil)
 	if err == nil {
 		t.Fatal("expected error for empty Signer_DID")
 	}
@@ -67,7 +69,7 @@ func TestCanonicalHash_PreambleForwardCompat(t *testing.T) {
 	// the known header fields and the payload length prefix. A tolerant
 	// parser must deserialize successfully and produce an entry with the
 	// original payload intact.
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:fwdcompat"}, []byte("original-payload"))
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:fwdcompat"}, []byte("original-payload"))
 	serialized := envelope.Serialize(entry)
 
 	hbl := binary.BigEndian.Uint32(serialized[2:6])
@@ -93,7 +95,7 @@ func TestCanonicalHash_PreambleForwardCompat(t *testing.T) {
 }
 
 func TestCanonicalHash_PreambleStructure(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:preamble"}, []byte("test"))
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:preamble"}, []byte("test"))
 	b := envelope.Serialize(entry)
 	version := binary.BigEndian.Uint16(b[0:2])
 	if version != 5 {
@@ -111,7 +113,7 @@ func TestCanonicalHash_PreambleStructure(t *testing.T) {
 }
 
 func TestCanonicalHash_PreambleConsistency(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:corrupt"}, nil)
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:corrupt"}, nil)
 	b := envelope.Serialize(entry)
 	hbl := binary.BigEndian.Uint32(b[2:6])
 	binary.BigEndian.PutUint32(b[2:6], hbl+100)
@@ -122,7 +124,7 @@ func TestCanonicalHash_PreambleConsistency(t *testing.T) {
 }
 
 func TestCanonicalHash_NegativeTimestamp(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:preepoch", EventTime: -86400000000}, nil)
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:preepoch", EventTime: -86400000000}, nil)
 	b := envelope.Serialize(entry)
 	entry2, err := envelope.Deserialize(b)
 	if err != nil {
@@ -135,7 +137,7 @@ func TestCanonicalHash_NegativeTimestamp(t *testing.T) {
 
 func TestCanonicalHash_MaxSequence(t *testing.T) {
 	maxPos := types.LogPosition{LogDID: "did:example:log", Sequence: ^uint64(0)}
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:max", TargetRoot: &maxPos}, nil)
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:max", TargetRoot: &maxPos}, nil)
 	b := envelope.Serialize(entry)
 	entry2, err := envelope.Deserialize(b)
 	if err != nil {
@@ -151,9 +153,9 @@ func TestCanonicalHash_AuthoritySet100(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		set["did:example:auth"+zeroPad3(i)] = struct{}{}
 	}
-	entry1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:scope", AuthoritySet: set}, nil)
+	entry1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:scope", AuthoritySet: set}, nil)
 	b1 := envelope.Serialize(entry1)
-	entry2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:scope", AuthoritySet: set}, nil)
+	entry2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:scope", AuthoritySet: set}, nil)
 	b2 := envelope.Serialize(entry2)
 	if !bytes.Equal(b1, b2) {
 		t.Fatal("AuthoritySet serialization not deterministic")
@@ -161,27 +163,67 @@ func TestCanonicalHash_AuthoritySet100(t *testing.T) {
 }
 
 func TestCanonicalHash_AuthoritySetNilEquivalence(t *testing.T) {
-	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:nilset", AuthoritySet: nil}, nil)
-	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:nilset", AuthoritySet: map[string]struct{}{}}, nil)
+	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:nilset", AuthoritySet: nil}, nil)
+	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:nilset", AuthoritySet: map[string]struct{}{}}, nil)
 	if crypto.CanonicalHash(e1) != crypto.CanonicalHash(e2) {
 		t.Fatal("nil and empty should produce identical hashes")
 	}
 }
 
 func TestCanonicalHash_NullLogPosition(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:nullpos", TargetRoot: nil}, nil)
-	b := envelope.Serialize(entry)
-	targetRootOffset := 6 + 2 + len("did:example:nullpos") + 4
-	nullBytes := b[targetRootOffset : targetRootOffset+10]
-	for i, v := range nullBytes {
-		if v != 0 {
-			t.Fatalf("null LogPosition byte %d = 0x%02x, want 0x00", i, v)
-		}
+	// Property 1: Determinism — nil TargetRoot produces identical bytes
+	//   across independent serializations. Tessera requires this.
+	entry1, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
+		SignerDID:   "did:example:nullpos",
+		TargetRoot:  nil,
+	}, nil)
+	entry2, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
+		SignerDID:   "did:example:nullpos",
+		TargetRoot:  nil,
+	}, nil)
+	b1 := envelope.Serialize(entry1)
+	b2 := envelope.Serialize(entry2)
+	if !bytes.Equal(b1, b2) {
+		t.Fatal("two entries with nil TargetRoot must serialize identically")
+	}
+
+	// Property 2: Distinguishability — nil vs any non-nil TargetRoot
+	//   must produce a different canonical hash. Tessera requires this
+	//   so different semantic entries land on different tile leaves.
+	nonNil := types.LogPosition{LogDID: "did:example:log", Sequence: 1}
+	entry3, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
+		SignerDID:   "did:example:nullpos",
+		TargetRoot:  &nonNil,
+	}, nil)
+	b3 := envelope.Serialize(entry3)
+
+	h1 := sha256.Sum256(b1)
+	h3 := sha256.Sum256(b3)
+	if h1 == h3 {
+		t.Fatal("nil TargetRoot and non-nil TargetRoot must produce different canonical hashes")
+	}
+
+	// Property 3: Round-trip stability — deserialize recovers nil,
+	//   re-serialize produces identical bytes. Tessera-critical:
+	//   operators that re-parse entries (e.g., in store/entries.go)
+	//   must not drift the hash.
+	roundTripped, err := envelope.Deserialize(b1)
+	if err != nil {
+		t.Fatalf("deserialize failed: %v", err)
+	}
+	if roundTripped.Header.TargetRoot != nil {
+		t.Fatal("nil TargetRoot must survive round-trip as nil")
+	}
+	b1Again := envelope.Serialize(roundTripped)
+	if !bytes.Equal(b1, b1Again) {
+		t.Fatal("round-trip must produce byte-identical serialization")
 	}
 }
-
 func TestCanonicalHash_SignatureWireRoundTrip(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:sigtest"}, []byte("signed"))
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:sigtest"}, []byte("signed"))
 	canonical := envelope.Serialize(entry)
 	fakeSig := make([]byte, 64)
 	for i := range fakeSig {
@@ -209,6 +251,7 @@ func TestCanonicalHash_EntrySizeValidation(t *testing.T) {
 		pointers[i] = pos(uint64(i + 1))
 	}
 	_, err := envelope.NewEntry(envelope.ControlHeader{
+		Destination:      testDestinationDID,
 		SignerDID:        "did:example:overcap",
 		EvidencePointers: pointers,
 	}, nil)
@@ -223,13 +266,15 @@ func TestCanonicalHash_SubjectIdentifier(t *testing.T) {
 
 	// Entry WITH Subject_Identifier populated
 	entryWith, _ := makeEntry(t, envelope.ControlHeader{
+		Destination:       testDestinationDID,
 		SignerDID:         "did:example:issuer",
 		SubjectIdentifier: subjectBytes,
 	}, []byte("credential"))
 
 	// Entry WITHOUT Subject_Identifier (nil)
 	entryWithout, _ := makeEntry(t, envelope.ControlHeader{
-		SignerDID: "did:example:issuer",
+		Destination: testDestinationDID,
+		SignerDID:   "did:example:issuer",
 	}, []byte("credential"))
 
 	// Hashes must differ

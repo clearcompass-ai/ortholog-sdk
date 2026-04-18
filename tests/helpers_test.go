@@ -11,6 +11,8 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
+const testDestinationDID = "did:web:test.exchange.example"
+
 const testLogDID = "did:ortholog:testlog1"
 
 func pos(seq uint64) types.LogPosition {
@@ -77,7 +79,7 @@ func newHarness() *testHarness {
 
 func (h *testHarness) addRootEntity(t *testing.T, p types.LogPosition, signerDID string) *envelope.Entry {
 	t.Helper()
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: signerDID, AuthorityPath: sameSigner()}, nil)
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signerDID, AuthorityPath: sameSigner()}, nil)
 	h.fetcher.Store(p, entry)
 	key := smt.DeriveKey(p)
 	leaf := types.SMTLeaf{Key: key, OriginTip: p, AuthorityTip: p}
@@ -89,7 +91,7 @@ func (h *testHarness) addRootEntity(t *testing.T, p types.LogPosition, signerDID
 
 func (h *testHarness) addDelegation(t *testing.T, delegPos types.LogPosition, signerDID, delegateDID string) *envelope.Entry {
 	t.Helper()
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: signerDID, AuthorityPath: sameSigner(), DelegateDID: &delegateDID}, nil)
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signerDID, AuthorityPath: sameSigner(), DelegateDID: &delegateDID}, nil)
 	h.fetcher.Store(delegPos, entry)
 	key := smt.DeriveKey(delegPos)
 	_ = h.tree.SetLeaf(key, types.SMTLeaf{Key: key, OriginTip: delegPos, AuthorityTip: delegPos})
@@ -98,7 +100,7 @@ func (h *testHarness) addDelegation(t *testing.T, delegPos types.LogPosition, si
 
 func (h *testHarness) addScopeEntity(t *testing.T, p types.LogPosition, signerDID string, authoritySet map[string]struct{}) *envelope.Entry {
 	t.Helper()
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: signerDID, AuthorityPath: sameSigner(), AuthoritySet: authoritySet}, nil)
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signerDID, AuthorityPath: sameSigner(), AuthoritySet: authoritySet}, nil)
 	h.fetcher.Store(p, entry)
 	key := smt.DeriveKey(p)
 	_ = h.tree.SetLeaf(key, types.SMTLeaf{Key: key, OriginTip: p, AuthorityTip: p})

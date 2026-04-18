@@ -29,6 +29,11 @@ escrow node, but the cryptographic operation is identical.
 The SDK is domain-agnostic. None of this code knows whether it protects
 physician credentials, sealed court evidence, or insurance policies.
 
+Destination binding: GrantArtifactAccessParams carries a Destination
+field (DID of the target exchange). When a grant audit entry is
+produced, it is bound to this destination via the canonical hash —
+cross-exchange replay of a grant entry is cryptographically impossible.
+
 TRUST BOUNDARY (AuthorizedRecipients in sealed mode):
 
 	The SDK enforces membership. The domain application is responsible for
@@ -241,6 +246,11 @@ func CheckGrantAuthorization(params GrantAuthCheckParams) (*GrantAuthCheckResult
 
 // GrantArtifactAccessParams configures artifact access grant.
 type GrantArtifactAccessParams struct {
+	// Destination is the DID of the target exchange for any grant
+	// audit entry produced by this call. Required. Validated by
+	// envelope.ValidateDestination.
+	Destination string
+
 	ArtifactCID       storage.CID
 	ContentDigest     storage.CID               // CID of plaintext, for audit entries.
 	RecipientPubKey   []byte                    // 65-byte uncompressed secp256k1 public key.
@@ -287,6 +297,9 @@ type GrantArtifactAccessResult struct {
 // Phase 3 — Retrieval + audit: resolve retrieval credential, optionally
 // build a commentary entry recording the grant.
 func GrantArtifactAccess(params GrantArtifactAccessParams) (*GrantArtifactAccessResult, error) {
+	if err := envelope.ValidateDestination(params.Destination); err != nil {
+		return nil, fmt.Errorf("lifecycle/artifact: %w", err)
+	}
 	if params.SchemaParams == nil {
 		return nil, fmt.Errorf("lifecycle/artifact: nil schema params")
 	}
@@ -412,6 +425,8 @@ func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAcces
 }
 
 // buildGrantEntry creates a commentary entry recording the grant.
+// Destination is copied verbatim from the params; validation of the
+// destination happened at the top of GrantArtifactAccess.
 func buildGrantEntry(params GrantArtifactAccessParams, method string) (*envelope.Entry, error) {
 	payloadMap := map[string]any{
 		"grant_type":     "artifact_access",
@@ -428,8 +443,9 @@ func buildGrantEntry(params GrantArtifactAccessParams, method string) (*envelope
 		return nil, err
 	}
 	return builder.BuildCommentary(builder.CommentaryParams{
-		SignerDID: params.GranterDID,
-		Payload:   payload,
+		Destination: params.Destination,
+		SignerDID:   params.GranterDID,
+		Payload:     payload,
 	})
 }
 

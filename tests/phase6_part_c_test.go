@@ -317,7 +317,7 @@ func newOperatorEntryServer(entries map[uint64]*types.EntryWithMetadata) *httpte
 }
 
 func TestHTTPEntryFetcher_FetchValid(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice"}, []byte("payload"))
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice"}, []byte("payload"))
 	canonical := envelope.Serialize(entry)
 	now := time.Now().UTC()
 	entries := map[uint64]*types.EntryWithMetadata{
@@ -367,7 +367,7 @@ func TestHTTPEntryFetcher_FetchNotFound(t *testing.T) {
 
 func TestHTTPEntryFetcher_LogTimeParsed(t *testing.T) {
 	now := time.Date(2027, 4, 14, 12, 0, 0, 0, time.UTC)
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:ts"}, nil)
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:ts"}, nil)
 	entries := map[uint64]*types.EntryWithMetadata{
 		1: {CanonicalBytes: envelope.Serialize(entry), LogTime: now},
 	}
@@ -404,6 +404,7 @@ func TestHTTPEntryFetcher_ServerError(t *testing.T) {
 
 func TestHTTPEntryFetcher_Deserializable(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:deser", EventTime: 1700000000,
 	}, []byte("deserialize-test"))
 
@@ -434,6 +435,7 @@ func TestHTTPEntryFetcher_MultipleSequences(t *testing.T) {
 	entries := make(map[uint64]*types.EntryWithMetadata)
 	for i := uint64(1); i <= 5; i++ {
 		e, _ := makeEntry(t, envelope.ControlHeader{
+			Destination: testDestinationDID,
 			SignerDID: "did:example:multi", EventTime: int64(i),
 		}, nil)
 		entries[i] = &types.EntryWithMetadata{
@@ -456,7 +458,7 @@ func TestHTTPEntryFetcher_MultipleSequences(t *testing.T) {
 }
 
 func TestHTTPEntryFetcher_WithSignature(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:sig"}, nil)
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:sig"}, nil)
 	sig := make([]byte, 64)
 	sig[0] = 0xAB
 	entries := map[uint64]*types.EntryWithMetadata{

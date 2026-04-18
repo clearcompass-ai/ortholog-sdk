@@ -41,7 +41,6 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/did"
 )
 
-const testDestinationDID = "did:web:test.exchange.example"
 
 // -------------------------------------------------------------------------------------------------
 // 1) E2E — did:key + Ed25519 + SigAlgoEd25519

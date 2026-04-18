@@ -73,6 +73,7 @@ func TestContest_NoContest_Unblocked(t *testing.T) {
 	// Pending operation (scope enforcement targeting entity).
 	pendingPos := p5pos(3)
 	pendingEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -100,6 +101,7 @@ func TestContest_Contested_Blocked(t *testing.T) {
 	h.addEntity(t, entityPos, "did:example:entity")
 	scopePos := p5pos(2)
 	scopeEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:admin",
 		AuthorityPath: sameSigner(),
 		AuthoritySet:  map[string]struct{}{"did:example:admin": {}, "did:example:judge": {}, "did:example:clerk": {}},
@@ -112,6 +114,7 @@ func TestContest_Contested_Blocked(t *testing.T) {
 	// Pending operation.
 	pendingPos := p5pos(3)
 	pendingEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -122,6 +125,7 @@ func TestContest_Contested_Blocked(t *testing.T) {
 	// Contest entry: CosignatureOf == pendingPos, in authority chain.
 	contestPos := p5pos(4)
 	contestEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:      "did:example:clerk",
 		TargetRoot:     p5ptrTo(entityPos),
 		AuthorityPath:  scopeAuth(),
@@ -154,6 +158,7 @@ func TestContest_OverriddenWithSupermajority_Unblocked(t *testing.T) {
 	h.addEntity(t, entityPos, "did:example:entity")
 	scopePos := p5pos(2)
 	scopeEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:admin",
 		AuthorityPath: sameSigner(),
 		AuthoritySet:  map[string]struct{}{"did:example:a": {}, "did:example:b": {}, "did:example:c": {}},
@@ -166,6 +171,7 @@ func TestContest_OverriddenWithSupermajority_Unblocked(t *testing.T) {
 	// Pending.
 	pendingPos := p5pos(3)
 	h.storeEntry(t, pendingPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:a",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -175,6 +181,7 @@ func TestContest_OverriddenWithSupermajority_Unblocked(t *testing.T) {
 	// Contest.
 	contestPos := p5pos(4)
 	h.storeEntry(t, contestPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:      "did:example:b",
 		TargetRoot:     p5ptrTo(entityPos),
 		AuthorityPath:  scopeAuth(),
@@ -185,14 +192,15 @@ func TestContest_OverriddenWithSupermajority_Unblocked(t *testing.T) {
 
 	// Evidence entries for override (distinct signers).
 	ev1 := p5pos(5)
-	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a"}, nil))
+	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a"}, nil))
 	ev2 := p5pos(6)
-	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c"}, nil))
+	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c"}, nil))
 
 	// Override entry referencing contest in EvidencePointers.
 	// ⌈2*3/3⌉ = 2 needed. Override signer + 2 evidence = 3 distinct → passes.
 	overridePos := p5pos(7)
 	h.storeEntry(t, overridePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:        "did:example:b",
 		TargetRoot:       p5ptrTo(entityPos),
 		AuthorityPath:    scopeAuth(),
@@ -222,6 +230,7 @@ func TestContest_OverrideBelowThreshold_StillBlocked(t *testing.T) {
 	// Scope with 6 members → ⌈2*6/3⌉ = 4 needed.
 	scopePos := p5pos(2)
 	scopeEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:admin",
 		AuthorityPath: sameSigner(),
 		AuthoritySet: map[string]struct{}{
@@ -236,12 +245,14 @@ func TestContest_OverrideBelowThreshold_StillBlocked(t *testing.T) {
 
 	pendingPos := p5pos(3)
 	h.storeEntry(t, pendingPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:a", TargetRoot: p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 	}, nil))
 
 	contestPos := p5pos(4)
 	h.storeEntry(t, contestPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:b", TargetRoot: p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 		CosignatureOf: p5ptrTo(pendingPos), PriorAuthority: p5ptrTo(pendingPos),
@@ -249,10 +260,11 @@ func TestContest_OverrideBelowThreshold_StillBlocked(t *testing.T) {
 
 	// Override with only 2 distinct signers (need 4).
 	ev1 := p5pos(5)
-	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c"}, nil))
+	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c"}, nil))
 
 	overridePos := p5pos(6)
 	h.storeEntry(t, overridePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:a", TargetRoot: p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 		EvidencePointers: []types.LogPosition{contestPos, ev1},
@@ -276,6 +288,7 @@ func TestContest_OverrideWithoutRequiredWitness_Blocked(t *testing.T) {
 	h.addEntity(t, entityPos, "did:example:entity")
 	scopePos := p5pos(2)
 	h.storeEntry(t, scopePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:admin", AuthorityPath: sameSigner(),
 		AuthoritySet: map[string]struct{}{"did:example:a": {}, "did:example:b": {}, "did:example:c": {}},
 	}, nil))
@@ -286,11 +299,13 @@ func TestContest_OverrideWithoutRequiredWitness_Blocked(t *testing.T) {
 	// Schema requiring witness cosig.
 	schemaPos := p5pos(10)
 	h.storeEntry(t, schemaPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:schema", AuthorityPath: sameSigner(),
 	}, mustJSON(map[string]any{"override_requires_witness": true})))
 
 	pendingPos := p5pos(3)
 	h.storeEntry(t, pendingPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:a", TargetRoot: p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 		SchemaRef: p5ptrTo(schemaPos),
@@ -298,6 +313,7 @@ func TestContest_OverrideWithoutRequiredWitness_Blocked(t *testing.T) {
 
 	contestPos := p5pos(4)
 	h.storeEntry(t, contestPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:b", TargetRoot: p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 		CosignatureOf: p5ptrTo(pendingPos), PriorAuthority: p5ptrTo(pendingPos),
@@ -305,12 +321,13 @@ func TestContest_OverrideWithoutRequiredWitness_Blocked(t *testing.T) {
 
 	// Override with enough signers but NO witness cosig.
 	ev1 := p5pos(5)
-	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a"}, nil))
+	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a"}, nil))
 	ev2 := p5pos(6)
-	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c"}, nil))
+	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c"}, nil))
 
 	overridePos := p5pos(7)
 	h.storeEntry(t, overridePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:b", TargetRoot: p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 		EvidencePointers: []types.LogPosition{contestPos, ev1, ev2},
@@ -335,6 +352,7 @@ func TestContest_OverrideWithWitnessCosig_Unblocked(t *testing.T) {
 	h.addEntity(t, entityPos, "did:example:entity")
 	scopePos := p5pos(2)
 	h.storeEntry(t, scopePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:admin", AuthorityPath: sameSigner(),
 		AuthoritySet: map[string]struct{}{"did:example:a": {}, "did:example:b": {}, "did:example:c": {}},
 	}, nil))
@@ -344,11 +362,13 @@ func TestContest_OverrideWithWitnessCosig_Unblocked(t *testing.T) {
 
 	schemaPos := p5pos(10)
 	h.storeEntry(t, schemaPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:schema", AuthorityPath: sameSigner(),
 	}, mustJSON(map[string]any{"override_requires_witness": true})))
 
 	pendingPos := p5pos(3)
 	h.storeEntry(t, pendingPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:a", TargetRoot: p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 		SchemaRef: p5ptrTo(schemaPos),
@@ -356,6 +376,7 @@ func TestContest_OverrideWithWitnessCosig_Unblocked(t *testing.T) {
 
 	contestPos := p5pos(4)
 	h.storeEntry(t, contestPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:b", TargetRoot: p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 		CosignatureOf: p5ptrTo(pendingPos), PriorAuthority: p5ptrTo(pendingPos),
@@ -363,18 +384,20 @@ func TestContest_OverrideWithWitnessCosig_Unblocked(t *testing.T) {
 
 	// Evidence + independent witness cosignature.
 	ev1 := p5pos(5)
-	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a"}, nil))
+	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a"}, nil))
 	ev2 := p5pos(6)
-	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c"}, nil))
+	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c"}, nil))
 	// Witness cosig: signer NOT in authority set, has CosignatureOf.
 	witnessCosig := p5pos(8)
 	h.storeEntry(t, witnessCosig, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:independent-witness",
 		CosignatureOf: p5ptrTo(pendingPos),
 	}, nil))
 
 	overridePos := p5pos(7)
 	h.storeEntry(t, overridePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:b", TargetRoot: p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 		EvidencePointers: []types.LogPosition{contestPos, ev1, ev2, witnessCosig},
@@ -440,6 +463,7 @@ func TestRotation_Tier2_MaturedPrecommitment(t *testing.T) {
 	keyHash := fmt.Sprintf("%x", sha256.Sum256([]byte("new-public-key-bytes")))
 	profilePos := p5pos(2)
 	profileEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:holder", AuthorityPath: sameSigner(),
 	}, mustJSON(map[string]any{"next_key_hash": keyHash}))
 	h.storeEntry(t, profilePos, profileEntry)
@@ -451,6 +475,7 @@ func TestRotation_Tier2_MaturedPrecommitment(t *testing.T) {
 
 	rotPos := p5pos(3)
 	rotEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
 		AuthorityPath: sameSigner(), SchemaRef: p5ptrTo(schemaPos),
 	}, mustJSON(map[string]any{"new_key_hash": keyHash}))
@@ -483,6 +508,7 @@ func TestRotation_Tier3_ImmaturePrecommitment(t *testing.T) {
 	keyHash := fmt.Sprintf("%x", sha256.Sum256([]byte("new-key")))
 	profilePos := p5pos(2)
 	h.storeEntry(t, profilePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:holder", AuthorityPath: sameSigner(),
 	}, mustJSON(map[string]any{"next_key_hash": keyHash})))
 	h.setLeaf(t, smt.DeriveKey(profilePos), types.SMTLeaf{
@@ -491,6 +517,7 @@ func TestRotation_Tier3_ImmaturePrecommitment(t *testing.T) {
 
 	rotPos := p5pos(3)
 	h.storeEntry(t, rotPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
 		AuthorityPath: sameSigner(), SchemaRef: p5ptrTo(schemaPos),
 	}, mustJSON(map[string]any{"new_key_hash": keyHash})))
@@ -520,6 +547,7 @@ func TestRotation_Tier3_NoPrecommitment(t *testing.T) {
 
 	rotPos := p5pos(3)
 	h.storeEntry(t, rotPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
 		AuthorityPath: sameSigner(), SchemaRef: p5ptrTo(schemaPos),
 	}, mustJSON(map[string]any{"new_public_key": "some-key"})))
@@ -549,6 +577,7 @@ func TestRotation_Tier3_ContestedBlocked(t *testing.T) {
 
 	rotPos := p5pos(3)
 	h.storeEntry(t, rotPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
 		AuthorityPath: sameSigner(), SchemaRef: p5ptrTo(schemaPos),
 	}, nil))
@@ -556,6 +585,7 @@ func TestRotation_Tier3_ContestedBlocked(t *testing.T) {
 	// Add contest.
 	contestPos := p5pos(4)
 	h.storeEntry(t, contestPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:escrow", TargetRoot: p5ptrTo(profilePos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(p5pos(10)),
 		CosignatureOf: p5ptrTo(rotPos), PriorAuthority: p5ptrTo(rotPos),
@@ -590,6 +620,7 @@ func TestRotation_Tier3_ContestedThenOverridden(t *testing.T) {
 
 	scopePos := p5pos(10)
 	h.storeEntry(t, scopePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:admin", AuthorityPath: sameSigner(),
 		AuthoritySet: map[string]struct{}{"did:example:a": {}, "did:example:b": {}, "did:example:c": {}},
 	}, nil))
@@ -599,6 +630,7 @@ func TestRotation_Tier3_ContestedThenOverridden(t *testing.T) {
 
 	rotPos := p5pos(3)
 	h.storeEntry(t, rotPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
 		AuthorityPath: sameSigner(), SchemaRef: p5ptrTo(schemaPos),
 		ScopePointer: p5ptrTo(scopePos),
@@ -606,18 +638,20 @@ func TestRotation_Tier3_ContestedThenOverridden(t *testing.T) {
 
 	contestPos := p5pos(4)
 	h.storeEntry(t, contestPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:b", TargetRoot: p5ptrTo(profilePos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 		CosignatureOf: p5ptrTo(rotPos), PriorAuthority: p5ptrTo(rotPos),
 	}, nil))
 
 	ev1 := p5pos(5)
-	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a"}, nil))
+	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a"}, nil))
 	ev2 := p5pos(6)
-	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c"}, nil))
+	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c"}, nil))
 
 	overridePos := p5pos(7)
 	h.storeEntry(t, overridePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:a", TargetRoot: p5ptrTo(profilePos),
 		AuthorityPath: scopeAuth(), ScopePointer: p5ptrTo(scopePos),
 		EvidencePointers: []types.LogPosition{contestPos, ev1, ev2},
@@ -648,6 +682,7 @@ func TestRotation_MaturationBoundary(t *testing.T) {
 	keyHash := fmt.Sprintf("%x", sha256.Sum256([]byte("boundary-key")))
 	profilePos := p5pos(2)
 	h.storeEntry(t, profilePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:holder", AuthorityPath: sameSigner(),
 	}, mustJSON(map[string]any{"next_key_hash": keyHash})))
 	h.setLeaf(t, smt.DeriveKey(profilePos), types.SMTLeaf{
@@ -660,6 +695,7 @@ func TestRotation_MaturationBoundary(t *testing.T) {
 	// Rotation exactly at epoch boundary → Tier 2.
 	rotAtPos := p5pos(3)
 	h.storeEntry(t, rotAtPos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
 		AuthorityPath: sameSigner(), SchemaRef: p5ptrTo(schemaPos),
 	}, mustJSON(map[string]any{"new_key_hash": keyHash})))
@@ -673,6 +709,7 @@ func TestRotation_MaturationBoundary(t *testing.T) {
 	// Rotation 1 second before epoch → Tier 3.
 	rotBeforePos := p5pos(4)
 	h.storeEntry(t, rotBeforePos, p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
 		AuthorityPath: sameSigner(), SchemaRef: p5ptrTo(schemaPos),
 	}, mustJSON(map[string]any{"new_key_hash": keyHash})))
@@ -700,6 +737,7 @@ func buildCommitmentFixture(t *testing.T, n int) (types.SMTDerivationCommitment,
 	positions := make([]types.LogPosition, n)
 	for i := 0; i < n; i++ {
 		e, _ := makeEntry(t, envelope.ControlHeader{
+			Destination: testDestinationDID,
 			SignerDID:     fmt.Sprintf("did:example:fp-signer%d", i),
 			AuthorityPath: sameSigner(),
 		}, []byte(fmt.Sprintf("fp-payload-%d", i)))

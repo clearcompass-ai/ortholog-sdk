@@ -60,6 +60,7 @@ func newP5Harness() *p5Harness {
 func (h *p5Harness) addEntity(t *testing.T, p types.LogPosition, signerDID string) {
 	t.Helper()
 	entry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     signerDID,
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -74,6 +75,7 @@ func (h *p5Harness) addEntity(t *testing.T, p types.LogPosition, signerDID strin
 func (h *p5Harness) addEntityWithPayload(t *testing.T, p types.LogPosition, signerDID string, payload []byte) {
 	t.Helper()
 	entry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     signerDID,
 		AuthorityPath: sameSigner(),
 	}, payload)
@@ -115,7 +117,7 @@ func TestParamsJSON_AllFields(t *testing.T) {
 		"re_encryption_threshold":    map[string]any{"m": 3, "n": 5},
 	})
 
-	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:schema-author"}, payload)
+	entry := p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:schema-author"}, payload)
 	extractor := schema.NewJSONParameterExtractor()
 	params, err := extractor.Extract(entry)
 	if err != nil {
@@ -164,7 +166,7 @@ func TestParamsJSON_MissingOptionalFieldsDefault(t *testing.T) {
 		"cosignature_threshold": 1,
 	})
 
-	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:minimal"}, payload)
+	entry := p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:minimal"}, payload)
 	params, err := schema.NewJSONParameterExtractor().Extract(entry)
 	if err != nil {
 		t.Fatalf("extract: %v", err)
@@ -201,7 +203,7 @@ func TestParamsJSON_UnknownFieldsIgnored(t *testing.T) {
 		"another_unknown":      42,
 	})
 
-	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:forward"}, payload)
+	entry := p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:forward"}, payload)
 	params, err := schema.NewJSONParameterExtractor().Extract(entry)
 	if err != nil {
 		t.Fatalf("unknown fields should be silently ignored: %v", err)
@@ -212,7 +214,7 @@ func TestParamsJSON_UnknownFieldsIgnored(t *testing.T) {
 }
 
 func TestParamsJSON_MalformedJSONError(t *testing.T) {
-	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:bad"}, []byte("{not valid json"))
+	entry := p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:bad"}, []byte("{not valid json"))
 	_, err := schema.NewJSONParameterExtractor().Extract(entry)
 	if err == nil {
 		t.Fatal("malformed JSON should produce error")
@@ -220,7 +222,7 @@ func TestParamsJSON_MalformedJSONError(t *testing.T) {
 }
 
 func TestParamsJSON_EmptyPayloadError(t *testing.T) {
-	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:empty"}, nil)
+	entry := p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:empty"}, nil)
 	_, err := schema.NewJSONParameterExtractor().Extract(entry)
 	if err == nil {
 		t.Fatal("empty payload should produce error")
@@ -230,7 +232,7 @@ func TestParamsJSON_EmptyPayloadError(t *testing.T) {
 func TestParamsJSON_AESGCMDefault(t *testing.T) {
 	// artifact_encryption not set → defaults to aes_gcm.
 	payload := mustJSON(map[string]any{"cosignature_threshold": 2})
-	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:gcm"}, payload)
+	entry := p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:gcm"}, payload)
 	params, _ := schema.NewJSONParameterExtractor().Extract(entry)
 	if params.ArtifactEncryption != types.EncryptionAESGCM {
 		t.Fatalf("should default to aes_gcm, got %d", params.ArtifactEncryption)
@@ -239,7 +241,7 @@ func TestParamsJSON_AESGCMDefault(t *testing.T) {
 
 func TestParamsJSON_UmbralPREExplicit(t *testing.T) {
 	payload := mustJSON(map[string]any{"artifact_encryption": "umbral_pre"})
-	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:pre"}, payload)
+	entry := p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:pre"}, payload)
 	params, _ := schema.NewJSONParameterExtractor().Extract(entry)
 	if params.ArtifactEncryption != types.EncryptionUmbralPRE {
 		t.Fatalf("should be umbral_pre, got %d", params.ArtifactEncryption)
@@ -250,7 +252,7 @@ func TestParamsJSON_ReEncryptionThresholdParsing(t *testing.T) {
 	payload := mustJSON(map[string]any{
 		"re_encryption_threshold": map[string]any{"m": 2, "n": 7},
 	})
-	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:thresh"}, payload)
+	entry := p5makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:thresh"}, payload)
 	params, _ := schema.NewJSONParameterExtractor().Extract(entry)
 	if params.ReEncryptionThreshold == nil {
 		t.Fatal("ReEncryptionThreshold should not be nil")
@@ -293,6 +295,7 @@ func TestOrigin_AmendedEntity(t *testing.T) {
 	// Create an amendment entry (Path A: same signer, targets root).
 	amendPos := p5pos(2)
 	amendEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:alice",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: sameSigner(),
@@ -328,6 +331,7 @@ func TestOrigin_RevokedEntity(t *testing.T) {
 	revokePos := p5pos(99)
 	// Store an entry at revokePos that targets a DIFFERENT entity.
 	revokeEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:admin",
 		TargetRoot:    p5ptrTo(p5pos(999)), // Different entity.
 		AuthorityPath: scopeAuth(),
@@ -381,6 +385,7 @@ func TestOrigin_PathCompression(t *testing.T) {
 	// Amendment with path compression: targets root with intermediate.
 	amendPos := p5pos(3)
 	amendEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:          "did:example:alice",
 		TargetRoot:         p5ptrTo(rootPos),
 		TargetIntermediate: p5ptrTo(intPos),
@@ -451,6 +456,7 @@ func TestAuthority_SingleActiveConstraint(t *testing.T) {
 	// Create enforcement entry (Path C).
 	enfPos := p5pos(3)
 	enfEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -485,6 +491,7 @@ func TestAuthority_MultipleConstraintsWithPriorChain(t *testing.T) {
 	// First enforcement.
 	enf1Pos := p5pos(3)
 	enf1 := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -495,6 +502,7 @@ func TestAuthority_MultipleConstraintsWithPriorChain(t *testing.T) {
 	// Second enforcement with Prior_Authority → first.
 	enf2Pos := p5pos(4)
 	enf2 := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:      "did:example:judge",
 		TargetRoot:     p5ptrTo(entityPos),
 		AuthorityPath:  scopeAuth(),
@@ -533,6 +541,7 @@ func TestAuthority_PendingWithinActivationDelay(t *testing.T) {
 		"activation_delay": 999999, // Very long delay.
 	})
 	schemaEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:schema-author",
 		AuthorityPath: sameSigner(),
 	}, schemaPayload)
@@ -541,6 +550,7 @@ func TestAuthority_PendingWithinActivationDelay(t *testing.T) {
 	// Enforcement entry referencing this schema.
 	enfPos := p5pos(3)
 	enfEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -574,6 +584,7 @@ func TestAuthority_SnapshotShortcut(t *testing.T) {
 	// Create several enforcement entries that Evidence_Pointers reference.
 	ev1Pos := p5pos(10)
 	ev1 := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -583,6 +594,7 @@ func TestAuthority_SnapshotShortcut(t *testing.T) {
 
 	ev2Pos := p5pos(11)
 	ev2 := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:judge2",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -597,6 +609,7 @@ func TestAuthority_SnapshotShortcut(t *testing.T) {
 	for i := 2; i < 11; i++ {
 		pointers[i] = p5pos(uint64(20 + i))
 		h.storeEntry(t, pointers[i], p5makeEntry(t, envelope.ControlHeader{
+			Destination: testDestinationDID,
 			SignerDID:     "did:example:judge",
 			TargetRoot:    p5ptrTo(entityPos),
 			AuthorityPath: scopeAuth(),
@@ -606,6 +619,7 @@ func TestAuthority_SnapshotShortcut(t *testing.T) {
 
 	snapPos := p5pos(50)
 	snapEntry := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:        "did:example:judge",
 		TargetRoot:       p5ptrTo(entityPos),
 		AuthorityPath:    scopeAuth(),
@@ -639,6 +653,7 @@ func TestDelegation_ThreeDeepAllLive(t *testing.T) {
 	// Owner → mid → leaf delegation chain.
 	d1Pos := p5pos(10)
 	d1 := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   p5ptrTo("did:example:mid"),
@@ -650,6 +665,7 @@ func TestDelegation_ThreeDeepAllLive(t *testing.T) {
 
 	d2Pos := p5pos(11)
 	d2 := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:mid",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   p5ptrTo("did:example:leaf"),
@@ -661,6 +677,7 @@ func TestDelegation_ThreeDeepAllLive(t *testing.T) {
 
 	d3Pos := p5pos(12)
 	d3 := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:leaf",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   p5ptrTo("did:example:deputy"),
@@ -698,6 +715,7 @@ func TestDelegation_RevokedMiddleHop(t *testing.T) {
 
 	d1Pos := p5pos(10)
 	d1 := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   p5ptrTo("did:example:mid"),
@@ -709,6 +727,7 @@ func TestDelegation_RevokedMiddleHop(t *testing.T) {
 
 	d2Pos := p5pos(11)
 	d2 := p5makeEntry(t, envelope.ControlHeader{
+		Destination: testDestinationDID,
 		SignerDID:     "did:example:mid",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   p5ptrTo("did:example:leaf"),

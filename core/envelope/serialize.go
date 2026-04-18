@@ -137,6 +137,31 @@ func validateHeaderForWrite(h *ControlHeader) error {
 	return nil
 }
 
+// Validate reports whether the Entry satisfies every write-time invariant
+// that NewEntry enforces: header shape, destination validity, SignerDID
+// shape, evidence-pointer caps, and canonical-size bound.
+//
+// Callers that construct *Entry directly (rather than through NewEntry or
+// a builder) should call Validate before Serialize, signing, or any other
+// operation that treats the entry as authoritative. NewEntry and the
+// builders already run the same checks during construction; calling
+// Validate on an entry they produced is redundant but harmless.
+//
+// Validate returns nil for well-formed entries and a wrapped sentinel
+// (ErrDestinationEmpty, ErrDestinationWhitespace, ErrDestinationTooLong,
+// ErrCanonicalTooLarge, and the header-validation errors) otherwise.
+func (e *Entry) Validate() error {
+	if e == nil {
+		return errors.New("envelope: nil Entry")
+	}
+	if err := validateHeaderForWrite(&e.Header); err != nil {
+		return err
+	}
+	if size := len(Serialize(e)); size > MaxCanonicalBytes {
+		return fmt.Errorf("%w: computed size %d", ErrCanonicalTooLarge, size)
+	}
+	return nil
+}
 func isASCII(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] > 0x7F {

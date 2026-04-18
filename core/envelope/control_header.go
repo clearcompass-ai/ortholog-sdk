@@ -16,6 +16,11 @@ Field discipline (Decision 25): the Control Header is locked to protocol
 governance. Adding fields requires unanimous scope authority approval
 through the three-phase amendment lifecycle. Domain-specific concepts
 belong in Domain Payload, never here.
+
+Destination binding: the Destination field cryptographically binds every
+entry to its intended exchange. This is part of the canonical hash, so
+an entry signed for exchange A cannot be verified against exchange B,
+preventing cross-exchange replay. See docs on the Destination field.
 */
 package envelope
 
@@ -72,6 +77,27 @@ type ControlHeader struct {
 	// SignerDID is the DID whose signing key produced the signature over
 	// this entry's canonical bytes. Required for every entry.
 	SignerDID string
+
+	// Destination is the DID of the intended destination exchange. Required
+	// for every entry. Part of the canonical hash — an entry signed for
+	// exchange A cannot be verified against exchange B, because the hash
+	// Alice signed over commits to A and any attempt to verify with B
+	// recomputes a different hash.
+	//
+	// This is the protocol-level defense against cross-exchange replay:
+	// an attacker who captures a signed entry cannot submit it to any
+	// exchange other than the one it was bound to at signing time.
+	//
+	// Validated by envelope.ValidateDestination at serialize time (non-empty,
+	// non-whitespace-padded, within MaxDestinationDIDLen). The verifier
+	// registry checks entry.Destination against its own scope before
+	// accepting any entry for verification.
+	//
+	// Note: Destination is NOT Log_DID. A single log may host entries bound
+	// to multiple logical destinations if the protocol evolves to support
+	// multiplexed exchanges; Destination is the authoritative binding for
+	// the signature, Log_DID is a physical-storage concern.
+	Destination string
 
 	// TargetRoot references the root entity being acted on. Nil for
 	// commentary entries and new root entities.

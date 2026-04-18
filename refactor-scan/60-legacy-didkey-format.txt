@@ -1,0 +1,5 @@
+./did/creation.go:55:	didStr := "did:key:f" + hex.EncodeToString(pubBytes)
+./tests/did_creation_test.go:20:	if !strings.HasPrefix(kp.DID, "did:key:f") {
+./tests/did_creation_test.go:21:		t.Fatalf("DID should start with did:key:f, got: %s", kp.DID)
+./tests/did_creation_test.go:47:	// Extract hex from did:key:f<hex>
+./tests/did_creation_test.go:48:	hexStr := strings.TrimPrefix(kp.DID, "did:key:f")

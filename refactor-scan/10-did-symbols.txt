@@ -1,0 +1,120 @@
+--- GenerateDIDKey\b ---
+./did/creation.go:4:GenerateDIDKey: generates ECDSA P-256 key pair + did:key identifier.
+./did/creation.go:38:// GenerateDIDKey generates a new ECDSA P-256 key pair and derives a
+./did/creation.go:44:func GenerateDIDKey() (*DIDKeyPair, error) {
+./tests/did_creation_test.go:12:// Tests: GenerateDIDKey
+./tests/did_creation_test.go:16:	kp, err := did.GenerateDIDKey()
+./tests/did_creation_test.go:35:	kp1, _ := did.GenerateDIDKey()
+./tests/did_creation_test.go:36:	kp2, _ := did.GenerateDIDKey()
+./tests/did_creation_test.go:46:	kp, _ := did.GenerateDIDKey()
+
+--- GenerateRawKey\b ---
+./did/creation.go:65:// GenerateRawKey generates a raw ECDSA P-256 key pair without DID formatting.
+./did/creation.go:66:func GenerateRawKey() (*ecdsa.PrivateKey, []byte, error) {
+./tests/phase6_delegation_key_test.go:15:	did.GenerateRawKey() (*ecdsa.PrivateKey, []byte, error)
+./tests/phase6_delegation_key_test.go:43:	priv, pubBytes, err := did.GenerateRawKey()
+./tests/did_creation_test.go:59:	priv, pubBytes, err := did.GenerateRawKey()
+
+--- DIDKeyPair\b ---
+./did/creation.go:30:// DIDKeyPair holds a generated key pair and its DID identifier.
+./did/creation.go:31:type DIDKeyPair struct {
+./did/creation.go:44:func GenerateDIDKey() (*DIDKeyPair, error) {
+./did/creation.go:57:	return &DIDKeyPair{
+
+--- CreateDIDDocument\b ---
+./did/creation.go:5:CreateDIDDocument: builds a complete DIDDocument for a new Ortholog log.
+./did/creation.go:100:// CreateDIDDocument builds a complete DIDDocument from the given configuration.
+./did/creation.go:104:func CreateDIDDocument(cfg CreateDIDDocumentConfig) (*DIDDocument, error) {
+./tests/did_creation_test.go:72:// Tests: CreateDIDDocument
+./tests/did_creation_test.go:76:	doc, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+./tests/did_creation_test.go:111:	doc, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+./tests/did_creation_test.go:129:	_, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{})
+./tests/did_creation_test.go:136:	doc, _ := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+./tests/did_creation_test.go:153:	doc, _ := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+
+--- CreateDIDDocumentConfig\b ---
+./did/creation.go:79:// CreateDIDDocumentConfig configures document creation.
+./did/creation.go:80:type CreateDIDDocumentConfig struct {
+./did/creation.go:104:func CreateDIDDocument(cfg CreateDIDDocumentConfig) (*DIDDocument, error) {
+./tests/did_creation_test.go:76:	doc, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+./tests/did_creation_test.go:111:	doc, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+./tests/did_creation_test.go:129:	_, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{})
+./tests/did_creation_test.go:136:	doc, _ := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+./tests/did_creation_test.go:153:	doc, _ := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+
+--- NewWebDID\b ---
+./did/creation.go:6:NewWebDID: creates a did:web identifier from a domain and optional path.
+./did/creation.go:166:// NewWebDID creates a did:web identifier from a domain and optional path.
+./did/creation.go:168://	NewWebDID("court.example.com", "")         → "did:web:court.example.com"
+./did/creation.go:169://	NewWebDID("example.com", "logs/court-01")  → "did:web:example.com:logs:court-01"
+./did/creation.go:170:func NewWebDID(domain string, path string) string {
+./tests/did_creation_test.go:167:// Tests: NewWebDID
+./tests/did_creation_test.go:171:	d := did.NewWebDID("court.example.com", "")
+./tests/did_creation_test.go:178:	d := did.NewWebDID("example.com", "logs/court-01")
+./tests/did_creation_test.go:185:	d := did.NewWebDID("example.com", "a/b/c/d")
+
+--- VerificationMethod\b ---
+./did/creation.go:123:		vm := VerificationMethod{
+./did/creation.go:129:		doc.VerificationMethod = append(doc.VerificationMethod, vm)
+./did/resolver.go:53:	VerificationMethod []VerificationMethod `json:"verificationMethod,omitempty"`
+./did/resolver.go:62:// VerificationMethod represents a public key in a DID Document.
+./did/resolver.go:63:type VerificationMethod struct {
+./did/resolver.go:118:	for _, vm := range d.VerificationMethod {
+./did/resolver.go:132:func decodePublicKey(vm VerificationMethod) ([]byte, error) {
+./tests/did_resolver_test.go:37:		VerificationMethod: []did.VerificationMethod{
+./tests/did_resolver_test.go:116:	if len(result.VerificationMethod) != 1 {
+./tests/did_resolver_test.go:117:		t.Fatalf("verification methods: %d", len(result.VerificationMethod))
+./tests/did_resolver_test.go:229:		VerificationMethod: []did.VerificationMethod{
+./tests/did_resolver_test.go:368:		doc.VerificationMethod = append(doc.VerificationMethod, did.VerificationMethod{
+./tests/did_creation_test.go:93:	if len(doc.VerificationMethod) != 1 {
+./tests/did_creation_test.go:94:		t.Fatalf("verification methods: %d", len(doc.VerificationMethod))
+./tests/did_creation_test.go:96:	if doc.VerificationMethod[0].PublicKeyHex != "aabbccdd" {
+./tests/did_creation_test.go:123:	if len(doc.VerificationMethod) != 0 {
+./tests/did_creation_test.go:124:		t.Fatalf("keys: %d (expected 0)", len(doc.VerificationMethod))
+./tests/did_creation_test.go:140:	if len(doc.VerificationMethod) != 3 {
+./tests/did_creation_test.go:141:		t.Fatalf("keys: %d", len(doc.VerificationMethod))
+./tests/did_creation_test.go:144:	for i, vm := range doc.VerificationMethod {
+
+--- EcdsaSecp256r1VerificationKey2019 ---
+./did/creation.go:125:			Type:         "EcdsaSecp256r1VerificationKey2019",
+./did/resolver.go:114:// Keys with type "EcdsaSecp256r1VerificationKey2019" or
+./tests/did_resolver_test.go:38:			{ID: didStr + "#key-0", Type: "EcdsaSecp256r1VerificationKey2019",
+./tests/did_resolver_test.go:230:			{ID: "did:web:test#key-0", Type: "EcdsaSecp256r1VerificationKey2019",
+./tests/did_resolver_test.go:369:			ID: fmt.Sprintf("did:web:test#key-%d", i+1), Type: "EcdsaSecp256r1VerificationKey2019",
+
+--- decodePublicKey\b ---
+./did/resolver.go:119:		pubBytes, err := decodePublicKey(vm)
+./did/resolver.go:132:func decodePublicKey(vm VerificationMethod) ([]byte, error) {
+
+--- WitnessKeys\b ---
+./did/resolver.go:113:// WitnessKeys extracts witness public keys from verification methods.
+./did/resolver.go:116:func (d *DIDDocument) WitnessKeys() ([]types.WitnessPublicKey, error) {
+./did/resolver.go:356:	keys, err := doc.WitnessKeys()
+./tests/did_resolver_test.go:209:	keys, err := doc.WitnessKeys()
+./tests/did_resolver_test.go:234:	keys, _ := doc.WitnessKeys()
+./tests/did_resolver_test.go:242:	keys, _ := doc.WitnessKeys()
+./tests/bootstrap_test.go:59:	if len(result.WitnessKeys) != 3 {
+./tests/bootstrap_test.go:60:		t.Fatalf("keys: %d", len(result.WitnessKeys))
+./tests/bootstrap_test.go:140:	if result.WitnessKeys != nil {
+./verifier/bootstrap.go:48:	WitnessKeys     []types.WitnessPublicKey
+./verifier/bootstrap.go:96:		WitnessKeys:     currentSet,
+./verifier/bootstrap.go:145:		WitnessKeys:     anchorWitnessKeys,
+./verifier/bootstrap.go:176:		WitnessKeys:     nil, // No witness verification for TOFU.
+
+--- PublicKeyHex\b ---
+./did/creation.go:127:			PublicKeyHex: pubKeyHex,
+./did/resolver.go:67:	PublicKeyHex       string `json:"publicKeyHex,omitempty"`
+./did/resolver.go:133:	if vm.PublicKeyHex != "" {
+./did/resolver.go:134:		return hex.DecodeString(vm.PublicKeyHex)
+./tests/did_resolver_test.go:39:				Controller: didStr, PublicKeyHex: hex.EncodeToString(pubBytes)},
+./tests/did_resolver_test.go:370:			Controller: "did:web:test", PublicKeyHex: hex.EncodeToString(pubBytes),
+./tests/did_creation_test.go:96:	if doc.VerificationMethod[0].PublicKeyHex != "aabbccdd" {
+
+--- PublicKeyMultibase\b ---
+./did/resolver.go:68:	PublicKeyMultibase string `json:"publicKeyMultibase,omitempty"`
+./did/resolver.go:136:	if vm.PublicKeyMultibase != "" && len(vm.PublicKeyMultibase) > 1 {
+./did/resolver.go:138:		switch vm.PublicKeyMultibase[0] {
+./did/resolver.go:140:			return hex.DecodeString(vm.PublicKeyMultibase[1:])
+./did/resolver.go:142:			return nil, fmt.Errorf("did: unsupported multibase encoding: %c", vm.PublicKeyMultibase[0])
+./tests/did_resolver_test.go:231:				Controller: "did:web:test", PublicKeyMultibase: "f" + hex.EncodeToString(pubBytes)},
+

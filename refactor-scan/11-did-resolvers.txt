@@ -1,0 +1,113 @@
+--- DIDResolver\b ---
+./witness/tree_head_client.go:36:// Satisfied by did.DIDResolver (Phase 4 Step 1) or by static config.
+./witness/verify.go:113:// Satisfied by did.DIDResolver (Phase 4 Step 1) via structural typing.
+./did/resolver.go:7:  - DIDResolver interface (the central abstraction)
+./did/resolver.go:9:  - CachingResolver (wraps any DIDResolver with TTL cache)
+./did/resolver.go:159:// DIDResolver interface
+./did/resolver.go:162:// DIDResolver resolves a DID string to a DIDDocument.
+./did/resolver.go:165:type DIDResolver interface {
+./did/resolver.go:252:// CachingResolver — TTL cache around any DIDResolver
+./did/resolver.go:255:// CachingResolver wraps any DIDResolver with a thread-safe TTL cache.
+./did/resolver.go:257:	inner DIDResolver
+./did/resolver.go:269:func NewCachingResolver(inner DIDResolver, ttl time.Duration) *CachingResolver {
+./did/resolver.go:317:// Adapters: DIDResolver → witness package interfaces
+./did/resolver.go:323:	Resolver DIDResolver
+./did/resolver.go:347:	Resolver DIDResolver
+./did/vendor_did.go:52:// VendorDIDResolver wraps a base DIDResolver with vendor-specific
+./did/vendor_did.go:57:	base     DIDResolver
+./did/vendor_did.go:62:func NewVendorDIDResolver(base DIDResolver, mappings []VendorMapping) *VendorDIDResolver {
+
+--- WebDIDResolver\b ---
+./did/resolver.go:8:  - WebDIDResolver (did:web method — HTTP fetch of DID documents)
+./did/resolver.go:163:// Implementations: WebDIDResolver (did:web), CachingResolver (wrapper),
+./did/resolver.go:170:// WebDIDResolver — did:web method
+./did/resolver.go:173:// WebDIDResolver resolves did:web identifiers by fetching DID documents
+./did/resolver.go:178:type WebDIDResolver struct {
+./did/resolver.go:184:func NewWebDIDResolver(client *http.Client) *WebDIDResolver {
+./did/resolver.go:188:	return &WebDIDResolver{Client: client}
+./did/resolver.go:192:func (r *WebDIDResolver) Resolve(did string) (*DIDDocument, error) {
+./tests/did_resolver_test.go:100:// Tests: WebDIDResolver (via mock HTTP server)
+
+--- CachingResolver\b ---
+./did/resolver.go:9:  - CachingResolver (wraps any DIDResolver with TTL cache)
+./did/resolver.go:163:// Implementations: WebDIDResolver (did:web), CachingResolver (wrapper),
+./did/resolver.go:252:// CachingResolver — TTL cache around any DIDResolver
+./did/resolver.go:255:// CachingResolver wraps any DIDResolver with a thread-safe TTL cache.
+./did/resolver.go:256:type CachingResolver struct {
+./did/resolver.go:269:func NewCachingResolver(inner DIDResolver, ttl time.Duration) *CachingResolver {
+./did/resolver.go:273:	return &CachingResolver{
+./did/resolver.go:281:func (c *CachingResolver) Resolve(did string) (*DIDDocument, error) {
+./did/resolver.go:303:func (c *CachingResolver) InvalidateCache(did string) {
+./did/resolver.go:310:func (c *CachingResolver) CacheSize() int {
+./tests/did_resolver_test.go:249:// Tests: CachingResolver
+./schema/resolver.go:12:type CachingResolver struct {
+./schema/resolver.go:17:func NewCachingResolver() *CachingResolver {
+./schema/resolver.go:18:	return &CachingResolver{cache: make(map[types.LogPosition]*builder.SchemaResolution)}
+./schema/resolver.go:21:func (r *CachingResolver) Resolve(ref types.LogPosition, fetcher builder.EntryFetcher) (*builder.SchemaResolution, error) {
+./schema/resolver.go:39:func (r *CachingResolver) cacheResult(ref types.LogPosition, res *builder.SchemaResolution) {
+
+--- VendorDIDResolver\b ---
+./cmd/verify-waves/main.go:213:		assert(hasType(node, "VendorDIDResolver"),
+./cmd/verify-waves/main.go:214:			"VendorDIDResolver infrastructure retained")
+./did/resolver.go:164:// VendorDIDResolver (vendor mapping + delegation).
+./did/vendor_did.go:4:VendorDIDResolver transforms vendor-specific DID methods into standard
+./did/vendor_did.go:49:// VendorDIDResolver
+./did/vendor_did.go:52:// VendorDIDResolver wraps a base DIDResolver with vendor-specific
+./did/vendor_did.go:56:type VendorDIDResolver struct {
+./did/vendor_did.go:62:func NewVendorDIDResolver(base DIDResolver, mappings []VendorMapping) *VendorDIDResolver {
+./did/vendor_did.go:67:	return &VendorDIDResolver{base: base, mappings: m}
+./did/vendor_did.go:71:func (v *VendorDIDResolver) Resolve(did string) (*DIDDocument, error) {
+./did/vendor_did.go:92:func (v *VendorDIDResolver) RegisterMapping(mapping VendorMapping) {
+./did/vendor_did.go:97:func (v *VendorDIDResolver) HasMapping(method string) bool {
+./tests/vendor_did_test.go:2:tests/vendor_did_test.go — VendorDIDResolver behavioral coverage.
+./tests/vendor_did_test.go:4:These tests verify the generic VendorDIDResolver infrastructure using
+
+--- VendorMapping\b ---
+./cmd/verify-waves/main.go:215:		assert(hasType(node, "VendorMapping"),
+./cmd/verify-waves/main.go:216:			"VendorMapping infrastructure retained")
+./did/vendor_did.go:16:	resolver := did.NewVendorDIDResolver(baseResolver, []did.VendorMapping{
+./did/vendor_did.go:28:// VendorMapping
+./did/vendor_did.go:31:// VendorMapping defines a rule for transforming a vendor DID method
+./did/vendor_did.go:33:type VendorMapping struct {
+./did/vendor_did.go:58:	mappings map[string]VendorMapping
+./did/vendor_did.go:62:func NewVendorDIDResolver(base DIDResolver, mappings []VendorMapping) *VendorDIDResolver {
+./did/vendor_did.go:63:	m := make(map[string]VendorMapping, len(mappings))
+./did/vendor_did.go:92:func (v *VendorDIDResolver) RegisterMapping(mapping VendorMapping) {
+./did/vendor_did.go:121:func applyMapping(method, specific string, mapping VendorMapping) (string, error) {
+./tests/vendor_did_test.go:43:func alphaMapping() did.VendorMapping {
+./tests/vendor_did_test.go:44:	return did.VendorMapping{
+./tests/vendor_did_test.go:51:func betaMapping() did.VendorMapping {
+./tests/vendor_did_test.go:52:	return did.VendorMapping{
+./tests/vendor_did_test.go:59:func gammaMapping() did.VendorMapping {
+./tests/vendor_did_test.go:60:	return did.VendorMapping{
+./tests/vendor_did_test.go:77:	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{alphaMapping()})
+./tests/vendor_did_test.go:90:	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{betaMapping()})
+./tests/vendor_did_test.go:105:	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{gammaMapping()})
+./tests/vendor_did_test.go:120:	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{alphaMapping()})
+./tests/vendor_did_test.go:165:	custom := did.VendorMapping{
+./tests/vendor_did_test.go:172:	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{custom})
+./tests/vendor_did_test.go:186:	failing := did.VendorMapping{
+./tests/vendor_did_test.go:193:	resolver := did.NewVendorDIDResolver(base, []did.VendorMapping{failing})
+./tests/vendor_did_test.go:229:		[]did.VendorMapping{alphaMapping(), betaMapping()},
+./check_sdk_usage.go:424:		"CourtMapping": "Define your own VendorMapping locally; see did.NewVendorDIDResolver",
+./check_sdk_usage.go:425:		"JNetMapping":  "Define your own VendorMapping locally; see did.NewVendorDIDResolver",
+./check_sdk_usage.go:426:		"CCRMapping":   "Define your own VendorMapping locally; see did.NewVendorDIDResolver",
+
+--- DIDEndpointAdapter\b ---
+./did/resolver.go:10:  - DIDEndpointAdapter (satisfies witness.EndpointProvider via structural typing)
+./did/resolver.go:320:// DIDEndpointAdapter satisfies witness.EndpointProvider (structural typing).
+./did/resolver.go:322:type DIDEndpointAdapter struct {
+./did/resolver.go:327:func (a *DIDEndpointAdapter) OperatorEndpoint(logDID string) (string, error) {
+./did/resolver.go:336:func (a *DIDEndpointAdapter) WitnessEndpoints(logDID string) ([]string, error) {
+./tests/did_resolver_test.go:328:	adapter := &did.DIDEndpointAdapter{Resolver: inner}
+./tests/did_resolver_test.go:340:	adapter := &did.DIDEndpointAdapter{Resolver: inner}
+
+--- DIDWitnessAdapter\b ---
+./did/resolver.go:11:  - DIDWitnessAdapter (satisfies witness.EndpointResolver via structural typing)
+./did/resolver.go:344:// DIDWitnessAdapter satisfies witness.EndpointResolver (structural typing).
+./did/resolver.go:346:type DIDWitnessAdapter struct {
+./did/resolver.go:351:func (a *DIDWitnessAdapter) ResolveWitnessKeys(logDID string) ([]types.WitnessPublicKey, int, error) {
+./tests/did_resolver_test.go:349:	adapter := &did.DIDWitnessAdapter{Resolver: inner}
+./tests/did_resolver_test.go:373:	adapter := &did.DIDWitnessAdapter{Resolver: &staticDIDRes{doc: doc}}
+./tests/did_resolver_test.go:382:	adapter := &did.DIDWitnessAdapter{Resolver: &failingDIDRes{err: errors.New("net")}}
+

@@ -187,7 +187,7 @@ func TestCanonicalHash_SignatureWireRoundTrip(t *testing.T) {
 	for i := range fakeSig {
 		fakeSig[i] = byte(i)
 	}
-	wire := envelope.AppendSignature(canonical, envelope.SigAlgoECDSA, fakeSig)
+	wire := envelope.MustAppendSignature(canonical, envelope.SigAlgoECDSA, fakeSig)
 	gotCanonical, gotAlgo, gotSig, err := envelope.StripSignature(wire)
 	if err != nil {
 		t.Fatal(err)

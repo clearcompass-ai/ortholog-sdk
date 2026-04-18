@@ -1,0 +1,66 @@
+--- EcdsaSecp256r1VerificationKey2019 ---
+./did/creation.go:125:			Type:         "EcdsaSecp256r1VerificationKey2019",
+./did/resolver.go:114:// Keys with type "EcdsaSecp256r1VerificationKey2019" or
+./tests/did_resolver_test.go:38:			{ID: didStr + "#key-0", Type: "EcdsaSecp256r1VerificationKey2019",
+./tests/did_resolver_test.go:230:			{ID: "did:web:test#key-0", Type: "EcdsaSecp256r1VerificationKey2019",
+./tests/did_resolver_test.go:369:			ID: fmt.Sprintf("did:web:test#key-%d", i+1), Type: "EcdsaSecp256r1VerificationKey2019",
+
+--- EcdsaSecp256k1VerificationKey2019 ---
+
+--- EcdsaSecp256k1RecoveryMethod2020 ---
+
+--- Ed25519VerificationKey2020 ---
+
+--- Bls12381G2Key2020 ---
+./did/resolver.go:115:// "Bls12381G2Key2020" are treated as witness keys.
+
+--- secp256k1 ---
+./crypto/signatures/entry_verify.go:47:		return errors.New("ECDSA secp256k1 signature verification failed")
+./crypto/signatures/entry_verify.go:59:		return nil, errors.New("invalid secp256k1 public key bytes")
+./crypto/escrow/verify_share.go:21://   - Value length == 32 bytes (secp256k1 scalar width).
+./crypto/escrow/ecies.go:2:// over secp256k1 for per-node Shamir share encryption.
+./crypto/escrow/ecies.go:26:func secp256k1() elliptic.Curve { return ecc.P256k1() }
+./crypto/escrow/ecies.go:28:// EncryptForNode encrypts plaintext for a specific escrow node's secp256k1 public key.
+./crypto/escrow/ecies.go:38:	curve := secp256k1()
+./crypto/escrow/ecies.go:93:	curve := secp256k1()
+./crypto/escrow/ecies.go:160:// padScalar pads a big.Int to 32 bytes for secp256k1 scalar operations.
+./crypto/artifact/pre.go:2:// on secp256k1. Same curve as entry signatures, ECIES, and witness cosignatures.
+./crypto/artifact/pre.go:87:// pk is the master public key (secp256k1 uncompressed 65 bytes).
+./crypto/artifact/pre.go:169:// pk_recipient: 65-byte uncompressed secp256k1 public key.
+./crypto/artifact/pre.go:515:// hashToPoint maps arbitrary bytes to a point on secp256k1 using try-and-increment.
+./crypto/artifact/pre.go:520:// secp256k1 has p ≡ 3 (mod 4), so sqrt(a) = a^((p+1)/4) mod p.
+./crypto/artifact/pre.go:525:	// Constants for secp256k1: y² = x³ + 7
+./crypto/artifact/pre.go:612:// padBigInt pads a big.Int to exactly 32 bytes (secp256k1 scalar width).
+./tests/phase6_delegation_key_test.go:39:// delKeyOwner generates a valid secp256k1 owner keypair for delegation
+./tests/phase6_delegation_key_test.go:50:// delKeyRecipient generates a valid secp256k1 recipient keypair.
+./tests/phase6_delegation_key_test.go:84:	// pkDel must be 65-byte uncompressed secp256k1 point
+./tests/phase6_delegation_key_test.go:218:	// Scalar 0 is invalid for secp256k1
+./lifecycle/artifact_access.go:26:over secp256k1. The recipient is an artifact requester rather than an
+./lifecycle/artifact_access.go:246:	RecipientPubKey   []byte                    // 65-byte uncompressed secp256k1 public key.
+./lifecycle/artifact_access.go:264:	OwnerSecretKey []byte // 32-byte secp256k1 private key scalar (unwrapped sk_del provided by caller)
+./lifecycle/delegation_key.go:6:Scalar-multiplication PRE schemes on secp256k1 have a mathematical property where:
+./lifecycle/delegation_key.go:57://   - pkDel: 65-byte uncompressed secp256k1 public key
+./lifecycle/delegation_key.go:66:	// 2. Generate ephemeral secp256k1 keypair
+./lifecycle/delegation_key.go:67:	c := secp256k1()
+./lifecycle/delegation_key.go:120://   - skDel: 32-byte secp256k1 private key scalar
+./lifecycle/delegation_key.go:127:	c := secp256k1()
+./lifecycle/delegation_key.go:164:// leading zeros if necessary. Essential for deterministic secp256k1 scalars.
+./lifecycle/helpers.go:20:func secp256k1() elliptic.Curve { return ecc.P256k1() }
+./lifecycle/helpers.go:22:// parseSecp256k1PubKey parses a 65-byte uncompressed secp256k1 public key.
+./lifecycle/helpers.go:27:	c := secp256k1()
+./lifecycle/helpers.go:30:		return nil, fmt.Errorf("lifecycle: invalid secp256k1 public key (%d bytes)", len(data))
+
+--- secp256r1 ---
+
+--- P-256 ---
+./did/creation.go:4:GenerateDIDKey: generates ECDSA P-256 key pair + did:key identifier.
+./did/creation.go:38:// GenerateDIDKey generates a new ECDSA P-256 key pair and derives a
+./did/creation.go:53:	// did:key uses multicodec prefix 0x1200 for P-256 public key,
+./did/creation.go:65:// GenerateRawKey generates a raw ECDSA P-256 key pair without DID formatting.
+
+--- P256k1 ---
+./crypto/signatures/entry_verify.go:14:func Secp256k1() elliptic.Curve { return ecc.P256k1() }
+./crypto/escrow/ecies.go:26:func secp256k1() elliptic.Curve { return ecc.P256k1() }
+./crypto/artifact/pre.go:39:func curve() elliptic.Curve { return ecc.P256k1() }
+./lifecycle/helpers.go:20:func secp256k1() elliptic.Curve { return ecc.P256k1() }
+

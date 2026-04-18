@@ -1,0 +1,19 @@
+--- SigAlgoECDSA\b ---
+./core/envelope/signature_wire.go:10:	SigAlgoECDSA   uint16 = 0x0001
+./core/envelope/signature_wire.go:56:	case SigAlgoECDSA, SigAlgoEd25519:
+./tests/canonical_hash_test.go:190:	wire := envelope.AppendSignature(canonical, envelope.SigAlgoECDSA, fakeSig)
+./tests/canonical_hash_test.go:198:	if gotAlgo != envelope.SigAlgoECDSA {
+
+--- SigAlgoEd25519\b ---
+./core/envelope/signature_wire.go:11:	SigAlgoEd25519 uint16 = 0x0002
+./core/envelope/signature_wire.go:56:	case SigAlgoECDSA, SigAlgoEd25519:
+
+--- SigAlgoID\b ---
+./log/http_entry_fetcher.go:119:		SignatureAlgoID: raw.SigAlgoID,
+./log/http_entry_fetcher.go:142:	SigAlgoID        uint16 `json:"sig_algo_id,omitempty"`
+
+--- ValidateAlgorithmID\b ---
+./core/envelope/signature_wire.go:54:func ValidateAlgorithmID(algoID uint16) error {
+
+--- AlgorithmID\b ---
+

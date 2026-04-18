@@ -1,0 +1,32 @@
+--- ethereum ---
+
+--- eip.?191 ---
+
+--- eip.?712 ---
+
+--- eip.?4361 ---
+
+--- erc.?1056 ---
+
+--- erc.?1271 ---
+
+--- erc.?4337 ---
+
+--- caip.?10 ---
+
+--- keccak ---
+
+--- ecrecover ---
+
+--- wallet ---
+./witness/staleness.go:5:  - Mobile credential wallet: 1 hour (background refresh)
+./witness/staleness.go:44:	// StalenessWallet is appropriate for mobile credential wallets.
+./witness/staleness.go:46:	StalenessWallet = StalenessConfig{MaxAge: 1 * time.Hour}
+./tests/staleness_test.go:109:func TestStaleness_WalletConfig(t *testing.T) {
+./tests/staleness_test.go:110:	cfg := witness.StalenessWallet
+./tests/staleness_test.go:112:		t.Fatalf("wallet MaxAge: %s", cfg.MaxAge)
+./tests/staleness_test.go:121:		t.Fatal("30min should be fresh for wallet")
+./tests/staleness_test.go:126:		t.Fatal("2h should be stale for wallet")
+
+--- siwe ---
+

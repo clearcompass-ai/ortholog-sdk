@@ -1,0 +1,35 @@
+# Dependency additions for Ortholog web3 refactor
+#
+# Run from repo root:
+#     go get golang.org/x/crypto@latest
+#     go get github.com/decred/dcrd/dcrec/secp256k1/v4@latest
+#     go get github.com/mr-tron/base58@latest
+#     go mod tidy
+#
+# The existing dependency `github.com/dustinxie/ecc` is RETAINED — it continues
+# to provide the secp256k1 curve implementation used by entry_verify.go.
+# Do not remove it.
+
+# Purpose of each new dependency:
+
+golang.org/x/crypto
+    Provides sha3.NewLegacyKeccak256 for Keccak256 hashing. Ethereum uses the
+    pre-standardization Keccak variant, which is NOT the same as SHA3-256.
+    Used by: crypto/signatures/ethereum_primitives.go
+             crypto/signatures/eip191.go
+             crypto/signatures/eip712.go
+
+github.com/decred/dcrd/dcrec/secp256k1/v4
+    Provides secp256k1 public-key recovery (ecrecover) used by the did:pkh
+    verifier. Chosen over go-ethereum/crypto to avoid pulling the full
+    Ethereum client as a dependency. Decred's implementation is the upstream
+    for btcec/v2 and is battle-tested.
+    Used by: crypto/signatures/ethereum_primitives.go
+             crypto/signatures/verify_primitives.go (via ethereum_primitives)
+
+github.com/mr-tron/base58
+    Provides base58btc encoding/decoding for multibase 'z' prefixed DIDs.
+    Required by the W3C did:key specification — multibase 'z' is the only
+    encoding produced and accepted by this SDK.
+    Used by: did/key_resolver.go (ParseDIDKey, EncodeDIDKey)
+             did/resolver.go     (decodePublicKey multibase 'z' path)

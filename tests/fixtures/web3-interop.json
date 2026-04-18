@@ -1,0 +1,55 @@
+{
+  "domain": {
+    "name": "Ortholog",
+    "version": "1",
+    "chain_id": 0,
+    "verifying_contract": "0x0000000000000000000000000000000000000000",
+    "salt_hex": "81ec03154b75ffe861768e00c874a6ad5f82d6495cd456dccbf983152e54b58e"
+  },
+  "fixtures": [
+    {
+      "source": "python-reference",
+      "name": "priv_01_canon_zero",
+      "priv_key_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "address_hex": "7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      "canonical_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+      "eip191_digest": "5e4106618209740b9f773a94c5667b9659a7a4e2691c7c8a78336e9889a6be07",
+      "eip191_sig": "86f507139e181316d8ad5bfa1b942f477c3ad2cf32f181ae15b3ec976c95a5433436883c526760928a861f109bad02d7625e1d281b6c7c26f93ac4c16eb776d11b",
+      "eip712_digest": "0f2bfa7044ab0551d7ce36428c2fcf6b8a2e30dec03508627cea83be3425831a",
+      "eip712_sig": "9b9e1957a8a13402240e0dfe9c4ed6facdb16d4ca73c48b727db4b3e00dd50086a64ca65d95ddb1aac8a1855c88e78ef3755bf11e55d8c6bb57b74277e5661a51b"
+    },
+    {
+      "source": "python-reference",
+      "name": "priv_01_canon_pattern",
+      "priv_key_hex": "0000000000000000000000000000000000000000000000000000000000000001",
+      "address_hex": "7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+      "canonical_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "eip191_digest": "245a48de257ae28de2b11cb8fc02361fe87a20566dc63bec4492c3854b1aae52",
+      "eip191_sig": "bde3c38910d2b85383072f6f978df82d0eda55afaa4848bb50ea089f8e99494c4937084063c34e4c454bf81b14ab98f5bbc8d33f303da8fa62b9232596b730551b",
+      "eip712_digest": "0f2baf68177124e6835cef41402ac95bfd9d9ade1aa5611d15dca9fc3072a38f",
+      "eip712_sig": "2288247c050494c49d1c4e734dde721cddb25e65582cb7795eda6fbadadda5276cc4dba5aa1a02b5c76b439bf0b31db76cf5b6fb46d217c9ae4059835a5a4d4a1b"
+    },
+    {
+      "source": "python-reference",
+      "name": "priv_2a_canon_deadbeef",
+      "priv_key_hex": "000000000000000000000000000000000000000000000000000000000000002a",
+      "address_hex": "ae3dffee97f92db0201d11cb8877c89738353bce",
+      "canonical_hex": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      "eip191_digest": "5774da0541e060d50e231a574665ec88a5720fae905402a7190f4dfa90e3e05e",
+      "eip191_sig": "ec2ce92e84c3f0f99a4cd9510896ecadc45e651bf3686642f0ab86a307e24def126206a601ba25c400fa61f7112ba8cb91f3c6b0b050b38f1b5de5e99cf0feec1c",
+      "eip712_digest": "25cb2c4c63e725f1a3109f0aa764f7fdd16d5c6092b112550d45af93f9a66306",
+      "eip712_sig": "a03607f9fef8e87060181d8f3a77326bcfdfab6fb30d99d0cf7c9adfae71b043024eab7d0e0c7d7b853abaae96987e71ef5f19255e415bcdd7d3eb2e767e40c11c"
+    },
+    {
+      "source": "python-reference",
+      "name": "priv_ff_canon_random",
+      "priv_key_hex": "00000000000000000000000000000000000000000000000000000000000000ff",
+      "address_hex": "5044a80bd3eff58302e638018534bbda8896c48a",
+      "canonical_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "eip191_digest": "8657d124337c08c7f71ee7a37198346c7490d146a1c98266cea9111af6f2f374",
+      "eip191_sig": "2a1ad7c67cdf53e29e6d0974ddbd1767c07e7b29ebd76920d9cdd829c35c76370b21e9ad649bae0bcffea539c855b792d7618ddf3a874ef0a24c4a08c296d8901c",
+      "eip712_digest": "f9c5a51db272840230e69d81f15553a385321df1de9a2b3aba8d20d9eea4604c",
+      "eip712_sig": "33a3dc130a715d32c4df6732085299bc813f3fb9b9e88bc22bf7ec64914073c75bfc398d10101e42e62b6c930b43d1d8932cc16c4082ed6a701b2fce38f9a3aa1c"
+    }
+  ]
+}

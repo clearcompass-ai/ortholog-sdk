@@ -1,0 +1,126 @@
+--- judicial.network ---
+./exchange/identity/mapping_escrow.go:20:  - Judicial network identity verification flows
+./types/schema_parameters.go:60:// judicial networks (clerk grants sealed evidence to defense counsel),
+./types/schema_parameters.go:90:	// access to protected artifacts. In judicial networks, only court
+./types/schema_parameters.go:99:	// In judicial networks, the list originates from a sealing order's
+./types/schema_parameters.go:100:	// Domain Payload, parsed by the judicial network's domain code.
+./core/smt/http_leaf_reader.go:11:The judicial network injects this at deployment time:
+./did/vendor_did.go:6:consumers (judicial networks, credentialing platforms) to support
+./tests/phase6_part_b_test.go:733:// the judicial-network repo. The SDK keeps only ProvisionSingleLog,
+./lifecycle/recovery.go:29:  - judicial-network/migration/ungraceful.go → InitiateRecovery → CollectShares → ExecuteRecovery
+./lifecycle/scope_governance.go:22:  - judicial-network/consortium/scope_governance.go
+./lifecycle/scope_governance.go:75:// in the judicial network) are encoded in the Domain Payload and do not
+./lifecycle/scope_governance.go:108:	// Judicial network proposal types like "add_access_tier" route
+./lifecycle/provision.go:14:Domain-specific multi-log provisioning (e.g., a judicial network's
+./lifecycle/provision.go:130:	// here (e.g., judicial networks recording the court DID, physician
+./storage/http_retrieval_provider.go:17:  - judicial-network deployment wiring
+./storage/http_content_store.go:12:The judicial network injects this at deployment time:
+./storage/http_content_store.go:20:  - judicial-network deployment wiring
+./verifier/origin_evaluator.go:23:  - verification/case_status.go in the judicial network
+./verifier/authority_evaluator.go:24:  - verification/delegation_chain.go in the judicial network
+./verifier/authority_evaluator.go:334:// Consumed by judicial network's verification/delegation_chain.go.
+./verifier/condition_evaluator.go:17:  - judicial-network/monitoring/sealing_compliance.go → EvaluateConditions
+./verifier/delegation_tree.go:21:  - judicial-network/delegation/roster_sync.go
+./log/http_entry_fetcher.go:11:The judicial network injects this at deployment time:
+./check_sdk_usage.go:4:// judicial network) uses the Ortholog SDK. Scans every .go file under a
+./check_sdk_usage.go:9://	go run check_sdk_usage.go -path /path/to/judicial-network
+./check_sdk_usage.go:10://	go run check_sdk_usage.go -path ./judicial-network -strictness=strict
+./check_sdk_usage.go:11://	go run check_sdk_usage.go -path ./judicial-network -json findings.json
+./builder/occ_retry.go:15:  - judicial-network/enforcement/sealing.go
+./builder/entry_builders.go:10:The judicial network's 14 interface rules depend on these builders
+
+--- judicial network ---
+./exchange/identity/mapping_escrow.go:20:  - Judicial network identity verification flows
+./types/schema_parameters.go:60:// judicial networks (clerk grants sealed evidence to defense counsel),
+./types/schema_parameters.go:90:	// access to protected artifacts. In judicial networks, only court
+./types/schema_parameters.go:99:	// In judicial networks, the list originates from a sealing order's
+./types/schema_parameters.go:100:	// Domain Payload, parsed by the judicial network's domain code.
+./core/smt/http_leaf_reader.go:11:The judicial network injects this at deployment time:
+./did/vendor_did.go:6:consumers (judicial networks, credentialing platforms) to support
+./lifecycle/scope_governance.go:75:// in the judicial network) are encoded in the Domain Payload and do not
+./lifecycle/scope_governance.go:108:	// Judicial network proposal types like "add_access_tier" route
+./lifecycle/provision.go:14:Domain-specific multi-log provisioning (e.g., a judicial network's
+./lifecycle/provision.go:130:	// here (e.g., judicial networks recording the court DID, physician
+./storage/http_content_store.go:12:The judicial network injects this at deployment time:
+./verifier/origin_evaluator.go:23:  - verification/case_status.go in the judicial network
+./verifier/authority_evaluator.go:24:  - verification/delegation_chain.go in the judicial network
+./verifier/authority_evaluator.go:334:// Consumed by judicial network's verification/delegation_chain.go.
+./log/http_entry_fetcher.go:11:The judicial network injects this at deployment time:
+./check_sdk_usage.go:4:// judicial network) uses the Ortholog SDK. Scans every .go file under a
+./builder/entry_builders.go:10:The judicial network's 14 interface rules depend on these builders
+
+--- consortium ---
+./lifecycle/scope_governance.go:22:  - judicial-network/consortium/scope_governance.go
+./lifecycle/scope_governance.go:24:  - Consortium management
+
+--- credentialing ---
+./types/schema_parameters.go:48:// operation — not selective disclosure in the credentialing sense (ZKP
+./types/schema_parameters.go:59:// physician credentialing (doctor discloses rotation to a medical board),
+./types/schema_parameters.go:88:	// artifact access." In physician credentialing, this means only
+./types/schema_parameters.go:101:	// In physician credentialing, the list originates from the holder's
+./types/schema_parameters.go:147:	// escrow recovery for large credentialing records) where any single
+./did/vendor_did.go:6:consumers (judicial networks, credentialing platforms) to support
+./tests/vendor_did_test.go:6:judicial, credentialing, and other domain mappings live in their
+./tests/phase6_part_b_test.go:735:// credentialing, insurance) composes this single-log primitive in the
+./lifecycle/provision.go:131:	// credentialing networks recording the institution).
+./monitoring/types.go:7:Every domain application (judicial, recording, credentialing) and the
+
+--- credential platform ---
+
+--- professional ---
+
+--- companies ---
+
+--- court\b ---
+./witness/tree_head_client.go:39:	// Example: "https://operator.davidson-county.court" → /v1/tree/head
+./types/schema_parameters.go:90:	// access to protected artifacts. In judicial networks, only court
+./core/smt/http_leaf_reader.go:12:  leafReader := smt.NewHTTPLeafReader("https://operator.court.gov")
+./core/smt/http_leaf_reader.go:49:	// BaseURL is the operator's base URL (e.g., "https://operator.court.gov").
+./did/creation.go:81:	// DID is the identifier for this document (e.g., "did:web:court.example.com").
+./did/creation.go:168://	NewWebDID("court.example.com", "")         → "did:web:court.example.com"
+./did/creation.go:169://	NewWebDID("example.com", "logs/court-01")  → "did:web:example.com:logs:court-01"
+./did/vendor_did.go:11:(did:court:*, did:jnet:*, etc.) are domain concerns and belong in
+./did/vendor_did.go:17:	    {Method: "court", DomainSuffix: ".court.gov", TargetMethod: "web"},
+./did/vendor_did.go:34:	// Method is the vendor-specific DID method prefix (e.g., "court").
+./tests/mapping_escrow_test.go:58:			LogDID:   "did:web:court.example.com",
+./tests/mapping_escrow_test.go:90:	if result.CredentialRef.LogDID != "did:web:court.example.com" {
+./tests/phase6_part_a_test.go:447:		SourceLogDID: "did:ortholog:foreign-court",
+./tests/did_creation_test.go:77:		DID:                   "did:web:court.example.com",
+./tests/did_creation_test.go:78:		OperatorEndpoint:      "https://operator.court.example.com",
+./tests/did_creation_test.go:87:	if doc.ID != "did:web:court.example.com" {
+./tests/did_creation_test.go:171:	d := did.NewWebDID("court.example.com", "")
+./tests/did_creation_test.go:172:	if d != "did:web:court.example.com" {
+./tests/did_creation_test.go:178:	d := did.NewWebDID("example.com", "logs/court-01")
+./tests/did_creation_test.go:179:	if d != "did:web:example.com:logs:court-01" {
+./tests/phase6_part_b_test.go:385:		SignerDID: "did:example:court", AuthorityPath: sameSigner(),
+./tests/phase6_part_b_test.go:390:	querier.addDelegation(t, d1, "did:example:court", "did:example:judge")
+./tests/phase6_part_b_test.go:415:		SignerDID: "did:example:court", AuthorityPath: sameSigner(),
+./tests/phase6_part_b_test.go:420:	querier.addDelegation(t, d1, "did:example:court", "did:example:judge")
+./tests/phase6_part_b_test.go:446:		SignerDID: "did:example:court", AuthorityPath: sameSigner(),
+./tests/phase6_part_b_test.go:451:	querier.addDelegation(t, d1, "did:example:court", "did:example:judge")
+./tests/phase6_part_b_test.go:474:		SignerDID: "did:example:court", AuthorityPath: sameSigner(),
+./tests/phase6_part_b_test.go:479:	querier.addDelegation(t, d1, "did:example:court", "did:example:a")
+./tests/phase6_part_b_test.go:480:	querier.addDelegation(t, d2, "did:example:court", "did:example:b")
+./tests/phase6_part_b_test.go:516:	plaintext := []byte("court evidence document")
+./tests/phase6_part_b_test.go:732:// Wave 3: ProvisionThreeLogs and its court-specific validation moved to
+./lifecycle/artifact_access.go:30:physician credentials, sealed court evidence, or insurance policies.
+./lifecycle/provision.go:130:	// here (e.g., judicial networks recording the court DID, physician
+./lifecycle/difficulty_test.go:49:var testLogDID = "did:web:court.test.gov"
+./storage/http_content_store.go:13:  contentStore := storage.NewHTTPContentStore("https://artifacts.court.gov")
+./storage/http_content_store.go:45:	// BaseURL is the artifact store's base URL (e.g., "https://artifacts.court.gov").
+./log/http_entry_fetcher.go:12:  fetcher := log.NewHTTPEntryFetcher("https://operator.court.gov", "did:web:courts.nashville.gov:cases")
+./log/http_entry_fetcher.go:51:	// BaseURL is the operator's base URL (e.g., "https://operator.court.gov").
+
+--- physician ---
+./types/schema_parameters.go:59:// physician credentialing (doctor discloses rotation to a medical board),
+./types/schema_parameters.go:88:	// artifact access." In physician credentialing, this means only
+./types/schema_parameters.go:101:	// In physician credentialing, the list originates from the holder's
+./core/envelope/version_policy.go:14:               verifiable in perpetuity (the judicial/physician credential
+./tests/phase6_part_b_test.go:734:// which is domain-agnostic. Multi-log provisioning (judicial, physician
+./lifecycle/artifact_access.go:30:physician credentials, sealed court evidence, or insurance policies.
+./lifecycle/provision.go:130:	// here (e.g., judicial networks recording the court DID, physician
+
+--- licensee ---
+
+--- licensing officer ---
+

@@ -28,6 +28,10 @@ func serveDIDDoc(doc did.DIDDocument) *httptest.Server {
 	}))
 }
 
+// makeSampleDIDDoc builds a DID document with one secp256k1 verification
+// method and the standard four service endpoints. The verification method
+// type matches the actual key bytes — secp256k1 keys are labeled with
+// VerificationMethodSecp256k1.
 func makeSampleDIDDoc(didStr string) did.DIDDocument {
 	priv, _ := signatures.GenerateKey()
 	pubBytes := signatures.PubKeyBytes(&priv.PublicKey)
@@ -35,8 +39,12 @@ func makeSampleDIDDoc(didStr string) did.DIDDocument {
 		Context: []string{"https://www.w3.org/ns/did/v1"},
 		ID:      didStr,
 		VerificationMethod: []did.VerificationMethod{
-			{ID: didStr + "#key-0", Type: "EcdsaSecp256r1VerificationKey2019",
-				Controller: didStr, PublicKeyHex: hex.EncodeToString(pubBytes)},
+			{
+				ID:           didStr + "#key-0",
+				Type:         did.VerificationMethodSecp256k1,
+				Controller:   didStr,
+				PublicKeyHex: hex.EncodeToString(pubBytes),
+			},
 		},
 		Service: []did.Service{
 			{ID: didStr + "#operator", Type: did.ServiceTypeOperator, ServiceEndpoint: "https://operator.example.com"},
@@ -227,13 +235,50 @@ func TestDIDDoc_WitnessKeys_Multibase(t *testing.T) {
 	doc := did.DIDDocument{
 		ID: "did:web:test",
 		VerificationMethod: []did.VerificationMethod{
-			{ID: "did:web:test#key-0", Type: "EcdsaSecp256r1VerificationKey2019",
-				Controller: "did:web:test", PublicKeyMultibase: "f" + hex.EncodeToString(pubBytes)},
+			{
+				ID:                 "did:web:test#key-0",
+				Type:               did.VerificationMethodSecp256k1,
+				Controller:         "did:web:test",
+				PublicKeyMultibase: "f" + hex.EncodeToString(pubBytes),
+			},
 		},
 	}
-	keys, _ := doc.WitnessKeys()
+	keys, err := doc.WitnessKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(keys) != 1 {
 		t.Fatalf("keys: %d", len(keys))
+	}
+}
+
+func TestDIDDoc_WitnessKeys_UnsupportedTypeFiltered(t *testing.T) {
+	// WitnessKeys must filter OUT verification methods whose type is not in
+	// the supported set. Recovery-method VMs (did:pkh style) carry an
+	// address, not a pubkey, and are not usable for witness cosignatures.
+	doc := did.DIDDocument{
+		ID: "did:web:test",
+		VerificationMethod: []did.VerificationMethod{
+			{
+				ID:                  "did:web:test#recovery-0",
+				Type:                did.VerificationMethodSecp256k1Recovery,
+				Controller:          "did:web:test",
+				BlockchainAccountID: "eip155:1:0xabcdef0123456789abcdef0123456789abcdef01",
+			},
+			{
+				ID:           "did:web:test#witness-0",
+				Type:         "UnknownKeyType2099",
+				Controller:   "did:web:test",
+				PublicKeyHex: "aabbcc",
+			},
+		},
+	}
+	keys, err := doc.WitnessKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("expected 0 witness keys from unsupported types, got %d", len(keys))
 	}
 }
 
@@ -366,8 +411,10 @@ func TestWitnessAdapter_DefaultQuorum(t *testing.T) {
 		priv, _ := signatures.GenerateKey()
 		pubBytes := signatures.PubKeyBytes(&priv.PublicKey)
 		doc.VerificationMethod = append(doc.VerificationMethod, did.VerificationMethod{
-			ID: fmt.Sprintf("did:web:test#key-%d", i+1), Type: "EcdsaSecp256r1VerificationKey2019",
-			Controller: "did:web:test", PublicKeyHex: hex.EncodeToString(pubBytes),
+			ID:           fmt.Sprintf("did:web:test#key-%d", i+1),
+			Type:         did.VerificationMethodSecp256k1,
+			Controller:   "did:web:test",
+			PublicKeyHex: hex.EncodeToString(pubBytes),
 		})
 	}
 	adapter := &did.DIDWitnessAdapter{Resolver: &staticDIDRes{doc: doc}}

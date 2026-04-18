@@ -1,0 +1,549 @@
+--- SignerDID\b ---
+./core/envelope/control_header.go:72:	// SignerDID is the DID whose signing key produced the signature over
+./core/envelope/control_header.go:74:	SignerDID string
+./core/envelope/serialize.go:110:	if h.SignerDID == "" {
+./core/envelope/serialize.go:113:	if !isASCII(h.SignerDID) {
+./core/envelope/serialize.go:170:	b = appendLenPrefixedString(b, h.SignerDID)
+./core/envelope/serialize.go:245:	if h.SignerDID, err = readLenPrefixedString(r); err != nil {
+./core/envelope/serialize.go:246:		return nil, wrapField("SignerDID", err)
+./tests/builder_local_only_test.go:11:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", TargetRoot: ptrTo(foreignPos(1)), AuthorityPath: sameSigner()}, nil)
+./tests/builder_local_only_test.go:17:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{foreignPos(2)}}, nil)
+./tests/builder_local_only_test.go:23:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(rootPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(foreignPos(2))}, nil)
+./tests/builder_local_only_test.go:29:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", TargetRoot: ptrTo(rootPos), AuthorityPath: sameSigner()}, nil)
+./tests/concurrency_test.go:25:	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+./tests/concurrency_test.go:27:	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
+./tests/concurrency_test.go:33:	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+./tests/concurrency_test.go:35:	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(pos(999))}, nil)
+./tests/concurrency_test.go:43:	schemaEntry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:schema-author", AuthorityPath: sameSigner(), CommutativeOperations: []uint32{1, 2}}, nil)
+./tests/concurrency_test.go:45:	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), SchemaRef: ptrTo(schemaPos)}, nil)
+./tests/concurrency_test.go:47:	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), SchemaRef: ptrTo(schemaPos), PriorAuthority: ptrTo(e1Pos)}, nil)
+./tests/concurrency_test.go:57:		hdr := envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}
+./tests/concurrency_test.go:61:	e, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(pos(3))}, nil)
+./tests/concurrency_test.go:69:	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+./tests/concurrency_test.go:71:	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
+./tests/concurrency_test.go:77:	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+./tests/concurrency_test.go:79:	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
+./tests/concurrency_test.go:104:	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+./tests/concurrency_test.go:106:	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
+./tests/phase6_grant_auth_test.go:84:		SignerDID:     "did:example:admin",
+./tests/phase6_grant_auth_test.go:306:		if result.GrantEntry.Header.SignerDID != "did:example:judge" {
+./tests/phase6_grant_auth_test.go:307:			t.Fatalf("grant entry signer: %s", result.GrantEntry.Header.SignerDID)
+./tests/envelope_v5_test.go:35:		SignerDID:     "did:test:determinism",
+./tests/envelope_v5_test.go:64:		SignerDID:     "did:test:roundtrip",
+./tests/envelope_v5_test.go:84:	if round.Header.SignerDID != "did:test:roundtrip" {
+./tests/envelope_v5_test.go:85:		t.Errorf("SignerDID: got %q", round.Header.SignerDID)
+./tests/envelope_v5_test.go:116:		SignerDID: "did:test:isolation",
+./tests/envelope_v5_test.go:169:		SignerDID: "did:test",
+./tests/envelope_v5_test.go:182:		SignerDID: "",
+./tests/envelope_v5_test.go:195:		SignerDID: "did:test:\x80",
+./tests/envelope_v5_test.go:213:		SignerDID:        "did:test:evcap",
+./tests/canonical_hash_test.go:14:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", EventTime: 1700000000000000}, []byte("payload"))
+./tests/canonical_hash_test.go:24:		SignerDID: "did:example:bob", TargetRoot: ptrTo(pos(42)), AuthorityPath: sameSigner(),
+./tests/canonical_hash_test.go:40:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:ascii-only-123"}, nil)
+./tests/canonical_hash_test.go:48:	_, err := envelope.NewEntry(envelope.ControlHeader{SignerDID: "did:example:\x80bad"}, nil)
+./tests/canonical_hash_test.go:55:	_, err := envelope.NewEntry(envelope.ControlHeader{SignerDID: ""}, nil)
+./tests/canonical_hash_test.go:70:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:fwdcompat"}, []byte("original-payload"))
+./tests/canonical_hash_test.go:86:	if recovered.Header.SignerDID != "did:example:fwdcompat" {
+./tests/canonical_hash_test.go:87:		t.Fatalf("SignerDID corrupted: got %q", recovered.Header.SignerDID)
+./tests/canonical_hash_test.go:96:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:preamble"}, []byte("test"))
+./tests/canonical_hash_test.go:114:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:corrupt"}, nil)
+./tests/canonical_hash_test.go:125:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:preepoch", EventTime: -86400000000}, nil)
+./tests/canonical_hash_test.go:138:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:max", TargetRoot: &maxPos}, nil)
+./tests/canonical_hash_test.go:154:	entry1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:scope", AuthoritySet: set}, nil)
+./tests/canonical_hash_test.go:156:	entry2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:scope", AuthoritySet: set}, nil)
+./tests/canonical_hash_test.go:164:	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:nilset", AuthoritySet: nil}, nil)
+./tests/canonical_hash_test.go:165:	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:nilset", AuthoritySet: map[string]struct{}{}}, nil)
+./tests/canonical_hash_test.go:172:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:nullpos", TargetRoot: nil}, nil)
+./tests/canonical_hash_test.go:184:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:sigtest"}, []byte("signed"))
+./tests/canonical_hash_test.go:212:		SignerDID:        "did:example:overcap",
+./tests/canonical_hash_test.go:226:		SignerDID:         "did:example:issuer",
+./tests/canonical_hash_test.go:232:		SignerDID: "did:example:issuer",
+./tests/builder_paths_test.go:13:	amendment, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", TargetRoot: ptrTo(rootPos), AuthorityPath: sameSigner()}, []byte("amended"))
+./tests/builder_paths_test.go:23:	act, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", TargetRoot: ptrTo(rootPos), TargetIntermediate: ptrTo(intPos), AuthorityPath: sameSigner()}, nil)
+./tests/builder_paths_test.go:34:	action, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
+./tests/builder_paths_test.go:44:	action, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:leaf", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{d2, d1}}, nil)
+./tests/builder_paths_test.go:54:	action, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{d3, d2, d1}}, nil)
+./tests/builder_paths_test.go:64:	action, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{d3, d2, d1}}, nil)
+./tests/builder_paths_test.go:78:	action, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
+./tests/builder_paths_test.go:89:	action, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
+./tests/builder_paths_test.go:97:	action, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
+./tests/builder_paths_test.go:105:	enf, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, []byte("sealing"))
+./tests/builder_paths_test.go:116:	amend, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:auth1", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), AuthoritySet: newSet}, nil)
+./tests/builder_paths_test.go:125:	removal, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+./tests/builder_paths_test.go:134:	activation, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), AuthoritySet: map[string]struct{}{"did:example:a": {}}}, nil)
+./tests/builder_paths_test.go:143:	contest, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+./tests/builder_paths_test.go:152:	snap, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), EvidencePointers: []types.LogPosition{pos(10), pos(11)}}, nil)
+./tests/builder_paths_test.go:161:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:attacker", TargetRoot: ptrTo(rootPos), AuthorityPath: sameSigner()}, nil)
+./tests/builder_paths_test.go:167:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:witness"}, []byte("attestation"))
+./tests/entry_signature_test.go:13:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:signer"}, []byte("payload"))
+./tests/entry_signature_test.go:22:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:signer"}, []byte("payload"))
+./tests/phase6_part_a_test.go:46:		SignerDID:     signerDID,
+./tests/phase6_part_a_test.go:69:		SignerDID: "did:example:alice",
+./tests/phase6_part_a_test.go:76:	if entry.Header.SignerDID != "did:example:alice" {
+./tests/phase6_part_a_test.go:77:		t.Fatalf("SignerDID: %s", entry.Header.SignerDID)
+./tests/phase6_part_a_test.go:100:		SignerDID:  "did:example:alice",
+./tests/phase6_part_a_test.go:118:		SignerDID: "did:example:alice",
+./tests/phase6_part_a_test.go:127:		SignerDID:   "did:example:owner",
+./tests/phase6_part_a_test.go:141:		SignerDID: "did:example:owner",
+./tests/phase6_part_a_test.go:150:		SignerDID:  "did:example:alice",
+./tests/phase6_part_a_test.go:164:		SignerDID:    "did:example:judge",
+./tests/phase6_part_a_test.go:183:		SignerDID:  "did:example:judge",
+./tests/phase6_part_a_test.go:193:		SignerDID:    "did:example:admin",
+./tests/phase6_part_a_test.go:207:		SignerDID:    "did:example:admin",
+./tests/phase6_part_a_test.go:218:		SignerDID:       "did:example:admin",
+./tests/phase6_part_a_test.go:236:		SignerDID: "did:example:witness",
+./tests/phase6_part_a_test.go:253:		SignerDID:     "did:example:cosigner",
+./tests/phase6_part_a_test.go:266:		SignerDID: "did:example:cosigner",
+./tests/phase6_part_a_test.go:275:		SignerDID:    "did:example:holder",
+./tests/phase6_part_a_test.go:292:		SignerDID:   "did:example:holder",
+./tests/phase6_part_a_test.go:306:		SignerDID:          "did:example:delegate",
+./tests/phase6_part_a_test.go:324:		SignerDID:  "did:example:owner",
+./tests/phase6_part_a_test.go:351:		SignerDID: "did:example:owner",
+./tests/phase6_part_a_test.go:360:		SignerDID:    "did:example:judge",
+./tests/phase6_part_a_test.go:381:		SignerDID:  "did:example:judge",
+./tests/phase6_part_a_test.go:391:		SignerDID: "did:example:recovery-agent",
+./tests/phase6_part_a_test.go:398:	if entry.Header.SignerDID != "did:example:recovery-agent" {
+./tests/phase6_part_a_test.go:399:		t.Fatalf("SignerDID: %s", entry.Header.SignerDID)
+./tests/phase6_part_a_test.go:411:		SignerDID:    "did:example:operator",
+./tests/phase6_part_a_test.go:420:	if entry.Header.SignerDID != "did:example:operator" {
+./tests/phase6_part_a_test.go:421:		t.Fatalf("SignerDID: %s", entry.Header.SignerDID)
+./tests/phase6_part_a_test.go:436:		SignerDID:   "did:example:operator",
+./tests/phase6_part_a_test.go:446:		SignerDID:    "did:example:relay",
+./tests/phase6_part_a_test.go:454:	if entry.Header.SignerDID != "did:example:relay" {
+./tests/phase6_part_a_test.go:455:		t.Fatalf("SignerDID: %s", entry.Header.SignerDID)
+./tests/phase6_part_a_test.go:464:		SignerDID: "did:example:relay",
+./tests/phase6_part_a_test.go:474:		SignerDID:             "did:example:schema-author",
+./tests/phase6_part_a_test.go:500:		SignerDID:     "did:example:owner",
+./tests/phase6_part_a_test.go:532:	if assembly.Hops[2].SignerDID != "did:example:owner" {
+./tests/phase6_part_a_test.go:533:		t.Fatalf("hop[2] signer: %s", assembly.Hops[2].SignerDID)
+./tests/phase6_part_a_test.go:543:		SignerDID:     "did:example:owner",
+./tests/phase6_part_a_test.go:572:		SignerDID:     "did:example:owner",
+./tests/phase6_part_a_test.go:602:		SignerDID:     "did:example:owner",
+./tests/phase6_part_a_test.go:630:		SignerDID:     "did:example:owner",
+./tests/phase6_part_a_test.go:637:		SignerDID:     "did:example:owner",
+./tests/phase6_part_a_test.go:710:		SignerDID:     "did:example:alice",
+./tests/phase6_part_a_test.go:737:		SignerDID:     "did:example:alice",
+./tests/phase6_part_a_test.go:744:		SignerDID:     "did:example:alice",
+./tests/phase6_part_a_test.go:770:		SignerDID:     "did:example:owner",
+./tests/phase6_part_a_test.go:780:		SignerDID:          "did:example:delegate",
+./tests/phase6_part_a_test.go:810:		SignerDID:     "did:example:entity",
+./tests/phase6_part_a_test.go:818:		SignerDID:     "did:example:judge",
+./tests/phase6_part_a_test.go:826:		SignerDID:     "did:example:judge",
+./tests/phase6_part_a_test.go:849:		SignerDID: "did:example:witness",
+./tests/phase6_part_a_test.go:872:		SignerDID:     "did:example:alice",
+./tests/phase6_part_a_test.go:895:		SignerDID:     "did:example:owner",
+./tests/phase6_part_a_test.go:903:		SignerDID:     "did:example:owner",
+./tests/phase6_part_a_test.go:912:		SignerDID:          "did:example:delegate",
+./tests/phase6_part_a_test.go:936:		SignerDID:     "did:example:alice",
+./tests/phase6_part_a_test.go:953:			SignerDID:        "did:example:alice",
+./tests/phase6_part_a_test.go:979:		SignerDID:     "did:example:entity",
+./tests/phase6_part_a_test.go:989:		SignerDID:     "did:example:judge",
+./tests/phase6_part_a_test.go:1001:		SignerDID:        "did:example:judge",
+./tests/phase6_part_a_test.go:1027:		SignerDID:     "did:example:alice",
+./tests/phase6_part_a_test.go:1034:		SignerDID: "did:example:witness",
+./tests/phase6_part_a_test.go:1037:		SignerDID:     "did:example:alice",
+./tests/phase6_part_a_test.go:1042:		SignerDID:     "did:example:bob",
+./tests/helpers_test.go:80:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: signerDID, AuthorityPath: sameSigner()}, nil)
+./tests/helpers_test.go:92:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: signerDID, AuthorityPath: sameSigner(), DelegateDID: &delegateDID}, nil)
+./tests/helpers_test.go:101:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: signerDID, AuthorityPath: sameSigner(), AuthoritySet: authoritySet}, nil)
+./tests/phase5_part_b_test.go:76:		SignerDID:     "did:example:judge",
+./tests/phase5_part_b_test.go:103:		SignerDID:     "did:example:admin",
+./tests/phase5_part_b_test.go:115:		SignerDID:     "did:example:judge",
+./tests/phase5_part_b_test.go:125:		SignerDID:      "did:example:clerk",
+./tests/phase5_part_b_test.go:157:		SignerDID:     "did:example:admin",
+./tests/phase5_part_b_test.go:169:		SignerDID:     "did:example:a",
+./tests/phase5_part_b_test.go:178:		SignerDID:      "did:example:b",
+./tests/phase5_part_b_test.go:188:	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a"}, nil))
+./tests/phase5_part_b_test.go:190:	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c"}, nil))
+./tests/phase5_part_b_test.go:196:		SignerDID:        "did:example:b",
+./tests/phase5_part_b_test.go:225:		SignerDID:     "did:example:admin",
+./tests/phase5_part_b_test.go:239:		SignerDID: "did:example:a", TargetRoot: p5ptrTo(entityPos),
+./tests/phase5_part_b_test.go:245:		SignerDID: "did:example:b", TargetRoot: p5ptrTo(entityPos),
+./tests/phase5_part_b_test.go:252:	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c"}, nil))
+./tests/phase5_part_b_test.go:256:		SignerDID: "did:example:a", TargetRoot: p5ptrTo(entityPos),
+./tests/phase5_part_b_test.go:279:		SignerDID: "did:example:admin", AuthorityPath: sameSigner(),
+./tests/phase5_part_b_test.go:289:		SignerDID: "did:example:schema", AuthorityPath: sameSigner(),
+./tests/phase5_part_b_test.go:294:		SignerDID: "did:example:a", TargetRoot: p5ptrTo(entityPos),
+./tests/phase5_part_b_test.go:301:		SignerDID: "did:example:b", TargetRoot: p5ptrTo(entityPos),
+./tests/phase5_part_b_test.go:308:	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a"}, nil))
+./tests/phase5_part_b_test.go:310:	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c"}, nil))
+./tests/phase5_part_b_test.go:314:		SignerDID: "did:example:b", TargetRoot: p5ptrTo(entityPos),
+./tests/phase5_part_b_test.go:338:		SignerDID: "did:example:admin", AuthorityPath: sameSigner(),
+./tests/phase5_part_b_test.go:347:		SignerDID: "did:example:schema", AuthorityPath: sameSigner(),
+./tests/phase5_part_b_test.go:352:		SignerDID: "did:example:a", TargetRoot: p5ptrTo(entityPos),
+./tests/phase5_part_b_test.go:359:		SignerDID: "did:example:b", TargetRoot: p5ptrTo(entityPos),
+./tests/phase5_part_b_test.go:366:	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a"}, nil))
+./tests/phase5_part_b_test.go:368:	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c"}, nil))
+./tests/phase5_part_b_test.go:372:		SignerDID:     "did:example:independent-witness",
+./tests/phase5_part_b_test.go:378:		SignerDID: "did:example:b", TargetRoot: p5ptrTo(entityPos),
+./tests/phase5_part_b_test.go:443:		SignerDID: "did:example:holder", AuthorityPath: sameSigner(),
+./tests/phase5_part_b_test.go:454:		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
+./tests/phase5_part_b_test.go:486:		SignerDID: "did:example:holder", AuthorityPath: sameSigner(),
+./tests/phase5_part_b_test.go:494:		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
+./tests/phase5_part_b_test.go:523:		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
+./tests/phase5_part_b_test.go:552:		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
+./tests/phase5_part_b_test.go:559:		SignerDID: "did:example:escrow", TargetRoot: p5ptrTo(profilePos),
+./tests/phase5_part_b_test.go:593:		SignerDID: "did:example:admin", AuthorityPath: sameSigner(),
+./tests/phase5_part_b_test.go:602:		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
+./tests/phase5_part_b_test.go:609:		SignerDID: "did:example:b", TargetRoot: p5ptrTo(profilePos),
+./tests/phase5_part_b_test.go:615:	h.storeEntry(t, ev1, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a"}, nil))
+./tests/phase5_part_b_test.go:617:	h.storeEntry(t, ev2, p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:c"}, nil))
+./tests/phase5_part_b_test.go:621:		SignerDID: "did:example:a", TargetRoot: p5ptrTo(profilePos),
+./tests/phase5_part_b_test.go:651:		SignerDID: "did:example:holder", AuthorityPath: sameSigner(),
+./tests/phase5_part_b_test.go:663:		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
+./tests/phase5_part_b_test.go:676:		SignerDID: "did:example:holder", TargetRoot: p5ptrTo(profilePos),
+./tests/phase5_part_b_test.go:703:			SignerDID:     fmt.Sprintf("did:example:fp-signer%d", i),
+./tests/phase6_part_c_test.go:320:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice"}, []byte("payload"))
+./tests/phase6_part_c_test.go:370:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:ts"}, nil)
+./tests/phase6_part_c_test.go:407:		SignerDID: "did:example:deser", EventTime: 1700000000,
+./tests/phase6_part_c_test.go:425:	if recovered.Header.SignerDID != "did:example:deser" {
+./tests/phase6_part_c_test.go:426:		t.Fatalf("signer: %s", recovered.Header.SignerDID)
+./tests/phase6_part_c_test.go:437:			SignerDID: "did:example:multi", EventTime: int64(i),
+./tests/phase6_part_c_test.go:459:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:sig"}, nil)
+./tests/builder_determinism_test.go:13:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
+./tests/builder_determinism_test.go:24:		e, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
+./tests/builder_determinism_test.go:50:			entries[i], _ = makeEntry(t, envelope.ControlHeader{SignerDID: didForIndex(i), AuthorityPath: sameSigner(), EventTime: int64(i) * 1000000}, []byte{byte(i)})
+./tests/builder_determinism_test.go:53:			entries[i], _ = makeEntry(t, envelope.ControlHeader{SignerDID: signer, TargetRoot: ptrTo(pos(rootSeq)), AuthorityPath: sameSigner(), EventTime: int64(i) * 1000000}, []byte{byte(i)})
+./tests/builder_determinism_test.go:55:			entries[i], _ = makeEntry(t, envelope.ControlHeader{SignerDID: didForIndex(i), EventTime: int64(i) * 1000000}, []byte{byte(i)})
+./tests/phase5_part_a_test.go:63:		SignerDID:     signerDID,
+./tests/phase5_part_a_test.go:77:		SignerDID:     signerDID,
+./tests/phase5_part_a_test.go:118:	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:schema-author"}, payload)
+./tests/phase5_part_a_test.go:167:	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:minimal"}, payload)
+./tests/phase5_part_a_test.go:204:	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:forward"}, payload)
+./tests/phase5_part_a_test.go:215:	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:bad"}, []byte("{not valid json"))
+./tests/phase5_part_a_test.go:223:	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:empty"}, nil)
+./tests/phase5_part_a_test.go:233:	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:gcm"}, payload)
+./tests/phase5_part_a_test.go:242:	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:pre"}, payload)
+./tests/phase5_part_a_test.go:253:	entry := p5makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:thresh"}, payload)
+./tests/phase5_part_a_test.go:296:		SignerDID:     "did:example:alice",
+./tests/phase5_part_a_test.go:331:		SignerDID:     "did:example:admin",
+./tests/phase5_part_a_test.go:384:		SignerDID:          "did:example:alice",
+./tests/phase5_part_a_test.go:454:		SignerDID:     "did:example:judge",
+./tests/phase5_part_a_test.go:488:		SignerDID:     "did:example:judge",
+./tests/phase5_part_a_test.go:498:		SignerDID:      "did:example:judge",
+./tests/phase5_part_a_test.go:536:		SignerDID:     "did:example:schema-author",
+./tests/phase5_part_a_test.go:544:		SignerDID:     "did:example:judge",
+./tests/phase5_part_a_test.go:577:		SignerDID:     "did:example:judge",
+./tests/phase5_part_a_test.go:586:		SignerDID:     "did:example:judge2",
+./tests/phase5_part_a_test.go:600:			SignerDID:     "did:example:judge",
+./tests/phase5_part_a_test.go:609:		SignerDID:        "did:example:judge",
+./tests/phase5_part_a_test.go:642:		SignerDID:     "did:example:owner",
+./tests/phase5_part_a_test.go:653:		SignerDID:     "did:example:mid",
+./tests/phase5_part_a_test.go:664:		SignerDID:     "did:example:leaf",
+./tests/phase5_part_a_test.go:691:	if hops[2].SignerDID != "did:example:owner" {
+./tests/phase5_part_a_test.go:692:		t.Fatalf("hop[2] signer: %s", hops[2].SignerDID)
+./tests/phase5_part_a_test.go:701:		SignerDID:     "did:example:owner",
+./tests/phase5_part_a_test.go:712:		SignerDID:     "did:example:mid",
+./tests/phase6_part_b_test.go:72:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
+./tests/phase6_part_b_test.go:123:		SignerDID:      "did:example:judge",
+./tests/phase6_part_b_test.go:179:		SignerDID:     "did:example:schema-author",
+./tests/phase6_part_b_test.go:197:		SignerDID: "did:example:judge",
+./tests/phase6_part_b_test.go:207:		SignerDID:     "did:example:clerk",
+./tests/phase6_part_b_test.go:242:		SignerDID: "did:example:judge",
+./tests/phase6_part_b_test.go:273:		SignerDID: "did:example:judge",
+./tests/phase6_part_b_test.go:299:		SignerDID: "did:example:issuer",
+./tests/phase6_part_b_test.go:319:	pendingEntry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:actor"}, nil)
+./tests/phase6_part_b_test.go:335:	pendingEntry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:actor"}, nil)
+./tests/phase6_part_b_test.go:370:		SignerDID: signerDID, AuthorityPath: sameSigner(), DelegateDID: &delegateDID,
+./tests/phase6_part_b_test.go:385:		SignerDID: "did:example:court", AuthorityPath: sameSigner(),
+./tests/phase6_part_b_test.go:415:		SignerDID: "did:example:court", AuthorityPath: sameSigner(),
+./tests/phase6_part_b_test.go:446:		SignerDID: "did:example:court", AuthorityPath: sameSigner(),
+./tests/phase6_part_b_test.go:474:		SignerDID: "did:example:court", AuthorityPath: sameSigner(),
+./tests/phase6_part_b_test.go:740:		SignerDID:    "did:web:hospital.example.com",
+./tests/phase6_part_b_test.go:904:		SignerDID: "did:example:b", CosignatureOf: ptrTo(proposalPos),
+./tests/phase6_part_b_test.go:907:		SignerDID: "did:example:c", CosignatureOf: ptrTo(proposalPos),
+./lifecycle/recovery.go:119:		SignerDID: p.NewExchangeDID,
+./lifecycle/recovery.go:341:			SignerDID:    p.NewExchangeDID,
+./lifecycle/recovery.go:452:		if seen[entry.Header.SignerDID] {
+./lifecycle/recovery.go:455:		seen[entry.Header.SignerDID] = true
+./lifecycle/artifact_access.go:431:		SignerDID: params.GranterDID,
+./lifecycle/scope_governance.go:214:		SignerDID: p.ProposerDID,
+./lifecycle/scope_governance.go:337:		signerDID := entry.Header.SignerDID
+./lifecycle/scope_governance.go:415:		SignerDID:        p.ExecutorDID,
+./lifecycle/scope_governance.go:507:		SignerDID:      p.ExecutorDID,
+./lifecycle/scope_governance.go:585:		SignerDID:        p.ExecutorDID,
+./lifecycle/scope_governance.go:610:		SignerDID:     signerDID,
+./lifecycle/provision.go:100:// Authority_Path=SameSigner and SignerDID included in AuthoritySet.
+./lifecycle/provision.go:104:	// SignerDID is the creator of the scope entity and (conventionally)
+./lifecycle/provision.go:106:	SignerDID string
+./lifecycle/provision.go:156:	if cfg.SignerDID == "" {
+./lifecycle/provision.go:182:		SignerDID:    cfg.SignerDID,
+./lifecycle/provision.go:195:			SignerDID:   cfg.SignerDID,
+./lifecycle/provision.go:209:			SignerDID:             cfg.SignerDID,
+./verifier/authority_evaluator.go:21:	Returns []DelegationHop{Position, SignerDID, DelegateDID, IsLive, RevokedAt}.
+./verifier/authority_evaluator.go:90:	// SignerDID is who created (and can revoke) this delegation.
+./verifier/authority_evaluator.go:91:	SignerDID string
+./verifier/authority_evaluator.go:366:		hop.SignerDID = entry.Header.SignerDID
+./verifier/condition_evaluator.go:340:		if entry.Header.SignerDID == pendingEntry.Header.SignerDID {
+./verifier/condition_evaluator.go:343:		if seen[entry.Header.SignerDID] {
+./verifier/condition_evaluator.go:346:		seen[entry.Header.SignerDID] = true
+./verifier/delegation_tree.go:11:  1. Start at root entity → read SignerDID
+./verifier/delegation_tree.go:50:	// SignerDID is who created this delegation (the grantor).
+./verifier/delegation_tree.go:51:	SignerDID string
+./verifier/delegation_tree.go:122://  1. Fetches the root entity to determine its SignerDID
+./verifier/delegation_tree.go:148:		SignerDID: rootEntry.Header.SignerDID,
+./verifier/delegation_tree.go:159:	ancestors := map[string]bool{rootEntry.Header.SignerDID: true}
+./verifier/delegation_tree.go:160:	expandLevel(rootNode, rootEntry.Header.SignerDID, p, ancestors, maxDepth, tree)
+./verifier/delegation_tree.go:207:			SignerDID:   entry.Header.SignerDID,
+./verifier/contest_override.go:274:			signers[entry.Header.SignerDID] = true
+./verifier/contest_override.go:321:		signers[entry.Header.SignerDID] = true
+./verifier/contest_override.go:340:		if entry.Header.CosignatureOf != nil && !authorityMembers[entry.Header.SignerDID] {
+./builder/entry_classification.go:142:	if h.SignerDID != target.Header.SignerDID {
+./builder/entry_classification.go:145:			Reason:  fmt.Sprintf("signer %s != target signer %s", h.SignerDID, target.Header.SignerDID),
+./builder/entry_classification.go:176:	targetSignerDID := target.Header.SignerDID
+./builder/entry_classification.go:223:			signerDID:   entry.Header.SignerDID,
+./builder/entry_classification.go:228:	expectedDelegate := h.SignerDID
+./builder/entry_classification.go:314:	if _, ok := currentScope.Header.AuthoritySet[h.SignerDID]; !ok {
+./builder/entry_classification.go:317:			Reason: fmt.Sprintf("signer %s not in scope authority set", h.SignerDID),
+./builder/algorithm.go:116:	if h.SignerDID != target.Header.SignerDID {
+./builder/algorithm.go:161:	targetSignerDID := target.Header.SignerDID
+./builder/algorithm.go:193:	expectedDelegate := h.SignerDID
+./builder/algorithm.go:209:			if dh.SignerDID == targetSignerDID {
+./builder/algorithm.go:232:			if visited[dh.SignerDID] {
+./builder/algorithm.go:235:			visited[dh.SignerDID] = true
+./builder/algorithm.go:236:			expectedDelegate = dh.SignerDID
+./builder/algorithm.go:289:	if !currentScope.Header.AuthoritySetContains(h.SignerDID) {
+./builder/algorithm.go:365:		if !currentScope.Header.AuthoritySetContains(approval.Header.SignerDID) {
+./builder/assemble_path_b.go:25:	SignerDID   string
+./builder/assemble_path_b.go:70:	rootSignerDID := rootEntry.Header.SignerDID
+./builder/assemble_path_b.go:100:			signerDID:   entry.Header.SignerDID,
+./builder/assemble_path_b.go:136:							SignerDID:   c.signerDID,
+./builder/entry_builders.go:49:	SignerDID         string
+./builder/entry_builders.go:60:	if p.SignerDID == "" {
+./builder/entry_builders.go:65:		SignerDID:         p.SignerDID,
+./builder/entry_builders.go:78:	SignerDID          string
+./builder/entry_builders.go:91:	if p.SignerDID == "" {
+./builder/entry_builders.go:99:		SignerDID:          p.SignerDID,
+./builder/entry_builders.go:114:	SignerDID   string // Who is delegating (grantor).
+./builder/entry_builders.go:126:	if p.SignerDID == "" {
+./builder/entry_builders.go:134:		SignerDID:     p.SignerDID,
+./builder/entry_builders.go:146:	SignerDID    string
+./builder/entry_builders.go:157:	if p.SignerDID == "" {
+./builder/entry_builders.go:165:		SignerDID:     p.SignerDID,
+./builder/entry_builders.go:177:	SignerDID  string
+./builder/entry_builders.go:186:	if p.SignerDID == "" {
+./builder/entry_builders.go:194:		SignerDID:     p.SignerDID,
+./builder/entry_builders.go:209:	SignerDID    string
+./builder/entry_builders.go:217:// must be non-empty and contain at least SignerDID.
+./builder/entry_builders.go:219:	if p.SignerDID == "" {
+./builder/entry_builders.go:225:	if _, ok := p.AuthoritySet[p.SignerDID]; !ok {
+./builder/entry_builders.go:230:		SignerDID:     p.SignerDID,
+./builder/entry_builders.go:242:	SignerDID        string
+./builder/entry_builders.go:256:	if p.SignerDID == "" {
+./builder/entry_builders.go:267:		SignerDID:        p.SignerDID,
+./builder/entry_builders.go:283:	SignerDID      string
+./builder/entry_builders.go:294:	if p.SignerDID == "" {
+./builder/entry_builders.go:302:		SignerDID:      p.SignerDID,
+./builder/entry_builders.go:319:	SignerDID        string
+./builder/entry_builders.go:334:	if p.SignerDID == "" {
+./builder/entry_builders.go:345:		SignerDID:        p.SignerDID,
+./builder/entry_builders.go:365:	SignerDID string
+./builder/entry_builders.go:373:	if p.SignerDID == "" {
+./builder/entry_builders.go:377:		SignerDID: p.SignerDID,
+./builder/entry_builders.go:386:	SignerDID     string
+./builder/entry_builders.go:395:	if p.SignerDID == "" {
+./builder/entry_builders.go:402:		SignerDID:     p.SignerDID,
+./builder/entry_builders.go:412:	SignerDID string // New exchange or recovery agent.
+./builder/entry_builders.go:420:	if p.SignerDID == "" {
+./builder/entry_builders.go:424:		SignerDID: p.SignerDID,
+./builder/entry_builders.go:433:	SignerDID    string // Operator DID.
+./builder/entry_builders.go:444:	if p.SignerDID == "" {
+./builder/entry_builders.go:460:		SignerDID: p.SignerDID,
+./builder/entry_builders.go:473:	SignerDID    string
+./builder/entry_builders.go:484:	if p.SignerDID == "" {
+./builder/entry_builders.go:498:		SignerDID:     p.SignerDID,
+./builder/entry_builders.go:510:	SignerDID   string
+./builder/entry_builders.go:521:	if p.SignerDID == "" {
+./builder/entry_builders.go:535:		SignerDID:     p.SignerDID,
+./builder/entry_builders.go:553:	SignerDID             string
+./builder/entry_builders.go:563:	if p.SignerDID == "" {
+./builder/entry_builders.go:568:		SignerDID:             p.SignerDID,
+./builder/entry_builders.go:583:	SignerDID          string
+./builder/entry_builders.go:599:	if p.SignerDID == "" {
+./builder/entry_builders.go:610:		SignerDID:          p.SignerDID,
+./builder/entry_builders.go:630:	SignerDID      string
+./builder/entry_builders.go:640:	if p.SignerDID == "" {
+./builder/entry_builders.go:655:		SignerDID: p.SignerDID,
+
+--- DelegateDID\b ---
+./core/envelope/control_header.go:91:	// DelegateDID names the delegate on delegation entries (Path A entries
+./core/envelope/control_header.go:93:	DelegateDID *string
+./core/envelope/serialize.go:175:	b = appendOptionalString(b, h.DelegateDID)
+./core/envelope/serialize.go:263:	if h.DelegateDID, err = readOptionalString(r); err != nil {
+./core/envelope/serialize.go:264:		return nil, wrapField("DelegateDID", err)
+./tests/canonical_hash_test.go:26:		DelegateDID: ptrTo("did:example:delegate"), EvidencePointers: []types.LogPosition{pos(1), pos(2)},
+./tests/phase6_part_a_test.go:48:		DelegateDID:   &delegateDID,
+./tests/phase6_part_a_test.go:128:		DelegateDID: "did:example:delegate",
+./tests/phase6_part_a_test.go:134:	if entry.Header.DelegateDID == nil || *entry.Header.DelegateDID != "did:example:delegate" {
+./tests/phase6_part_a_test.go:135:		t.Fatal("DelegateDID mismatch")
+./tests/phase6_part_a_test.go:514:		DelegateDID:        "did:example:deputy",
+./tests/phase6_part_a_test.go:529:	if assembly.Hops[0].DelegateDID != "did:example:deputy" {
+./tests/phase6_part_a_test.go:530:		t.Fatalf("hop[0] delegate: %s", assembly.Hops[0].DelegateDID)
+./tests/phase6_part_a_test.go:552:		DelegateDID:        "did:example:delegate",
+./tests/phase6_part_a_test.go:585:		DelegateDID:        "did:example:d4",
+./tests/phase6_part_a_test.go:613:		DelegateDID:        "did:example:a",
+./tests/phase6_part_a_test.go:639:		DelegateDID:   ptrTo("did:example:delegate"),
+./tests/phase6_part_a_test.go:646:		DelegateDID:        "did:example:delegate",
+./tests/phase6_part_a_test.go:668:		DelegateDID:        "did:example:delegate",
+./tests/phase6_part_a_test.go:905:		DelegateDID:   ptrTo("did:example:delegate"),
+./tests/helpers_test.go:92:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: signerDID, AuthorityPath: sameSigner(), DelegateDID: &delegateDID}, nil)
+./tests/phase5_part_a_test.go:644:		DelegateDID:   p5ptrTo("did:example:mid"),
+./tests/phase5_part_a_test.go:655:		DelegateDID:   p5ptrTo("did:example:leaf"),
+./tests/phase5_part_a_test.go:666:		DelegateDID:   p5ptrTo("did:example:deputy"),
+./tests/phase5_part_a_test.go:688:	if hops[0].DelegateDID != "did:example:deputy" {
+./tests/phase5_part_a_test.go:689:		t.Fatalf("hop[0] delegate: %s", hops[0].DelegateDID)
+./tests/phase5_part_a_test.go:703:		DelegateDID:   p5ptrTo("did:example:mid"),
+./tests/phase5_part_a_test.go:714:		DelegateDID:   p5ptrTo("did:example:leaf"),
+./tests/phase6_part_b_test.go:370:		SignerDID: signerDID, AuthorityPath: sameSigner(), DelegateDID: &delegateDID,
+./lifecycle/provision.go:42:	// DelegateDID is who receives delegated authority.
+./lifecycle/provision.go:43:	DelegateDID string
+./lifecycle/provision.go:196:			DelegateDID: d.DelegateDID,
+./lifecycle/provision.go:201:			return nil, fmt.Errorf("lifecycle/provision: delegation %s: %w", d.DelegateDID, err)
+./verifier/authority_evaluator.go:21:	Returns []DelegationHop{Position, SignerDID, DelegateDID, IsLive, RevokedAt}.
+./verifier/authority_evaluator.go:93:	// DelegateDID is who received delegated authority.
+./verifier/authority_evaluator.go:94:	DelegateDID string
+./verifier/authority_evaluator.go:367:		if entry.Header.DelegateDID != nil {
+./verifier/authority_evaluator.go:368:			hop.DelegateDID = *entry.Header.DelegateDID
+./verifier/delegation_tree.go:53:	// DelegateDID is who received delegated authority.
+./verifier/delegation_tree.go:55:	DelegateDID string
+./verifier/delegation_tree.go:66:	// Children are delegations issued by this node's DelegateDID.
+./verifier/delegation_tree.go:128:// Cycle detection: if a DelegateDID appears as a signer at a deeper
+./verifier/delegation_tree.go:190:		// Only delegation entries (those with DelegateDID set).
+./verifier/delegation_tree.go:191:		if entry.Header.DelegateDID == nil {
+./verifier/delegation_tree.go:195:		delegateDID := *entry.Header.DelegateDID
+./verifier/delegation_tree.go:208:			DelegateDID: delegateDID,
+./builder/entry_classification.go:200:		if err != nil || entry.Header.DelegateDID == nil {
+./builder/entry_classification.go:224:			delegateDID: *entry.Header.DelegateDID,
+./builder/algorithm.go:179:		if err != nil || entry.Header.DelegateDID == nil {
+./builder/algorithm.go:203:			if *dh.DelegateDID != expectedDelegate {
+./builder/assemble_path_b.go:26:	DelegateDID string
+./builder/assemble_path_b.go:32:	DelegateDID        string              // Action signer's DID.
+./builder/assemble_path_b.go:47:// caller provides. It connects DelegateDID back to the root entity's signer
+./builder/assemble_path_b.go:90:		if entry.Header.DelegateDID == nil {
+./builder/assemble_path_b.go:101:			delegateDID: *entry.Header.DelegateDID,
+./builder/assemble_path_b.go:106:	// Build chain: walk from DelegateDID toward rootSignerDID.
+./builder/assemble_path_b.go:108:	currentExpected := params.DelegateDID
+./builder/assemble_path_b.go:137:							DelegateDID: c.delegateDID,
+./builder/assemble_path_b.go:153:		ErrChainDisconnected, params.DelegateDID, rootSignerDID)
+./builder/entry_builders.go:115:	DelegateDID string // Who receives delegated authority.
+./builder/entry_builders.go:129:	if p.DelegateDID == "" {
+./builder/entry_builders.go:136:		DelegateDID:   &p.DelegateDID,
+
+--- AuthoritySet\b ---
+./types/schema_parameters.go:82:	// AuthoritySet. The SDK fetches the scope entry, reads AuthoritySet,
+./core/envelope/control_header.go:99:	// AuthoritySet is the scope's authority membership, carried on scope
+./core/envelope/control_header.go:101:	AuthoritySet map[string]struct{}
+./core/envelope/control_header.go:163:	if h.AuthoritySet == nil {
+./core/envelope/control_header.go:166:	_, ok := h.AuthoritySet[did]
+./core/envelope/control_header.go:172:	return len(h.AuthoritySet)
+./core/envelope/control_header.go:178:	if len(h.AuthoritySet) == 0 {
+./core/envelope/control_header.go:181:	dids := make([]string, 0, len(h.AuthoritySet))
+./core/envelope/control_header.go:182:	for did := range h.AuthoritySet {
+./core/envelope/serialize.go:271:		return nil, wrapField("AuthoritySet", err)
+./core/envelope/serialize.go:274:		h.AuthoritySet = make(map[string]struct{}, len(dids))
+./core/envelope/serialize.go:276:			h.AuthoritySet[d] = struct{}{}
+./core/envelope/api.go:40:	// Authority snapshot entries (Path C with PriorAuthority + AuthoritySet)
+./tests/phase6_grant_auth_test.go:56:// The scope entity has AuthoritySet: {did:example:judge, did:example:clerk}.
+./tests/phase6_grant_auth_test.go:86:		AuthoritySet: map[string]struct{}{
+./tests/phase6_grant_auth_test.go:182://   - A granter IN the scope's AuthoritySet → grant succeeds
+./tests/phase6_grant_auth_test.go:183://   - A granter NOT in the scope's AuthoritySet → grant denied,
+./tests/phase6_grant_auth_test.go:186:// The scope's AuthoritySet is {judge, clerk}. The test tries:
+./tests/phase6_grant_auth_test.go:259:// The scope's AuthoritySet is {judge, clerk}.
+./tests/canonical_hash_test.go:25:		EventTime: -1000000, AuthoritySet: map[string]struct{}{"did:example:a": {}, "did:example:b": {}},
+./tests/canonical_hash_test.go:154:	entry1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:scope", AuthoritySet: set}, nil)
+./tests/canonical_hash_test.go:156:	entry2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:scope", AuthoritySet: set}, nil)
+./tests/canonical_hash_test.go:159:		t.Fatal("AuthoritySet serialization not deterministic")
+./tests/canonical_hash_test.go:164:	e1, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:nilset", AuthoritySet: nil}, nil)
+./tests/canonical_hash_test.go:165:	e2, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:nilset", AuthoritySet: map[string]struct{}{}}, nil)
+./tests/builder_paths_test.go:116:	amend, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:auth1", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), AuthoritySet: newSet}, nil)
+./tests/builder_paths_test.go:134:	activation, _ := makeEntry(t, envelope.ControlHeader{SignerDID: "did:example:a", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), AuthoritySet: map[string]struct{}{"did:example:a": {}}}, nil)
+./tests/phase6_part_a_test.go:194:		AuthoritySet: map[string]struct{}{"did:example:admin": {}, "did:example:judge": {}},
+./tests/phase6_part_a_test.go:200:	if len(entry.Header.AuthoritySet) != 2 {
+./tests/phase6_part_a_test.go:201:		t.Fatalf("AuthoritySet size: %d", len(entry.Header.AuthoritySet))
+./tests/phase6_part_a_test.go:208:		AuthoritySet: map[string]struct{}{},
+./tests/phase6_part_a_test.go:820:		AuthoritySet:  map[string]struct{}{"did:example:judge": {}},
+./tests/phase6_part_a_test.go:991:		AuthoritySet:  map[string]struct{}{"did:example:judge": {}},
+./tests/helpers_test.go:101:	entry, _ := makeEntry(t, envelope.ControlHeader{SignerDID: signerDID, AuthorityPath: sameSigner(), AuthoritySet: authoritySet}, nil)
+./tests/phase5_part_b_test.go:105:		AuthoritySet:  map[string]struct{}{"did:example:admin": {}, "did:example:judge": {}, "did:example:clerk": {}},
+./tests/phase5_part_b_test.go:159:		AuthoritySet:  map[string]struct{}{"did:example:a": {}, "did:example:b": {}, "did:example:c": {}},
+./tests/phase5_part_b_test.go:227:		AuthoritySet: map[string]struct{}{
+./tests/phase5_part_b_test.go:280:		AuthoritySet: map[string]struct{}{"did:example:a": {}, "did:example:b": {}, "did:example:c": {}},
+./tests/phase5_part_b_test.go:339:		AuthoritySet: map[string]struct{}{"did:example:a": {}, "did:example:b": {}, "did:example:c": {}},
+./tests/phase5_part_b_test.go:594:		AuthoritySet: map[string]struct{}{"did:example:a": {}, "did:example:b": {}, "did:example:c": {}},
+./tests/phase6_part_b_test.go:742:		AuthoritySet: map[string]struct{}{"did:web:hospital.example.com": {}},
+./lifecycle/artifact_access.go:14:    GrantAuthRestricted(1): granter in scope AuthoritySet.
+./lifecycle/artifact_access.go:116:	// Must be in scope AuthoritySet for restricted/sealed modes.
+./lifecycle/artifact_access.go:123:	// ScopePointer identifies the scope whose AuthoritySet governs
+./lifecycle/artifact_access.go:159:	// Restricted and sealed: granter must be in scope AuthoritySet.
+./lifecycle/scope_governance.go:396:// ScopePointer == TargetRoot AND AuthoritySet present → OriginTip update
+./lifecycle/scope_governance.go:460:	// RemovalEntry is the scope removal entry (Path C, no AuthoritySet).
+./lifecycle/scope_governance.go:497:	// Build scope removal entry (Path C, no AuthoritySet → AuthorityTip update).
+./lifecycle/scope_governance.go:572:// The builder processes this as Path C with AuthoritySet present →
+./lifecycle/provision.go:100:// Authority_Path=SameSigner and SignerDID included in AuthoritySet.
+./lifecycle/provision.go:105:	// the first member of AuthoritySet.
+./lifecycle/provision.go:112:	// AuthoritySet is the initial set of authority DIDs for the scope.
+./lifecycle/provision.go:114:	AuthoritySet map[string]struct{}
+./lifecycle/provision.go:162:	if len(cfg.AuthoritySet) == 0 {
+./lifecycle/provision.go:183:		AuthoritySet: cfg.AuthoritySet,
+./verifier/contest_override.go:139:	// Determine N from the scope entity's AuthoritySet size.
+./verifier/contest_override.go:347:// getAuthoritySetSize reads the AuthoritySet size from the scope entity
+./verifier/contest_override.go:365:// getAuthoritySetMembers reads the AuthoritySet members from the scope
+./verifier/contest_override.go:381:	for did := range entry.Header.AuthoritySet {
+./builder/entry_classification.go:314:	if _, ok := currentScope.Header.AuthoritySet[h.SignerDID]; !ok {
+./builder/entry_classification.go:320:	d.AuthoritySetSize = len(currentScope.Header.AuthoritySet)
+./builder/entry_classification.go:348:	isScopeAmendment := h.ScopePointer.Equal(targetRoot) && len(h.AuthoritySet) > 0
+./builder/algorithm.go:303:	isScopeAmendment := h.ScopePointer.Equal(targetRoot) && len(h.AuthoritySet) > 0
+./builder/entry_builders.go:210:	AuthoritySet map[string]struct{}
+./builder/entry_builders.go:216:// BuildScopeCreation creates a scope entity. Constraint: AuthoritySet
+./builder/entry_builders.go:222:	if len(p.AuthoritySet) == 0 {
+./builder/entry_builders.go:225:	if _, ok := p.AuthoritySet[p.SignerDID]; !ok {
+./builder/entry_builders.go:232:		AuthoritySet:  p.AuthoritySet,
+./builder/entry_builders.go:254:// equals TargetRoot (self-referencing). AuthoritySet carries the new set.
+./builder/entry_builders.go:271:		AuthoritySet:     p.NewAuthoritySet,
+./builder/entry_builders.go:281:// ScopeRemovalParams configures a scope removal (Path C, no AuthoritySet).
+./builder/entry_builders.go:291:// BuildScopeRemoval creates a scope removal (Path C). No AuthoritySet
+./builder/entry_builders.go:331:// Signer must be in the scope's AuthoritySet (caller responsibility).
+./builder/api.go:131:	// governing scope's AuthoritySet. Advances AuthorityTip for
+
+--- ProposerDID\b ---
+./tests/phase6_part_b_test.go:859:		ProposerDID:  "did:example:authority-a",
+./tests/phase6_part_b_test.go:876:		ProposerDID:  "did:example:authority-a",
+./tests/phase6_part_b_test.go:920:		ProposerDID:         "did:example:a",
+./lifecycle/scope_governance.go:139:	// ProposerDID is the scope authority proposing the change.
+./lifecycle/scope_governance.go:140:	ProposerDID string
+./lifecycle/scope_governance.go:181:	if p.ProposerDID == "" {
+./lifecycle/scope_governance.go:214:		SignerDID: p.ProposerDID,
+./lifecycle/scope_governance.go:286:	// ProposerDID is excluded from the required approvers
+./lifecycle/scope_governance.go:288:	ProposerDID string
+./lifecycle/scope_governance.go:328:	if p.ProposerDID != "" {
+./lifecycle/scope_governance.go:329:		seen[p.ProposerDID] = true
+
+--- ExecutorDID\b ---
+./tests/phase6_part_b_test.go:935:		ExecutorDID: "did:example:authority-a",
+./tests/phase6_part_b_test.go:952:		ExecutorDID:       "did:example:authority-a",
+./lifecycle/scope_governance.go:365:	// ExecutorDID is any authority executing the amendment.
+./lifecycle/scope_governance.go:366:	ExecutorDID string
+./lifecycle/scope_governance.go:399:	if p.ExecutorDID == "" {
+./lifecycle/scope_governance.go:415:		SignerDID:        p.ExecutorDID,
+./lifecycle/scope_governance.go:433:	// ExecutorDID is any authority (other than the target) executing removal.
+./lifecycle/scope_governance.go:434:	ExecutorDID string
+./lifecycle/scope_governance.go:485:	if p.ExecutorDID == "" {
+./lifecycle/scope_governance.go:507:		SignerDID:      p.ExecutorDID,
+./lifecycle/scope_governance.go:542:	// ExecutorDID is the authority publishing the activation.
+./lifecycle/scope_governance.go:543:	ExecutorDID string
+./lifecycle/scope_governance.go:575:	if p.ExecutorDID == "" {
+./lifecycle/scope_governance.go:585:		SignerDID:        p.ExecutorDID,
+
+--- TargetDID\b ---
+./tests/phase6_part_b_test.go:861:		TargetDID:    "did:example:new-member",
+./tests/phase6_part_b_test.go:878:		TargetDID:    "did:example:rogue",
+./tests/phase6_part_b_test.go:937:		TargetDID:   "did:example:rogue",
+./tests/phase6_part_b_test.go:954:		TargetDID:         "did:example:rogue",
+./lifecycle/scope_governance.go:154:	// TargetDID is the DID being added or removed (for add/remove).
+./lifecycle/scope_governance.go:156:	TargetDID string
+./lifecycle/scope_governance.go:197:	if p.TargetDID != "" {
+./lifecycle/scope_governance.go:198:		payload["target_did"] = p.TargetDID
+./lifecycle/scope_governance.go:439:	// TargetDID is the authority being removed.
+./lifecycle/scope_governance.go:440:	TargetDID string
+./lifecycle/scope_governance.go:500:		"target_did":   p.TargetDID,
+

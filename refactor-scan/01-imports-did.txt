@@ -1,0 +1,4 @@
+./tests/did_resolver_test.go:16:	"github.com/clearcompass-ai/ortholog-sdk/did"
+./tests/vendor_did_test.go:26:	"github.com/clearcompass-ai/ortholog-sdk/did"
+./tests/phase6_delegation_key_test.go:31:	"github.com/clearcompass-ai/ortholog-sdk/did"
+./tests/did_creation_test.go:8:	"github.com/clearcompass-ai/ortholog-sdk/did"

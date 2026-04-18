@@ -1,0 +1,546 @@
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk.(Checker).ScanDir",
+  "file": "/Users/anil/workspace/ortholog-sdk/check_sdk_usage.go",
+  "line": 300,
+  "package": "github.com/clearcompass-ai/ortholog-sdk",
+  "receiver": "Checker"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/types.ValidateLogPosition",
+  "file": "/Users/anil/workspace/ortholog-sdk/types/log_position.go",
+  "line": 38,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/types",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/types.(EscrowPackage).SortShares",
+  "file": "/Users/anil/workspace/ortholog-sdk/types/escrow_package.go",
+  "line": 19,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/types",
+  "receiver": "EscrowPackage"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/types.(LogPosition).IsNull",
+  "file": "/Users/anil/workspace/ortholog-sdk/types/log_position.go",
+  "line": 16,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/types",
+  "receiver": "LogPosition"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/types.(LogPosition).Equal",
+  "file": "/Users/anil/workspace/ortholog-sdk/types/log_position.go",
+  "line": 20,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/types",
+  "receiver": "LogPosition"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/types.(LogPosition).Less",
+  "file": "/Users/anil/workspace/ortholog-sdk/types/log_position.go",
+  "line": 24,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/types",
+  "receiver": "LogPosition"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/types.(LogPosition).String",
+  "file": "/Users/anil/workspace/ortholog-sdk/types/log_position.go",
+  "line": 31,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/types",
+  "receiver": "LogPosition"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/types.(OverrideThresholdRule).RequiredApprovals",
+  "file": "/Users/anil/workspace/ortholog-sdk/types/schema_parameters.go",
+  "line": 163,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/types",
+  "receiver": "OverrideThresholdRule"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/types.(OverrideThresholdRule).String",
+  "file": "/Users/anil/workspace/ortholog-sdk/types/schema_parameters.go",
+  "line": 188,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/types",
+  "receiver": "OverrideThresholdRule"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/types.(SMTLeaf).IsSelfReferential",
+  "file": "/Users/anil/workspace/ortholog-sdk/types/smt_leaf.go",
+  "line": 9,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/types",
+  "receiver": "SMTLeaf"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/types.(WitnessRotation).IsDualSigned",
+  "file": "/Users/anil/workspace/ortholog-sdk/types/witness_rotation.go",
+  "line": 17,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/types",
+  "receiver": "WitnessRotation"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/envelope.(ControlHeader).AuthoritySetContains",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/envelope/control_header.go",
+  "line": 162,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/envelope",
+  "receiver": "ControlHeader"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/envelope.(ControlHeader).AuthoritySetSize",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/envelope/control_header.go",
+  "line": 171,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/envelope",
+  "receiver": "ControlHeader"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/envelope.(ControlHeader).SortedDIDs",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/envelope/control_header.go",
+  "line": 177,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/envelope",
+  "receiver": "ControlHeader"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/envelope.(VersionState).String",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/envelope/version_policy.go",
+  "line": 52,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/envelope",
+  "receiver": "VersionState"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.NewOverlayLeafStore",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/overlay.go",
+  "line": 87,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.VerifyBatchProof",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/verify.go",
+  "line": 25,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.VerifyCommitmentTransition",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/derivation_commitment.go",
+  "line": 13,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.(Tree).GenerateBatchProof",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/batch_multiproofs.go",
+  "line": 8,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": "Tree"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.(FraudProof).Error",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/derivation_commitment.go",
+  "line": 29,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": "FraudProof"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.(Tree).GenerateMembershipProof",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/proof_gen.go",
+  "line": 5,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": "Tree"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.(Tree).GenerateNonMembershipProof",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/proof_gen.go",
+  "line": 14,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": "Tree"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.(Tree).StartTracking",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/tree.go",
+  "line": 78,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": "Tree"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.(Tree).StopTracking",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/tree.go",
+  "line": 85,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": "Tree"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.(Tree).GetLeaf",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/tree.go",
+  "line": 94,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": "Tree"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.(Tree).SetLeaf",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/tree.go",
+  "line": 103,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": "Tree"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.(Tree).SetLeaves",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/tree.go",
+  "line": 132,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": "Tree"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/core/smt.(Tree).Root",
+  "file": "/Users/anil/workspace/ortholog-sdk/core/smt/tree.go",
+  "line": 181,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/core/smt",
+  "receiver": "Tree"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/builder.(DeltaWindowBuffer).Record",
+  "file": "/Users/anil/workspace/ortholog-sdk/builder/concurrency.go",
+  "line": 69,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/builder",
+  "receiver": "DeltaWindowBuffer"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/builder.(DeltaWindowBuffer).Contains",
+  "file": "/Users/anil/workspace/ortholog-sdk/builder/concurrency.go",
+  "line": 81,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/builder",
+  "receiver": "DeltaWindowBuffer"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/builder.(DeltaWindowBuffer).History",
+  "file": "/Users/anil/workspace/ortholog-sdk/builder/concurrency.go",
+  "line": 93,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/builder",
+  "receiver": "DeltaWindowBuffer"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/builder.(DeltaWindowBuffer).SetHistory",
+  "file": "/Users/anil/workspace/ortholog-sdk/builder/concurrency.go",
+  "line": 100,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/builder",
+  "receiver": "DeltaWindowBuffer"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/builder.(DeltaWindowBuffer).AllKeys",
+  "file": "/Users/anil/workspace/ortholog-sdk/builder/concurrency.go",
+  "line": 114,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/builder",
+  "receiver": "DeltaWindowBuffer"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/builder.(DeltaWindowBuffer).WindowSize",
+  "file": "/Users/anil/workspace/ortholog-sdk/builder/concurrency.go",
+  "line": 123,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/builder",
+  "receiver": "DeltaWindowBuffer"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/builder.(DeltaWindowBuffer).Len",
+  "file": "/Users/anil/workspace/ortholog-sdk/builder/concurrency.go",
+  "line": 128,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/builder",
+  "receiver": "DeltaWindowBuffer"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/crypto.HashBytes",
+  "file": "/Users/anil/workspace/ortholog-sdk/crypto/hash.go",
+  "line": 12,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/crypto",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/storage.(CID).Verify",
+  "file": "/Users/anil/workspace/ortholog-sdk/storage/cid.go",
+  "line": 40,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/storage",
+  "receiver": "CID"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/storage.(CID).IsZero",
+  "file": "/Users/anil/workspace/ortholog-sdk/storage/cid.go",
+  "line": 50,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/storage",
+  "receiver": "CID"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/storage.(CID).Equal",
+  "file": "/Users/anil/workspace/ortholog-sdk/storage/cid.go",
+  "line": 52,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/storage",
+  "receiver": "CID"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/storage.(CID).String",
+  "file": "/Users/anil/workspace/ortholog-sdk/storage/cid.go",
+  "line": 58,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/storage",
+  "receiver": "CID"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/storage.(CID).Bytes",
+  "file": "/Users/anil/workspace/ortholog-sdk/storage/cid.go",
+  "line": 75,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/storage",
+  "receiver": "CID"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/crypto/artifact.ZeroKey",
+  "file": "/Users/anil/workspace/ortholog-sdk/crypto/artifact/api.go",
+  "line": 80,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/crypto/artifact",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/crypto/artifact.(IrrecoverableError).Error",
+  "file": "/Users/anil/workspace/ortholog-sdk/crypto/artifact/api.go",
+  "line": 113,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/crypto/artifact",
+  "receiver": "IrrecoverableError"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/crypto/artifact.(IrrecoverableError).Unwrap",
+  "file": "/Users/anil/workspace/ortholog-sdk/crypto/artifact/api.go",
+  "line": 114,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/crypto/artifact",
+  "receiver": "IrrecoverableError"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/did.NewKeyResolver",
+  "file": "/Users/anil/workspace/ortholog-sdk/did/key_resolver.go",
+  "line": 119,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/did",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/did.NewMethodRouter",
+  "file": "/Users/anil/workspace/ortholog-sdk/did/method_router.go",
+  "line": 95,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/did",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/did.NewPKHDIDEthereum",
+  "file": "/Users/anil/workspace/ortholog-sdk/did/pkh.go",
+  "line": 255,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/did",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/did.NewPKHResolver",
+  "file": "/Users/anil/workspace/ortholog-sdk/did/pkh.go",
+  "line": 120,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/did",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/did.NewPKHResolverWithNamespaces",
+  "file": "/Users/anil/workspace/ortholog-sdk/did/pkh.go",
+  "line": 130,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/did",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/did.(DIDDocument).OperatorEndpointURL",
+  "file": "/Users/anil/workspace/ortholog-sdk/did/resolver.go",
+  "line": 124,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/did",
+  "receiver": "DIDDocument"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/did.(DIDDocument).WitnessEndpointURLs",
+  "file": "/Users/anil/workspace/ortholog-sdk/did/resolver.go",
+  "line": 134,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/did",
+  "receiver": "DIDDocument"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/did.(DIDDocument).ArtifactStoreURL",
+  "file": "/Users/anil/workspace/ortholog-sdk/did/resolver.go",
+  "line": 145,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/did",
+  "receiver": "DIDDocument"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/did.(DIDDocument).FindVerificationMethod",
+  "file": "/Users/anil/workspace/ortholog-sdk/did/resolver.go",
+  "line": 156,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/did",
+  "receiver": "DIDDocument"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/did.(DIDDocument).WitnessKeys",
+  "file": "/Users/anil/workspace/ortholog-sdk/did/resolver.go",
+  "line": 171,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/did",
+  "receiver": "DIDDocument"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/exchange/auth.VerifyRequest",
+  "file": "/Users/anil/workspace/ortholog-sdk/exchange/auth/signed_request.go",
+  "line": 306,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/exchange/auth",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/exchange/auth.(SignedRequestEnvelope).Canonicalize",
+  "file": "/Users/anil/workspace/ortholog-sdk/exchange/auth/signed_request.go",
+  "line": 164,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/exchange/auth",
+  "receiver": "SignedRequestEnvelope"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/exchange/auth.(SignedRequestEnvelope).CanonicalHash",
+  "file": "/Users/anil/workspace/ortholog-sdk/exchange/auth/signed_request.go",
+  "line": 185,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/exchange/auth",
+  "receiver": "SignedRequestEnvelope"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/exchange/identity.(MappingEscrow).StoreMapping",
+  "file": "/Users/anil/workspace/ortholog-sdk/exchange/identity/mapping_escrow.go",
+  "line": 112,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/exchange/identity",
+  "receiver": "MappingEscrow"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/exchange/identity.(MappingEscrow).LookupMapping",
+  "file": "/Users/anil/workspace/ortholog-sdk/exchange/identity/mapping_escrow.go",
+  "line": 172,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/exchange/identity",
+  "receiver": "MappingEscrow"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/exchange/identity.(MappingEscrow).HasMapping",
+  "file": "/Users/anil/workspace/ortholog-sdk/exchange/identity/mapping_escrow.go",
+  "line": 228,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/exchange/identity",
+  "receiver": "MappingEscrow"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/exchange/identity.(MappingEscrow).MappingCount",
+  "file": "/Users/anil/workspace/ortholog-sdk/exchange/identity/mapping_escrow.go",
+  "line": 236,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/exchange/identity",
+  "receiver": "MappingEscrow"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/exchange/identity.(MappingEscrow).DeleteMapping",
+  "file": "/Users/anil/workspace/ortholog-sdk/exchange/identity/mapping_escrow.go",
+  "line": 242,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/exchange/identity",
+  "receiver": "MappingEscrow"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/lifecycle.ActivateRemoval",
+  "file": "/Users/anil/workspace/ortholog-sdk/lifecycle/scope_governance.go",
+  "line": 574,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/lifecycle",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/lifecycle.BuildApprovalCosignature",
+  "file": "/Users/anil/workspace/ortholog-sdk/lifecycle/scope_governance.go",
+  "line": 605,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/lifecycle",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/lifecycle.ComputeAddedSet",
+  "file": "/Users/anil/workspace/ortholog-sdk/lifecycle/scope_governance.go",
+  "line": 630,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/lifecycle",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/lifecycle.ComputeRemovedSet",
+  "file": "/Users/anil/workspace/ortholog-sdk/lifecycle/scope_governance.go",
+  "line": 618,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/lifecycle",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/lifecycle.ExecuteAmendment",
+  "file": "/Users/anil/workspace/ortholog-sdk/lifecycle/scope_governance.go",
+  "line": 398,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/lifecycle",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/lifecycle.(LogProvision).AllEntries",
+  "file": "/Users/anil/workspace/ortholog-sdk/lifecycle/provision.go",
+  "line": 83,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/lifecycle",
+  "receiver": "LogProvision"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/lifecycle.(ProposalType).String",
+  "file": "/Users/anil/workspace/ortholog-sdk/lifecycle/scope_governance.go",
+  "line": 118,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/lifecycle",
+  "receiver": "ProposalType"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/schema.BuildShardGenesisPayload",
+  "file": "/Users/anil/workspace/ortholog-sdk/schema/shard_genesis.go",
+  "line": 84,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/schema",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/schema.NewCachingResolver",
+  "file": "/Users/anil/workspace/ortholog-sdk/schema/resolver.go",
+  "line": 17,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/schema",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/schema.ShardGenesisSchemaParams",
+  "file": "/Users/anil/workspace/ortholog-sdk/schema/shard_genesis.go",
+  "line": 140,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/schema",
+  "receiver": null
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/witness.(EquivocationProof).IsProven",
+  "file": "/Users/anil/workspace/ortholog-sdk/witness/equivocation.go",
+  "line": 106,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/witness",
+  "receiver": "EquivocationProof"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/witness.(TreeHeadClient).FetchLatestTreeHead",
+  "file": "/Users/anil/workspace/ortholog-sdk/witness/tree_head_client.go",
+  "line": 129,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/witness",
+  "receiver": "TreeHeadClient"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/witness.(TreeHeadClient).CachedHead",
+  "file": "/Users/anil/workspace/ortholog-sdk/witness/tree_head_client.go",
+  "line": 172,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/witness",
+  "receiver": "TreeHeadClient"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/witness.(TreeHeadClient).InvalidateCache",
+  "file": "/Users/anil/workspace/ortholog-sdk/witness/tree_head_client.go",
+  "line": 183,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/witness",
+  "receiver": "TreeHeadClient"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/witness.(TreeHeadClient).CacheSize",
+  "file": "/Users/anil/workspace/ortholog-sdk/witness/tree_head_client.go",
+  "line": 190,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/witness",
+  "receiver": "TreeHeadClient"
+}
+{
+  "id": "github.com/clearcompass-ai/ortholog-sdk/witness.(TreeHeadClient).FetchFromURL",
+  "file": "/Users/anil/workspace/ortholog-sdk/witness/tree_head_client.go",
+  "line": 214,
+  "package": "github.com/clearcompass-ai/ortholog-sdk/witness",
+  "receiver": "TreeHeadClient"
+}

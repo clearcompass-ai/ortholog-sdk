@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -9,31 +8,40 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────
-// Tests: GenerateDIDKey
+// Tests: GenerateDIDKeySecp256k1
 // ─────────────────────────────────────────────────────────────────────
 
-func TestGenerateDIDKey_Valid(t *testing.T) {
-	kp, err := did.GenerateDIDKey()
+func TestGenerateDIDKeySecp256k1_Valid(t *testing.T) {
+	kp, err := did.GenerateDIDKeySecp256k1()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(kp.DID, "did:key:f") {
-		t.Fatalf("DID should start with did:key:f, got: %s", kp.DID)
+	if !strings.HasPrefix(kp.DID, "did:key:z") {
+		t.Fatalf("DID should start with did:key:z, got: %s", kp.DID)
 	}
 	if kp.PrivateKey == nil {
 		t.Fatal("private key should not be nil")
 	}
-	if len(kp.PublicKey) == 0 {
-		t.Fatal("public key should not be empty")
+	if len(kp.PublicKeyCompressed) != 33 {
+		t.Fatalf("compressed pubkey should be 33 bytes, got %d", len(kp.PublicKeyCompressed))
+	}
+	if len(kp.PublicKeyUncompressed) != 65 {
+		t.Fatalf("uncompressed pubkey should be 65 bytes, got %d", len(kp.PublicKeyUncompressed))
 	}
 	if kp.KeyID == [32]byte{} {
 		t.Fatal("key ID should not be zero")
 	}
 }
 
-func TestGenerateDIDKey_Unique(t *testing.T) {
-	kp1, _ := did.GenerateDIDKey()
-	kp2, _ := did.GenerateDIDKey()
+func TestGenerateDIDKeySecp256k1_Unique(t *testing.T) {
+	kp1, err := did.GenerateDIDKeySecp256k1()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kp2, err := did.GenerateDIDKeySecp256k1()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if kp1.DID == kp2.DID {
 		t.Fatal("two generated DIDs should differ")
 	}
@@ -42,18 +50,113 @@ func TestGenerateDIDKey_Unique(t *testing.T) {
 	}
 }
 
-func TestGenerateDIDKey_PublicKeyDecodable(t *testing.T) {
-	kp, _ := did.GenerateDIDKey()
-	// Extract hex from did:key:f<hex>
-	hexStr := strings.TrimPrefix(kp.DID, "did:key:f")
-	decoded, err := hex.DecodeString(hexStr)
+func TestGenerateDIDKeySecp256k1_RoundTripParse(t *testing.T) {
+	kp, err := did.GenerateDIDKeySecp256k1()
 	if err != nil {
-		t.Fatalf("DID hex not decodable: %v", err)
+		t.Fatal(err)
 	}
-	if len(decoded) == 0 {
-		t.Fatal("decoded key should not be empty")
+	pubKey, vmType, err := did.ParseDIDKey(kp.DID)
+	if err != nil {
+		t.Fatalf("ParseDIDKey: %v", err)
+	}
+	if vmType != did.VerificationMethodSecp256k1 {
+		t.Fatalf("verification type: %s, expected %s", vmType, did.VerificationMethodSecp256k1)
+	}
+	if len(pubKey) != 33 {
+		t.Fatalf("parsed compressed pubkey should be 33 bytes, got %d", len(pubKey))
+	}
+	// Round-trip must recover the exact compressed pubkey we generated.
+	if string(pubKey) != string(kp.PublicKeyCompressed) {
+		t.Fatal("parsed pubkey does not match generated pubkey")
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// Tests: GenerateDIDKeyEd25519
+// ─────────────────────────────────────────────────────────────────────
+
+func TestGenerateDIDKeyEd25519_Valid(t *testing.T) {
+	kp, err := did.GenerateDIDKeyEd25519()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(kp.DID, "did:key:z") {
+		t.Fatalf("DID should start with did:key:z, got: %s", kp.DID)
+	}
+	if len(kp.PrivateKey) == 0 {
+		t.Fatal("private key should not be empty")
+	}
+	if len(kp.PublicKey) != 32 {
+		t.Fatalf("Ed25519 pubkey should be 32 bytes, got %d", len(kp.PublicKey))
+	}
+	if kp.KeyID == [32]byte{} {
+		t.Fatal("key ID should not be zero")
+	}
+}
+
+func TestGenerateDIDKeyEd25519_RoundTripParse(t *testing.T) {
+	kp, err := did.GenerateDIDKeyEd25519()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubKey, vmType, err := did.ParseDIDKey(kp.DID)
+	if err != nil {
+		t.Fatalf("ParseDIDKey: %v", err)
+	}
+	if vmType != did.VerificationMethodEd25519 {
+		t.Fatalf("verification type: %s, expected %s", vmType, did.VerificationMethodEd25519)
+	}
+	if len(pubKey) != 32 {
+		t.Fatalf("parsed Ed25519 pubkey should be 32 bytes, got %d", len(pubKey))
+	}
+	if string(pubKey) != string(kp.PublicKey) {
+		t.Fatal("parsed pubkey does not match generated pubkey")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tests: GenerateDIDKeyP256
+// ─────────────────────────────────────────────────────────────────────
+
+func TestGenerateDIDKeyP256_Valid(t *testing.T) {
+	kp, err := did.GenerateDIDKeyP256()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(kp.DID, "did:key:z") {
+		t.Fatalf("DID should start with did:key:z, got: %s", kp.DID)
+	}
+	if kp.PrivateKey == nil {
+		t.Fatal("private key should not be nil")
+	}
+	if len(kp.PublicKeyCompressed) != 33 {
+		t.Fatalf("P-256 compressed pubkey should be 33 bytes, got %d", len(kp.PublicKeyCompressed))
+	}
+	if kp.KeyID == [32]byte{} {
+		t.Fatal("key ID should not be zero")
+	}
+}
+
+func TestGenerateDIDKeyP256_RoundTripParse(t *testing.T) {
+	kp, err := did.GenerateDIDKeyP256()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pubKey, vmType, err := did.ParseDIDKey(kp.DID)
+	if err != nil {
+		t.Fatalf("ParseDIDKey: %v", err)
+	}
+	if vmType != did.VerificationMethodP256 {
+		t.Fatalf("verification type: %s, expected %s", vmType, did.VerificationMethodP256)
+	}
+	if len(pubKey) != 33 {
+		t.Fatalf("parsed P-256 compressed pubkey should be 33 bytes, got %d", len(pubKey))
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tests: GenerateRawKey
+// ─────────────────────────────────────────────────────────────────────
 
 func TestGenerateRawKey(t *testing.T) {
 	priv, pubBytes, err := did.GenerateRawKey()
@@ -63,8 +166,8 @@ func TestGenerateRawKey(t *testing.T) {
 	if priv == nil {
 		t.Fatal("private key nil")
 	}
-	if len(pubBytes) == 0 {
-		t.Fatal("public key empty")
+	if len(pubBytes) != 65 {
+		t.Fatalf("raw pubkey should be 65 bytes uncompressed, got %d", len(pubBytes))
 	}
 }
 
@@ -78,8 +181,10 @@ func TestCreateDIDDocument_Full(t *testing.T) {
 		OperatorEndpoint:      "https://operator.court.example.com",
 		WitnessEndpoints:      []string{"https://witness1.example.com", "https://witness2.example.com"},
 		ArtifactStoreEndpoint: "https://artifacts.example.com",
-		PublicKeys:            []string{"aabbccdd"},
-		WitnessQuorumK:        1,
+		PublicKeys: []did.PublicKeyEntry{
+			{VerificationMethodType: did.VerificationMethodSecp256k1, PublicKeyHex: "aabbccdd"},
+		},
+		WitnessQuorumK: 1,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +200,9 @@ func TestCreateDIDDocument_Full(t *testing.T) {
 	}
 	if doc.VerificationMethod[0].PublicKeyHex != "aabbccdd" {
 		t.Fatal("public key mismatch")
+	}
+	if doc.VerificationMethod[0].Type != did.VerificationMethodSecp256k1 {
+		t.Fatalf("VM type: %s", doc.VerificationMethod[0].Type)
 	}
 	if len(doc.Service) != 4 { // operator + 2 witnesses + artifact store
 		t.Fatalf("services: %d", len(doc.Service))
@@ -132,11 +240,42 @@ func TestCreateDIDDocument_EmptyDID_Error(t *testing.T) {
 	}
 }
 
-func TestCreateDIDDocument_MultipleKeys(t *testing.T) {
-	doc, _ := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
-		DID:        "did:web:test",
-		PublicKeys: []string{"key1hex", "key2hex", "key3hex"},
+func TestCreateDIDDocument_MissingVMType_Error(t *testing.T) {
+	_, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+		DID: "did:web:test",
+		PublicKeys: []did.PublicKeyEntry{
+			{PublicKeyHex: "aabbcc"}, // no VerificationMethodType
+		},
 	})
+	if err == nil {
+		t.Fatal("missing VerificationMethodType should error")
+	}
+}
+
+func TestCreateDIDDocument_MissingPubkeyHex_Error(t *testing.T) {
+	_, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+		DID: "did:web:test",
+		PublicKeys: []did.PublicKeyEntry{
+			{VerificationMethodType: did.VerificationMethodSecp256k1}, // no PublicKeyHex
+		},
+	})
+	if err == nil {
+		t.Fatal("missing PublicKeyHex should error")
+	}
+}
+
+func TestCreateDIDDocument_MultipleKeys(t *testing.T) {
+	doc, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+		DID: "did:web:test",
+		PublicKeys: []did.PublicKeyEntry{
+			{VerificationMethodType: did.VerificationMethodSecp256k1, PublicKeyHex: "key1hex"},
+			{VerificationMethodType: did.VerificationMethodSecp256k1, PublicKeyHex: "key2hex"},
+			{VerificationMethodType: did.VerificationMethodSecp256k1, PublicKeyHex: "key3hex"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(doc.VerificationMethod) != 3 {
 		t.Fatalf("keys: %d", len(doc.VerificationMethod))
 	}
@@ -149,12 +288,49 @@ func TestCreateDIDDocument_MultipleKeys(t *testing.T) {
 	}
 }
 
+func TestCreateDIDDocument_MixedCurveKeys(t *testing.T) {
+	// A single DID document may hold keys across multiple curves — Ortholog
+	// supports this via per-key VerificationMethodType.
+	doc, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+		DID: "did:web:multi.example.com",
+		PublicKeys: []did.PublicKeyEntry{
+			{VerificationMethodType: did.VerificationMethodSecp256k1, PublicKeyHex: "aabb"},
+			{VerificationMethodType: did.VerificationMethodEd25519, PublicKeyHex: "ccdd"},
+			{VerificationMethodType: did.VerificationMethodP256, PublicKeyHex: "eeff"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.VerificationMethod) != 3 {
+		t.Fatalf("keys: %d", len(doc.VerificationMethod))
+	}
+	types := []string{
+		doc.VerificationMethod[0].Type,
+		doc.VerificationMethod[1].Type,
+		doc.VerificationMethod[2].Type,
+	}
+	expected := []string{
+		did.VerificationMethodSecp256k1,
+		did.VerificationMethodEd25519,
+		did.VerificationMethodP256,
+	}
+	for i := range types {
+		if types[i] != expected[i] {
+			t.Fatalf("key[%d] type: %s, expected %s", i, types[i], expected[i])
+		}
+	}
+}
+
 func TestCreateDIDDocument_ServiceIDs(t *testing.T) {
-	doc, _ := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
+	doc, err := did.CreateDIDDocument(did.CreateDIDDocumentConfig{
 		DID:              "did:web:test",
 		OperatorEndpoint: "https://op.test",
 		WitnessEndpoints: []string{"https://w.test"},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if doc.Service[0].ID != "did:web:test#operator" {
 		t.Fatalf("operator service id: %s", doc.Service[0].ID)
 	}

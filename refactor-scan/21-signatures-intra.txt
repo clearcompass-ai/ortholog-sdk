@@ -1,0 +1,23 @@
+--- SignEntry\b (intra-package) ---
+./crypto/signatures/entry_verify.go:16:func SignEntry(hash [32]byte, privkey *ecdsa.PrivateKey) ([]byte, error) {
+
+--- VerifyEntry\b (intra-package) ---
+./crypto/signatures/witness_verify.go:50:		if err := VerifyEntry(msgHash, ws.SigBytes, pk); err != nil { result.Results[i].Err = err; continue }
+./crypto/signatures/entry_verify.go:37:func VerifyEntry(hash [32]byte, sig []byte, pubkey *ecdsa.PublicKey) error {
+
+--- GenerateKey\b (intra-package) ---
+./crypto/signatures/entry_verify.go:52:func GenerateKey() (*ecdsa.PrivateKey, error) { return ecdsa.GenerateKey(Secp256k1(), rand.Reader) }
+./crypto/escrow/ecies.go:41:	ephPriv, err := ecdsa.GenerateKey(curve, rand.Reader)
+./did/creation.go:45:	priv, err := signatures.GenerateKey()
+./did/creation.go:67:	priv, err := signatures.GenerateKey()
+./lifecycle/delegation_key.go:68:	delKey, err := ecdsa.GenerateKey(c, rand.Reader)
+
+--- PubKeyBytes\b (intra-package) ---
+./crypto/signatures/entry_verify.go:54:func PubKeyBytes(pub *ecdsa.PublicKey) []byte { return elliptic.Marshal(Secp256k1(), pub.X, pub.Y) }
+./did/creation.go:50:	pubBytes := signatures.PubKeyBytes(&priv.PublicKey)
+./did/creation.go:71:	pubBytes := signatures.PubKeyBytes(&priv.PublicKey)
+
+--- ParsePubKey\b (intra-package) ---
+./crypto/signatures/witness_verify.go:39:		pk, err := ParsePubKey(wk.PublicKey)
+./crypto/signatures/entry_verify.go:56:func ParsePubKey(data []byte) (*ecdsa.PublicKey, error) {
+

@@ -1,0 +1,84 @@
+--- CredentialRef\b ---
+./exchange/identity/mapping_escrow.go:49:// CredentialRef identifies a credential entry in a log.
+./exchange/identity/mapping_escrow.go:50:type CredentialRef struct {
+./exchange/identity/mapping_escrow.go:59:	CredentialRef CredentialRef `json:"credential_ref"`
+./exchange/identity/mapping_escrow.go:116:	if record.CredentialRef.LogDID == "" {
+./tests/mapping_escrow_test.go:57:		CredentialRef: identity.CredentialRef{
+./tests/mapping_escrow_test.go:90:	if result.CredentialRef.LogDID != "did:web:court.example.com" {
+./tests/mapping_escrow_test.go:91:		t.Fatalf("log DID: %s", result.CredentialRef.LogDID)
+./tests/mapping_escrow_test.go:93:	if result.CredentialRef.Sequence != 42 {
+./tests/mapping_escrow_test.go:94:		t.Fatalf("sequence: %d", result.CredentialRef.Sequence)
+./tests/mapping_escrow_test.go:105:		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
+./tests/mapping_escrow_test.go:117:		CredentialRef: identity.CredentialRef{LogDID: ""},
+./tests/mapping_escrow_test.go:151:		CredentialRef: identity.CredentialRef{LogDID: "did:web:test", Sequence: 99},
+./tests/mapping_escrow_test.go:166:		if result.CredentialRef.Sequence != 99 {
+./tests/mapping_escrow_test.go:167:			t.Fatalf("subset %d: sequence %d", i, result.CredentialRef.Sequence)
+./tests/mapping_escrow_test.go:184:		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
+./tests/mapping_escrow_test.go:200:			CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
+./tests/mapping_escrow_test.go:213:		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
+./tests/mapping_escrow_test.go:250:		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
+./tests/mapping_escrow_test.go:268:		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
+./tests/mapping_escrow_test.go:290:		CredentialRef: identity.CredentialRef{LogDID: "did:web:log1", Sequence: 10},
+./tests/mapping_escrow_test.go:294:		CredentialRef: identity.CredentialRef{LogDID: "did:web:log2", Sequence: 20},
+./tests/mapping_escrow_test.go:301:	if result1.CredentialRef.Sequence != 10 {
+./tests/mapping_escrow_test.go:302:		t.Fatalf("alice seq: %d", result1.CredentialRef.Sequence)
+./tests/mapping_escrow_test.go:309:	if result2.CredentialRef.Sequence != 20 {
+./tests/mapping_escrow_test.go:310:		t.Fatalf("bob seq: %d", result2.CredentialRef.Sequence)
+./tests/mapping_escrow_test.go:321:		CredentialRef: identity.CredentialRef{LogDID: "did:web:test"},
+
+--- MappingRecord\b ---
+./exchange/identity/mapping_escrow.go:56:// MappingRecord is the plaintext mapping stored (encrypted) in the content store.
+./exchange/identity/mapping_escrow.go:57:type MappingRecord struct {
+./exchange/identity/mapping_escrow.go:112:func (me *MappingEscrow) StoreMapping(record MappingRecord) (*StoredMapping, error) {
+./exchange/identity/mapping_escrow.go:175:) (*MappingRecord, error) {
+./exchange/identity/mapping_escrow.go:216:	var record MappingRecord
+./tests/mapping_escrow_test.go:55:	record := identity.MappingRecord{
+./tests/mapping_escrow_test.go:103:	record := identity.MappingRecord{
+./tests/mapping_escrow_test.go:115:	record := identity.MappingRecord{
+./tests/mapping_escrow_test.go:149:	stored, _ := me.StoreMapping(identity.MappingRecord{
+./tests/mapping_escrow_test.go:182:	me.StoreMapping(identity.MappingRecord{
+./tests/mapping_escrow_test.go:198:		me.StoreMapping(identity.MappingRecord{
+./tests/mapping_escrow_test.go:211:	me.StoreMapping(identity.MappingRecord{
+./tests/mapping_escrow_test.go:248:	stored, err := me.StoreMapping(identity.MappingRecord{
+./tests/mapping_escrow_test.go:266:	stored, err := me.StoreMapping(identity.MappingRecord{
+./tests/mapping_escrow_test.go:288:	stored1, _ := me.StoreMapping(identity.MappingRecord{
+./tests/mapping_escrow_test.go:292:	stored2, _ := me.StoreMapping(identity.MappingRecord{
+./tests/mapping_escrow_test.go:319:	stored, _ := me.StoreMapping(identity.MappingRecord{
+
+--- StoredMapping\b ---
+./exchange/identity/mapping_escrow.go:64:// StoredMapping holds the metadata for a stored encrypted mapping.
+./exchange/identity/mapping_escrow.go:65:type StoredMapping struct {
+./exchange/identity/mapping_escrow.go:91:	index map[[32]byte]*StoredMapping
+./exchange/identity/mapping_escrow.go:104:		index: make(map[[32]byte]*StoredMapping),
+./exchange/identity/mapping_escrow.go:112:func (me *MappingEscrow) StoreMapping(record MappingRecord) (*StoredMapping, error) {
+./exchange/identity/mapping_escrow.go:152:	stored := &StoredMapping{
+
+--- MappingEscrow\b ---
+./exchange/identity/mapping_escrow.go:5:mapping_escrow.go implements MappingEscrow:
+./exchange/identity/mapping_escrow.go:75:// MappingEscrow
+./exchange/identity/mapping_escrow.go:87:type MappingEscrow struct {
+./exchange/identity/mapping_escrow.go:94:func NewMappingEscrow(store storage.ContentStore, cfg MappingEscrowConfig) *MappingEscrow {
+./exchange/identity/mapping_escrow.go:101:	return &MappingEscrow{
+./exchange/identity/mapping_escrow.go:112:func (me *MappingEscrow) StoreMapping(record MappingRecord) (*StoredMapping, error) {
+./exchange/identity/mapping_escrow.go:172:func (me *MappingEscrow) LookupMapping(
+./exchange/identity/mapping_escrow.go:228:func (me *MappingEscrow) HasMapping(identityHash [32]byte) bool {
+./exchange/identity/mapping_escrow.go:236:func (me *MappingEscrow) MappingCount() int {
+./exchange/identity/mapping_escrow.go:242:func (me *MappingEscrow) DeleteMapping(identityHash [32]byte) bool {
+
+--- NewMappingEscrow\b ---
+./exchange/identity/mapping_escrow.go:94:func NewMappingEscrow(store storage.ContentStore, cfg MappingEscrowConfig) *MappingEscrow {
+./tests/mapping_escrow_test.go:52:	me := identity.NewMappingEscrow(store, identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:102:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:114:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:130:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:139:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:147:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:177:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:192:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:209:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:224:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:246:	me := identity.NewMappingEscrow(newMappingTestStore(), cfg)
+./tests/mapping_escrow_test.go:264:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.MappingEscrowConfig{})
+./tests/mapping_escrow_test.go:283:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+./tests/mapping_escrow_test.go:318:	me := identity.NewMappingEscrow(newMappingTestStore(), identity.DefaultMappingEscrowConfig())
+

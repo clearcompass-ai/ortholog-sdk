@@ -29,7 +29,7 @@
 // OVERVIEW:
 //     Generation flow:
 //         1. Caller computes the entry's canonical hash via
-//            crypto.CanonicalHash.
+//            envelope.EntryIdentity.
 //         2. Caller invokes GenerateAdmissionStamp(hash, cfg, commit).
 //         3. This function validates config, computes the current epoch,
 //            invokes admission.GenerateStamp, and returns a fully
@@ -136,7 +136,7 @@ func (cfg DifficultyConfig) validate() error {
 //
 // Arguments:
 //
-//	entryHash       — canonical hash of the entry, from crypto.CanonicalHash.
+//	entryHash       — canonical hash of the entry, from envelope.EntryIdentity.
 //	cfg             — stamp policy. See DifficultyConfig.
 //	submitterCommit — optional 32-byte submitter identity binding. nil
 //	                  when the operator does not require per-submitter

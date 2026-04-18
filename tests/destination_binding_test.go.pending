@@ -178,11 +178,11 @@ func buildTwoEntriesDifferingOnlyByDestination(t *testing.T) (*envelope.Entry, *
 func TestCanonicalHash_ChangesWithDestination(t *testing.T) {
 	a, b := buildTwoEntriesDifferingOnlyByDestination(t)
 
-	ha, err := envelope.CanonicalHash(a)
+	ha, err := envelope.EntryIdentity(a)
 	if err != nil {
 		t.Fatalf("CanonicalHash(a): %v", err)
 	}
-	hb, err := envelope.CanonicalHash(b)
+	hb, err := envelope.EntryIdentity(b)
 	if err != nil {
 		t.Fatalf("CanonicalHash(b): %v", err)
 	}

@@ -7,14 +7,13 @@ import (
 	"testing"
 
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
-	"github.com/clearcompass-ai/ortholog-sdk/crypto"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
 func TestCanonicalHash_Determinism(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", EventTime: 1700000000000000}, []byte("payload"))
-	h1 := crypto.CanonicalHash(entry)
-	h2 := crypto.CanonicalHash(entry)
+	h1 := envelope.EntryIdentity(entry)
+	h2 := envelope.EntryIdentity(entry)
 	if h1 != h2 {
 		t.Fatal("same entry produced different hashes")
 	}
@@ -40,7 +39,7 @@ func TestCanonicalHash_RoundTrip(t *testing.T) {
 
 func TestCanonicalHash_ASCIINormalization(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:ascii-only-123"}, nil)
-	h := crypto.CanonicalHash(entry)
+	h := envelope.EntryIdentity(entry)
 	if h == [32]byte{} {
 		t.Fatal("hash should not be zero")
 	}
@@ -165,7 +164,7 @@ func TestCanonicalHash_AuthoritySet100(t *testing.T) {
 func TestCanonicalHash_AuthoritySetNilEquivalence(t *testing.T) {
 	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:nilset", AuthoritySet: nil}, nil)
 	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:nilset", AuthoritySet: map[string]struct{}{}}, nil)
-	if crypto.CanonicalHash(e1) != crypto.CanonicalHash(e2) {
+	if envelope.EntryIdentity(e1) != envelope.EntryIdentity(e2) {
 		t.Fatal("nil and empty should produce identical hashes")
 	}
 }
@@ -278,8 +277,8 @@ func TestCanonicalHash_SubjectIdentifier(t *testing.T) {
 	}, []byte("credential"))
 
 	// Hashes must differ
-	hashWith := crypto.CanonicalHash(entryWith)
-	hashWithout := crypto.CanonicalHash(entryWithout)
+	hashWith := envelope.EntryIdentity(entryWith)
+	hashWithout := envelope.EntryIdentity(entryWithout)
 	if hashWith == hashWithout {
 		t.Fatal("entry with Subject_Identifier must hash differently from entry without")
 	}

@@ -321,7 +321,7 @@ var (
 //
 //	EntryHash       — canonical hash of the entry the stamp is attached to.
 //	                  SHA-256 of the serialized entry, produced by
-//	                  crypto.CanonicalHash.
+//	                  envelope.EntryIdentity.
 //	LogDID          — the log the stamp is bound to. MUST be non-empty and
 //	                  MUST NOT exceed 65535 bytes.
 //	Difficulty      — required leading zero bits, in [1, 256].

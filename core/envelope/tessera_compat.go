@@ -47,7 +47,7 @@
 //
 // MIGRATION NOTE
 // ──────────────
-// crypto.CanonicalHash(entry) is semantically equivalent to
+// envelope.EntryIdentity(entry) is semantically equivalent to
 // EntryIdentity(entry). If you're currently feeding its output into a
 // Merkle tree construction, that's a bug — switch to EntryLeafHash. The
 // existing ProcessBatch / fraud-proof replay paths use CanonicalHash for
@@ -93,7 +93,7 @@ const MaxBundleEntrySize = 65535
 // via tessera.NewEntry(envelope.Serialize(entry)) — both compute
 // SHA-256(Serialize(entry)).
 //
-// This is ALSO equivalent to the SDK's existing crypto.CanonicalHash.
+// This is ALSO equivalent to the SDK's existing envelope.EntryIdentity.
 // Prefer EntryIdentity in new code; CanonicalHash remains for backward
 // compatibility with existing call sites.
 func EntryIdentity(entry *Entry) [32]byte {

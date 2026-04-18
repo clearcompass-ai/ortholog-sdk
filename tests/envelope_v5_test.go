@@ -21,7 +21,6 @@ import (
 	"testing"
 
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
-	"github.com/clearcompass-ai/ortholog-sdk/crypto"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
@@ -45,7 +44,7 @@ func TestV5_CanonicalHashDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntry (second): %v", err)
 	}
-	if crypto.CanonicalHash(e1) != crypto.CanonicalHash(e2) {
+	if envelope.EntryIdentity(e1) != envelope.EntryIdentity(e2) {
 		t.Error("canonical hash not deterministic across NewEntry calls")
 	}
 }

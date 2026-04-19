@@ -302,9 +302,9 @@ func newOperatorEntryServer(entries map[uint64]*types.EntryWithMetadata) *httpte
 		}
 
 		resp := map[string]any{
-			"sequence":             seq,
-			"canonical_hex":        hex.EncodeToString(meta.CanonicalBytes),
-			"log_time_unix_micro":  meta.LogTime.UnixMicro(),
+			"sequence":            seq,
+			"canonical_hex":       hex.EncodeToString(meta.CanonicalBytes),
+			"log_time_unix_micro": meta.LogTime.UnixMicro(),
 			"sig_algo_id":         meta.SignatureAlgoID,
 		}
 		if len(meta.SignatureBytes) > 0 {
@@ -405,7 +405,7 @@ func TestHTTPEntryFetcher_ServerError(t *testing.T) {
 func TestHTTPEntryFetcher_Deserializable(t *testing.T) {
 	entry, _ := makeEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
-		SignerDID: "did:example:deser", EventTime: 1700000000,
+		SignerDID:   "did:example:deser", EventTime: 1700000000,
 	}, []byte("deserialize-test"))
 
 	entries := map[uint64]*types.EntryWithMetadata{
@@ -436,7 +436,7 @@ func TestHTTPEntryFetcher_MultipleSequences(t *testing.T) {
 	for i := uint64(1); i <= 5; i++ {
 		e, _ := makeEntry(t, envelope.ControlHeader{
 			Destination: testDestinationDID,
-			SignerDID: "did:example:multi", EventTime: int64(i),
+			SignerDID:   "did:example:multi", EventTime: int64(i),
 		}, nil)
 		entries[i] = &types.EntryWithMetadata{
 			CanonicalBytes: envelope.Serialize(e), LogTime: time.Now(),
@@ -463,8 +463,8 @@ func TestHTTPEntryFetcher_WithSignature(t *testing.T) {
 	sig[0] = 0xAB
 	entries := map[uint64]*types.EntryWithMetadata{
 		1: {
-			CanonicalBytes: envelope.Serialize(entry),
-			LogTime:        time.Now(),
+			CanonicalBytes:  envelope.Serialize(entry),
+			LogTime:         time.Now(),
 			SignatureAlgoID: 1,
 			SignatureBytes:  sig,
 		},
@@ -623,5 +623,3 @@ func TestHTTPLeafReader_SatisfiesLeafReaderInterface(t *testing.T) {
 	// Compile-time check: HTTPLeafReader satisfies smt.LeafReader.
 	var _ smt.LeafReader = reader
 }
-
-

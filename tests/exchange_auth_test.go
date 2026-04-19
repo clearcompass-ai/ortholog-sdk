@@ -1,30 +1,32 @@
 /*
 FILE PATH:
-    tests/exchange_auth_test.go
+
+	tests/exchange_auth_test.go
 
 DESCRIPTION:
-    Tests the exchange/auth layer: InMemoryNonceStore semantic contract
-    (strict-forever, concurrency, idempotency), plus VerifyRequest behavior
-    (validity windows, clock skew, replay rejection, opt-in no-replay).
+
+	Tests the exchange/auth layer: InMemoryNonceStore semantic contract
+	(strict-forever, concurrency, idempotency), plus VerifyRequest behavior
+	(validity windows, clock skew, replay rejection, opt-in no-replay).
 
 INVARIANTS LOCKED:
-  1. Reserve returns nil the first time a nonce is seen.
-  2. Reserve returns ErrNonceReserved every time after the first.
-  3. Reserve is STRICT-FOREVER — no expiry, no eviction.
-  4. Reserve is safe under concurrent callers: 100 goroutines reserving
-     the same nonce, exactly one succeeds.
-  5. Reserve rejects the empty string.
-  6. VerifyRequest rejects validity windows longer than MaxValidityWindow.
-  7. VerifyRequest rejects envelopes with expired ExpiresAt.
-  8. VerifyRequest rejects envelopes with IssuedAt too far in the future.
-  9. VerifyRequest rejects when nonce reuse is attempted.
-  10. VerifyRequest with opts.Nonces=nil and AllowNoReplayCheck=false is
-      itself rejected (explicit opt-in required).
+ 1. Reserve returns nil the first time a nonce is seen.
+ 2. Reserve returns ErrNonceReserved every time after the first.
+ 3. Reserve is STRICT-FOREVER — no expiry, no eviction.
+ 4. Reserve is safe under concurrent callers: 100 goroutines reserving
+    the same nonce, exactly one succeeds.
+ 5. Reserve rejects the empty string.
+ 6. VerifyRequest rejects validity windows longer than MaxValidityWindow.
+ 7. VerifyRequest rejects envelopes with expired ExpiresAt.
+ 8. VerifyRequest rejects envelopes with IssuedAt too far in the future.
+ 9. VerifyRequest rejects when nonce reuse is attempted.
+ 10. VerifyRequest with opts.Nonces=nil and AllowNoReplayCheck=false is
+    itself rejected (explicit opt-in required).
 
 KEY DEPENDENCIES:
-    - exchange/auth (NonceStore, InMemoryNonceStore, VerifyRequest, constants)
-    - context
-    - sync
+  - exchange/auth (NonceStore, InMemoryNonceStore, VerifyRequest, constants)
+  - context
+  - sync
 */
 package tests
 

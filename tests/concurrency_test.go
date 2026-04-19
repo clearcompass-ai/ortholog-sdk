@@ -1,31 +1,38 @@
 package tests
 
 import (
-	"testing"
 	"github.com/clearcompass-ai/ortholog-sdk/builder"
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
+	"testing"
 )
 
-type mockSchemaResolver struct { commutative bool }
+type mockSchemaResolver struct{ commutative bool }
+
 func (r *mockSchemaResolver) Resolve(ref types.LogPosition, fetcher builder.EntryFetcher) (*builder.SchemaResolution, error) {
 	return &builder.SchemaResolution{IsCommutative: r.commutative, DeltaWindowSize: 10}, nil
 }
 
 func setupOCCHarness(t *testing.T) (*testHarness, types.LogPosition, types.LogPosition) {
-	t.Helper(); h := newHarness()
-	entityPos := pos(1); h.addRootEntity(t, entityPos, "did:example:entity")
-	scopePos := pos(2); h.addScopeEntity(t, scopePos, "did:example:judge", map[string]struct{}{"did:example:judge": {}})
+	t.Helper()
+	h := newHarness()
+	entityPos := pos(1)
+	h.addRootEntity(t, entityPos, "did:example:entity")
+	scopePos := pos(2)
+	h.addScopeEntity(t, scopePos, "did:example:judge", map[string]struct{}{"did:example:judge": {}})
 	return h, entityPos, scopePos
 }
 
 func TestOCC_StrictMatch(t *testing.T) {
 	h, entityPos, scopePos := setupOCCHarness(t)
 	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
-	e1Pos := pos(3); h.process(t, e1, e1Pos)
+	e1Pos := pos(3)
+	h.process(t, e1, e1Pos)
 	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
-	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 { t.Fatal("strict OCC match should succeed") }
+	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 {
+		t.Fatal("strict OCC match should succeed")
+	}
 }
 
 func TestOCC_StrictMismatch(t *testing.T) {
@@ -33,7 +40,9 @@ func TestOCC_StrictMismatch(t *testing.T) {
 	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
 	h.process(t, e1, pos(3))
 	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(pos(999))}, nil)
-	if r := h.process(t, e2, pos(4)); r.RejectedCounts != 1 { t.Fatal("strict OCC mismatch should reject") }
+	if r := h.process(t, e2, pos(4)); r.RejectedCounts != 1 {
+		t.Fatal("strict OCC mismatch should reject")
+	}
 }
 
 func TestOCC_CommutativeWithinWindow(t *testing.T) {
@@ -43,9 +52,12 @@ func TestOCC_CommutativeWithinWindow(t *testing.T) {
 	schemaEntry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:schema-author", AuthorityPath: sameSigner(), CommutativeOperations: []uint32{1, 2}}, nil)
 	h.fetcher.Store(schemaPos, schemaEntry)
 	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), SchemaRef: ptrTo(schemaPos)}, nil)
-	e1Pos := pos(3); h.process(t, e1, e1Pos)
+	e1Pos := pos(3)
+	h.process(t, e1, e1Pos)
 	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), SchemaRef: ptrTo(schemaPos), PriorAuthority: ptrTo(e1Pos)}, nil)
-	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 { t.Fatal("commutative within window should succeed") }
+	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 {
+		t.Fatal("commutative within window should succeed")
+	}
 }
 
 func TestOCC_CommutativeOutsideWindow(t *testing.T) {
@@ -55,11 +67,17 @@ func TestOCC_CommutativeOutsideWindow(t *testing.T) {
 	prevPos := types.LogPosition{}
 	for i := uint64(3); i <= 7; i++ {
 		hdr := envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}
-		if !prevPos.IsNull() { hdr.PriorAuthority = &prevPos }
-		e, _ := makeEntry(t, hdr, nil); h.process(t, e, pos(i)); prevPos = pos(i)
+		if !prevPos.IsNull() {
+			hdr.PriorAuthority = &prevPos
+		}
+		e, _ := makeEntry(t, hdr, nil)
+		h.process(t, e, pos(i))
+		prevPos = pos(i)
 	}
 	e, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(pos(3))}, nil)
-	if r := h.process(t, e, pos(8)); r.RejectedCounts != 1 { t.Fatal("outside window should reject") }
+	if r := h.process(t, e, pos(8)); r.RejectedCounts != 1 {
+		t.Fatal("outside window should reject")
+	}
 }
 
 func TestOCC_ColdStart(t *testing.T) {
@@ -67,42 +85,69 @@ func TestOCC_ColdStart(t *testing.T) {
 	h.schema = &mockSchemaResolver{commutative: true}
 	h.buffer = builder.NewDeltaWindowBuffer(10)
 	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
-	e1Pos := pos(3); h.process(t, e1, e1Pos)
+	e1Pos := pos(3)
+	h.process(t, e1, e1Pos)
 	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
-	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 { t.Fatal("cold start with current tip should succeed") }
+	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 {
+		t.Fatal("cold start with current tip should succeed")
+	}
 }
 
 func TestOCC_NullSchemaRef(t *testing.T) {
 	h, entityPos, scopePos := setupOCCHarness(t)
 	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
-	e1Pos := pos(3); h.process(t, e1, e1Pos)
+	e1Pos := pos(3)
+	h.process(t, e1, e1Pos)
 	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
-	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 { t.Fatal("null Schema_Ref should use strict OCC") }
+	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 {
+		t.Fatal("null Schema_Ref should use strict OCC")
+	}
 }
 
 func TestOCC_DeterministicFlush(t *testing.T) {
-	buf := builder.NewDeltaWindowBuffer(10); leafKey := smt.DeriveKey(pos(1))
-	buf.Record(leafKey, pos(10)); buf.Record(leafKey, pos(11)); buf.Record(leafKey, pos(12))
-	if !buf.Contains(leafKey, pos(10)) { t.Fatal("should contain") }
-	if !buf.Contains(leafKey, pos(12)) { t.Fatal("should contain") }
-	if buf.Contains(leafKey, pos(99)) { t.Fatal("should not contain") }
+	buf := builder.NewDeltaWindowBuffer(10)
+	leafKey := smt.DeriveKey(pos(1))
+	buf.Record(leafKey, pos(10))
+	buf.Record(leafKey, pos(11))
+	buf.Record(leafKey, pos(12))
+	if !buf.Contains(leafKey, pos(10)) {
+		t.Fatal("should contain")
+	}
+	if !buf.Contains(leafKey, pos(12)) {
+		t.Fatal("should contain")
+	}
+	if buf.Contains(leafKey, pos(99)) {
+		t.Fatal("should not contain")
+	}
 }
 
 func TestOCC_BufferPersistence(t *testing.T) {
-	buf := builder.NewDeltaWindowBuffer(10); leafKey := smt.DeriveKey(pos(1))
-	buf.Record(leafKey, pos(10)); buf.Record(leafKey, pos(11))
+	buf := builder.NewDeltaWindowBuffer(10)
+	leafKey := smt.DeriveKey(pos(1))
+	buf.Record(leafKey, pos(10))
+	buf.Record(leafKey, pos(11))
 	history := buf.History(leafKey)
-	if len(history) != 2 { t.Fatal("should have 2") }
-	buf2 := builder.NewDeltaWindowBuffer(10); buf2.SetHistory(leafKey, history)
-	if !buf2.Contains(leafKey, pos(10)) { t.Fatal("loaded should contain") }
+	if len(history) != 2 {
+		t.Fatal("should have 2")
+	}
+	buf2 := builder.NewDeltaWindowBuffer(10)
+	buf2.SetHistory(leafKey, history)
+	if !buf2.Contains(leafKey, pos(10)) {
+		t.Fatal("loaded should contain")
+	}
 }
 
 func TestOCC_MixedSchemas(t *testing.T) {
 	h := newHarness()
-	entityPos := pos(1); h.addRootEntity(t, entityPos, "did:example:entity")
-	scopePos := pos(2); h.addScopeEntity(t, scopePos, "did:example:judge", map[string]struct{}{"did:example:judge": {}})
+	entityPos := pos(1)
+	h.addRootEntity(t, entityPos, "did:example:entity")
+	scopePos := pos(2)
+	h.addScopeEntity(t, scopePos, "did:example:judge", map[string]struct{}{"did:example:judge": {}})
 	e1, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
-	e1Pos := pos(3); h.process(t, e1, e1Pos)
+	e1Pos := pos(3)
+	h.process(t, e1, e1Pos)
 	e2, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(e1Pos)}, nil)
-	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 { t.Fatal("strict OCC with correct prior should succeed") }
+	if r := h.process(t, e2, pos(4)); r.PathCCounts != 1 {
+		t.Fatal("strict OCC with correct prior should succeed")
+	}
 }

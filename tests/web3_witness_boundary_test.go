@@ -1,12 +1,14 @@
 /*
 FILE PATH:
-    tests/web3_witness_boundary_test.go
+
+	tests/web3_witness_boundary_test.go
 
 DESCRIPTION:
-    Witness cosignature boundary tests. Witnesses are SDK-native signers that
-    produce 64-byte ECDSA secp256k1 signatures. This file locks the invariant
-    that the witness verification path rejects all other algorithm IDs, in
-    particular the 65-byte Ethereum-format ones (EIP-191, EIP-712).
+
+	Witness cosignature boundary tests. Witnesses are SDK-native signers that
+	produce 64-byte ECDSA secp256k1 signatures. This file locks the invariant
+	that the witness verification path rejects all other algorithm IDs, in
+	particular the 65-byte Ethereum-format ones (EIP-191, EIP-712).
 
 KEY ARCHITECTURAL DECISIONS:
   - These tests exist because the witness layer (crypto/signatures/witness_verify.go)

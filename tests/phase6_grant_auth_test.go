@@ -81,7 +81,7 @@ func newGrantAuthFixture(t *testing.T) *grantAuthTestFixture {
 	// restricted and sealed modes.
 	scopePos := pos(50)
 	scopeEntry, _ := makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:admin",
 		AuthorityPath: sameSigner(),
 		AuthoritySet: map[string]struct{}{
@@ -149,7 +149,7 @@ func TestGrantAuth_Open_NoCheckPerformed(t *testing.T) {
 			// No RecipientDID, no ScopePointer, no AuthorizedRecipients,
 			// no LeafReader, no Fetcher. Open mode needs none of these.
 			result, err := lifecycle.GrantArtifactAccess(lifecycle.GrantArtifactAccessParams{
-				Destination: testDestinationDID,
+				Destination:       testDestinationDID,
 				ArtifactCID:       f.artifactCID,
 				RecipientPubKey:   f.recipientPK,
 				SchemaParams:      m.params,
@@ -204,7 +204,7 @@ func TestGrantAuth_Restricted_GranterInAuthoritySet_Succeeds(t *testing.T) {
 
 	t.Run("authorized_granter", func(t *testing.T) {
 		result, err := lifecycle.GrantArtifactAccess(lifecycle.GrantArtifactAccessParams{
-			Destination: testDestinationDID,
+			Destination:       testDestinationDID,
 			ArtifactCID:       f.artifactCID,
 			RecipientPubKey:   f.recipientPK,
 			SchemaParams:      schemaParams,
@@ -227,7 +227,7 @@ func TestGrantAuth_Restricted_GranterInAuthoritySet_Succeeds(t *testing.T) {
 
 	t.Run("unauthorized_granter", func(t *testing.T) {
 		_, err := lifecycle.GrantArtifactAccess(lifecycle.GrantArtifactAccessParams{
-			Destination: testDestinationDID,
+			Destination:       testDestinationDID,
 			ArtifactCID:       f.artifactCID,
 			RecipientPubKey:   f.recipientPK,
 			SchemaParams:      schemaParams,
@@ -284,7 +284,7 @@ func TestGrantAuth_Sealed_RecipientNotInList_Denied(t *testing.T) {
 
 	t.Run("both_authorized", func(t *testing.T) {
 		result, err := lifecycle.GrantArtifactAccess(lifecycle.GrantArtifactAccessParams{
-			Destination: testDestinationDID,
+			Destination:          testDestinationDID,
 			ArtifactCID:          f.artifactCID,
 			RecipientPubKey:      f.recipientPK,
 			SchemaParams:         schemaParams,
@@ -327,7 +327,7 @@ func TestGrantAuth_Sealed_RecipientNotInList_Denied(t *testing.T) {
 
 	t.Run("prosecutor_authorized", func(t *testing.T) {
 		result, err := lifecycle.GrantArtifactAccess(lifecycle.GrantArtifactAccessParams{
-			Destination: testDestinationDID,
+			Destination:          testDestinationDID,
 			ArtifactCID:          f.artifactCID,
 			RecipientPubKey:      f.recipientPK,
 			SchemaParams:         schemaParams,
@@ -352,7 +352,7 @@ func TestGrantAuth_Sealed_RecipientNotInList_Denied(t *testing.T) {
 
 	t.Run("recipient_not_in_list", func(t *testing.T) {
 		_, err := lifecycle.GrantArtifactAccess(lifecycle.GrantArtifactAccessParams{
-			Destination: testDestinationDID,
+			Destination:          testDestinationDID,
 			ArtifactCID:          f.artifactCID,
 			RecipientPubKey:      f.recipientPK,
 			SchemaParams:         schemaParams,
@@ -374,7 +374,7 @@ func TestGrantAuth_Sealed_RecipientNotInList_Denied(t *testing.T) {
 
 	t.Run("granter_not_in_authority_set", func(t *testing.T) {
 		_, err := lifecycle.GrantArtifactAccess(lifecycle.GrantArtifactAccessParams{
-			Destination: testDestinationDID,
+			Destination:          testDestinationDID,
 			ArtifactCID:          f.artifactCID,
 			RecipientPubKey:      f.recipientPK,
 			SchemaParams:         schemaParams,

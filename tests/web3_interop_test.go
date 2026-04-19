@@ -1,13 +1,15 @@
 /*
 FILE PATH:
-    tests/web3_interop_test.go
+
+	tests/web3_interop_test.go
 
 DESCRIPTION:
-    Cross-implementation compatibility vectors. Every fixture in
-    tests/fixtures/web3-interop.json was produced by an independent web3
-    library (ethers.js v6 or viem). This file verifies that the Ortholog
-    SDK's digest construction and signature verification accept those
-    fixtures byte-for-byte.
+
+	Cross-implementation compatibility vectors. Every fixture in
+	tests/fixtures/web3-interop.json was produced by an independent web3
+	library (ethers.js v6 or viem). This file verifies that the Ortholog
+	SDK's digest construction and signature verification accept those
+	fixtures byte-for-byte.
 
 KEY ARCHITECTURAL DECISIONS:
   - Fixtures are committed static JSON. The Node.js generator under
@@ -35,7 +37,6 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/did"
 )
 
-
 // -------------------------------------------------------------------------------------------------
 // 1) Fixture schema
 // -------------------------------------------------------------------------------------------------
@@ -44,15 +45,15 @@ import (
 // signature) produced by an external web3 library. All byte fields are lower-
 // case hex without 0x prefix.
 type interopFixture struct {
-	Source        string `json:"source"`        // "ethers-v6" | "viem"
-	Name          string `json:"name"`          // human-readable test case
-	PrivKeyHex    string `json:"priv_key_hex"`  // 32 bytes
-	AddressHex    string `json:"address_hex"`   // 20 bytes derived from priv
-	CanonicalHex  string `json:"canonical_hex"` // 32 bytes
-	EIP191Digest  string `json:"eip191_digest"` // 32 bytes expected digest
-	EIP191Sig     string `json:"eip191_sig"`    // 65 bytes r || s || v
-	EIP712Digest  string `json:"eip712_digest"` // 32 bytes expected digest
-	EIP712Sig     string `json:"eip712_sig"`    // 65 bytes r || s || v
+	Source       string `json:"source"`        // "ethers-v6" | "viem"
+	Name         string `json:"name"`          // human-readable test case
+	PrivKeyHex   string `json:"priv_key_hex"`  // 32 bytes
+	AddressHex   string `json:"address_hex"`   // 20 bytes derived from priv
+	CanonicalHex string `json:"canonical_hex"` // 32 bytes
+	EIP191Digest string `json:"eip191_digest"` // 32 bytes expected digest
+	EIP191Sig    string `json:"eip191_sig"`    // 65 bytes r || s || v
+	EIP712Digest string `json:"eip712_digest"` // 32 bytes expected digest
+	EIP712Sig    string `json:"eip712_sig"`    // 65 bytes r || s || v
 }
 
 type interopFile struct {

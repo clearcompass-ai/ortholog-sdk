@@ -34,7 +34,7 @@ func p5ptrTo[T any](v T) *T { return &v }
 
 func p5makeEntry(t *testing.T, h envelope.ControlHeader, payload []byte) *envelope.Entry {
 	t.Helper()
-	entry, err := envelope.NewEntry(h, payload)
+	entry, err := envelope.NewUnsignedEntry(h, payload)
 	if err != nil {
 		t.Fatalf("NewEntry: %v", err)
 	}
@@ -60,7 +60,7 @@ func newP5Harness() *p5Harness {
 func (h *p5Harness) addEntity(t *testing.T, p types.LogPosition, signerDID string) {
 	t.Helper()
 	entry := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     signerDID,
 		AuthorityPath: sameSigner(),
 	}, nil)
@@ -75,7 +75,7 @@ func (h *p5Harness) addEntity(t *testing.T, p types.LogPosition, signerDID strin
 func (h *p5Harness) addEntityWithPayload(t *testing.T, p types.LogPosition, signerDID string, payload []byte) {
 	t.Helper()
 	entry := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     signerDID,
 		AuthorityPath: sameSigner(),
 	}, payload)
@@ -295,7 +295,7 @@ func TestOrigin_AmendedEntity(t *testing.T) {
 	// Create an amendment entry (Path A: same signer, targets root).
 	amendPos := p5pos(2)
 	amendEntry := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:alice",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: sameSigner(),
@@ -331,7 +331,7 @@ func TestOrigin_RevokedEntity(t *testing.T) {
 	revokePos := p5pos(99)
 	// Store an entry at revokePos that targets a DIFFERENT entity.
 	revokeEntry := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:admin",
 		TargetRoot:    p5ptrTo(p5pos(999)), // Different entity.
 		AuthorityPath: scopeAuth(),
@@ -385,7 +385,7 @@ func TestOrigin_PathCompression(t *testing.T) {
 	// Amendment with path compression: targets root with intermediate.
 	amendPos := p5pos(3)
 	amendEntry := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:        testDestinationDID,
 		SignerDID:          "did:example:alice",
 		TargetRoot:         p5ptrTo(rootPos),
 		TargetIntermediate: p5ptrTo(intPos),
@@ -456,7 +456,7 @@ func TestAuthority_SingleActiveConstraint(t *testing.T) {
 	// Create enforcement entry (Path C).
 	enfPos := p5pos(3)
 	enfEntry := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -491,7 +491,7 @@ func TestAuthority_MultipleConstraintsWithPriorChain(t *testing.T) {
 	// First enforcement.
 	enf1Pos := p5pos(3)
 	enf1 := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -502,7 +502,7 @@ func TestAuthority_MultipleConstraintsWithPriorChain(t *testing.T) {
 	// Second enforcement with Prior_Authority → first.
 	enf2Pos := p5pos(4)
 	enf2 := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:    testDestinationDID,
 		SignerDID:      "did:example:judge",
 		TargetRoot:     p5ptrTo(entityPos),
 		AuthorityPath:  scopeAuth(),
@@ -541,7 +541,7 @@ func TestAuthority_PendingWithinActivationDelay(t *testing.T) {
 		"activation_delay": 999999, // Very long delay.
 	})
 	schemaEntry := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:schema-author",
 		AuthorityPath: sameSigner(),
 	}, schemaPayload)
@@ -550,7 +550,7 @@ func TestAuthority_PendingWithinActivationDelay(t *testing.T) {
 	// Enforcement entry referencing this schema.
 	enfPos := p5pos(3)
 	enfEntry := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -584,7 +584,7 @@ func TestAuthority_SnapshotShortcut(t *testing.T) {
 	// Create several enforcement entries that Evidence_Pointers reference.
 	ev1Pos := p5pos(10)
 	ev1 := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -594,7 +594,7 @@ func TestAuthority_SnapshotShortcut(t *testing.T) {
 
 	ev2Pos := p5pos(11)
 	ev2 := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:judge2",
 		TargetRoot:    p5ptrTo(entityPos),
 		AuthorityPath: scopeAuth(),
@@ -609,7 +609,7 @@ func TestAuthority_SnapshotShortcut(t *testing.T) {
 	for i := 2; i < 11; i++ {
 		pointers[i] = p5pos(uint64(20 + i))
 		h.storeEntry(t, pointers[i], p5makeEntry(t, envelope.ControlHeader{
-			Destination: testDestinationDID,
+			Destination:   testDestinationDID,
 			SignerDID:     "did:example:judge",
 			TargetRoot:    p5ptrTo(entityPos),
 			AuthorityPath: scopeAuth(),
@@ -619,7 +619,7 @@ func TestAuthority_SnapshotShortcut(t *testing.T) {
 
 	snapPos := p5pos(50)
 	snapEntry := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:      testDestinationDID,
 		SignerDID:        "did:example:judge",
 		TargetRoot:       p5ptrTo(entityPos),
 		AuthorityPath:    scopeAuth(),
@@ -653,7 +653,7 @@ func TestDelegation_ThreeDeepAllLive(t *testing.T) {
 	// Owner → mid → leaf delegation chain.
 	d1Pos := p5pos(10)
 	d1 := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   p5ptrTo("did:example:mid"),
@@ -665,7 +665,7 @@ func TestDelegation_ThreeDeepAllLive(t *testing.T) {
 
 	d2Pos := p5pos(11)
 	d2 := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:mid",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   p5ptrTo("did:example:leaf"),
@@ -677,7 +677,7 @@ func TestDelegation_ThreeDeepAllLive(t *testing.T) {
 
 	d3Pos := p5pos(12)
 	d3 := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:leaf",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   p5ptrTo("did:example:deputy"),
@@ -715,7 +715,7 @@ func TestDelegation_RevokedMiddleHop(t *testing.T) {
 
 	d1Pos := p5pos(10)
 	d1 := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   p5ptrTo("did:example:mid"),
@@ -727,7 +727,7 @@ func TestDelegation_RevokedMiddleHop(t *testing.T) {
 
 	d2Pos := p5pos(11)
 	d2 := p5makeEntry(t, envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:example:mid",
 		AuthorityPath: sameSigner(),
 		DelegateDID:   p5ptrTo("did:example:leaf"),

@@ -344,21 +344,10 @@ func TestVerifyEntry_CrossDestination_Rejected(t *testing.T) {
 	// Build a registry scoped to destB. panicResolver is fine here — our
 	// test uses did:key exclusively, which resolves by parsing the
 	// identifier; the web resolver is never invoked.
-	// Attach the signature to the entry under v6 semantics (signatures
-	// live inside entry.Signatures; the registry reads them from there).
-	entry.Signatures = []envelope.Signature{{
-		SignerDID: kp.DID,
-		AlgoID:    envelope.SigAlgoECDSA,
-		Bytes:     sig,
-	}}
-	if err := entry.Validate(); err != nil {
-		t.Fatalf("Validate signed entry: %v", err)
-	}
-
 	registryForB := did.DefaultVerifierRegistry(destB, panicResolver{})
 
 	// Attempt verification. Must fail with ErrDestinationMismatch.
-	err = registryForB.VerifyEntry(entry)
+	err = registryForB.VerifyEntry(entry, sig, envelope.SigAlgoECDSA)
 	if err == nil {
 		t.Fatal("registry scoped to destB accepted entry bound to destA — cross-exchange replay possible")
 	}
@@ -398,19 +387,9 @@ func TestVerifyEntry_SameDestination_Accepted(t *testing.T) {
 		t.Fatalf("SignEntry: %v", err)
 	}
 
-	// Attach the signature to the entry under v6 semantics.
-	entry.Signatures = []envelope.Signature{{
-		SignerDID: kp.DID,
-		AlgoID:    envelope.SigAlgoECDSA,
-		Bytes:     sig,
-	}}
-	if err := entry.Validate(); err != nil {
-		t.Fatalf("Validate signed entry: %v", err)
-	}
-
 	registry := did.DefaultVerifierRegistry(dest, panicResolver{})
 
-	if err := registry.VerifyEntry(entry); err != nil {
+	if err := registry.VerifyEntry(entry, sig, envelope.SigAlgoECDSA); err != nil {
 		t.Fatalf("same-destination VerifyEntry: %v", err)
 	}
 }

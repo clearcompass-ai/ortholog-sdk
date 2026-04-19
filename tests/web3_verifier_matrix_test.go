@@ -1,13 +1,15 @@
 /*
 FILE PATH:
-    tests/web3_verifier_matrix_test.go
+
+	tests/web3_verifier_matrix_test.go
 
 DESCRIPTION:
-    Negative-path test matrix for all three DID-method verifiers. Every
-    (curve, algorithm, input-shape) tuple that MUST be rejected gets an
-    explicit test. No reliance on coverage tools to infer these — the
-    rejections are protocol invariants and must be enumerated by hand
-    against the spec.
+
+	Negative-path test matrix for all three DID-method verifiers. Every
+	(curve, algorithm, input-shape) tuple that MUST be rejected gets an
+	explicit test. No reliance on coverage tools to infer these — the
+	rejections are protocol invariants and must be enumerated by hand
+	against the spec.
 
 KEY ARCHITECTURAL DECISIONS:
   - Each verifier gets one table-driven test per rejection axis. Named
@@ -69,12 +71,12 @@ func TestPKHVerifier_Matrix(t *testing.T) {
 	_ = sigECDSA // keep the symbol used
 
 	cases := []struct {
-		name     string
-		did      string
-		msg      []byte
-		sig      []byte
-		algoID   uint16
-		wantErr  error
+		name    string
+		did     string
+		msg     []byte
+		sig     []byte
+		algoID  uint16
+		wantErr error
 	}{
 		// Positive cases
 		{"ECDSA-correct-address", didStr, canonicalHash[:], sigECDSARecoverable, envelope.SigAlgoECDSA, nil},

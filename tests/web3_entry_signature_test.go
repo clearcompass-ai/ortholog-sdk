@@ -1,11 +1,13 @@
 /*
 FILE PATH:
-    tests/web3_entry_signature_test.go
+
+	tests/web3_entry_signature_test.go
 
 DESCRIPTION:
-    Round-trip tests for entry signing across all four registered algorithms,
-    and the critical invariant that the canonical hash is independent of
-    which algorithm signed the entry.
+
+	Round-trip tests for entry signing across all four registered algorithms,
+	and the critical invariant that the canonical hash is independent of
+	which algorithm signed the entry.
 
 KEY ARCHITECTURAL DECISIONS:
   - Each algorithm gets its own round-trip test. No table-driven collapse

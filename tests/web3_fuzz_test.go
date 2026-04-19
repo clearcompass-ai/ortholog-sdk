@@ -1,12 +1,14 @@
 /*
 FILE PATH:
-    tests/web3_fuzz_test.go
+
+	tests/web3_fuzz_test.go
 
 DESCRIPTION:
-    Fuzz targets for parsers and validators that accept untrusted input.
-    A single panic in any of these is a denial-of-service vector: an attacker
-    feeds a malformed DID, envelope, or signature to a public endpoint and
-    takes down the process.
+
+	Fuzz targets for parsers and validators that accept untrusted input.
+	A single panic in any of these is a denial-of-service vector: an attacker
+	feeds a malformed DID, envelope, or signature to a public endpoint and
+	takes down the process.
 
 KEY ARCHITECTURAL DECISIONS:
   - Every fuzz target follows the same contract: "MUST NOT panic for any
@@ -48,12 +50,12 @@ func FuzzParseDIDPKH(f *testing.F) {
 		"did:pkh:eip155:1:0x", // truncated address
 		"did:pkh:solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ:AhwZzLjCkVRAB",
 		"did:pkh:eip155:1:0xGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG", // non-hex
-		"did:pkh:eip155:1:0x\x00\x00\x00\x00",                          // nulls
+		"did:pkh:eip155:1:0x\x00\x00\x00\x00",                         // nulls
 		"did:pkh",
 		"did:pkh:",
 		"did:pkh:::::::",
 		"not a did at all",
-		"did:pkh:eip155:1:\u00ff0xabcd",                             // non-ASCII
+		"did:pkh:eip155:1:\u00ff0xabcd", // non-ASCII
 		"did:pkh:eip155:1:0xabcdef0123456789abcdef0123456789abcdef01", // valid lower
 	}
 	for _, s := range seeds {
@@ -74,12 +76,12 @@ func FuzzParseDIDKey(f *testing.F) {
 		"",
 		"did:key:",
 		"did:key:z",
-		"did:key:f00",                         // legacy non-standard format
-		"did:key:z6Mki",                        // too short
+		"did:key:f00",   // legacy non-standard format
+		"did:key:z6Mki", // too short
 		"did:key:z\x00\x00\x00\x00\x00",
 		"not a did:key at all",
-		"did:key:zBADBASE58???",                // invalid base58 characters
-		"did:key:xABCDEF",                      // unsupported multibase
+		"did:key:zBADBASE58???", // invalid base58 characters
+		"did:key:xABCDEF",       // unsupported multibase
 	}
 	// Add a dynamically-generated valid seed per curve if possible.
 	if kp, err := did.GenerateDIDKeySecp256k1(); err == nil {
@@ -183,7 +185,7 @@ func FuzzCanonicalizeSignedRequest(f *testing.F) {
 		"exchange.example.com",
 		"",
 		"n",
-		"get",                    // wrong case
+		"get", // wrong case
 		"/v1/x",
 		int64(1700000000),
 		int64(1700000300),

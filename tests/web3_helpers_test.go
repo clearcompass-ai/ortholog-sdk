@@ -1,11 +1,13 @@
 /*
 FILE PATH:
-    tests/web3_helpers_test.go
+
+	tests/web3_helpers_test.go
 
 DESCRIPTION:
-    Shared test helpers for the web3 test suite. Recoverable-signature
-    production for Ethereum-format sigs, did:pkh construction from a private
-    key, and stub DID resolvers that fail loudly if accidentally invoked.
+
+	Shared test helpers for the web3 test suite. Recoverable-signature
+	production for Ethereum-format sigs, did:pkh construction from a private
+	key, and stub DID resolvers that fail loudly if accidentally invoked.
 
 KEY ARCHITECTURAL DECISIONS:
   - The SDK's `signatures.SignEntry` produces 64-byte low-S ECDSA for
@@ -61,9 +63,9 @@ func signEthereumRecoverable(priv *ecdsa.PrivateKey, digest [32]byte) []byte {
 		panic(fmt.Sprintf("test: unexpected compact signature length %d", len(compact)))
 	}
 	eth := make([]byte, 65)
-	copy(eth[0:32], compact[1:33]) // r
+	copy(eth[0:32], compact[1:33])   // r
 	copy(eth[32:64], compact[33:65]) // s
-	eth[64] = compact[0] // v in 27/28 form
+	eth[64] = compact[0]             // v in 27/28 form
 	return eth
 }
 

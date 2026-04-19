@@ -1,13 +1,15 @@
 /*
 FILE PATH:
-    tests/web3_frozen_test.go
+
+	tests/web3_frozen_test.go
 
 DESCRIPTION:
-    Frozen protocol constants — the highest-severity class of invariants.
-    Any test in this file failing means a silent protocol break: signatures
-    produced by prior code will no longer verify, or vice versa. All values
-    locked here are computed from the shipped code and MUST NEVER drift
-    without an explicit breaking-version bump.
+
+	Frozen protocol constants — the highest-severity class of invariants.
+	Any test in this file failing means a silent protocol break: signatures
+	produced by prior code will no longer verify, or vice versa. All values
+	locked here are computed from the shipped code and MUST NEVER drift
+	without an explicit breaking-version bump.
 
 KEY ARCHITECTURAL DECISIONS:
   - Hex literals are pasted, not recomputed. If a test fails, the right
@@ -265,14 +267,14 @@ func TestStripSignature_TooShort(t *testing.T) {
 // keccak256("OrthologEntry(bytes32 canonicalHash)") must equal the entry type hash.
 
 const (
-	frozenProtocolSalt       = "81ec03154b75ffe861768e00c874a6ad5f82d6495cd456dccbf983152e54b58e"
-	frozenEntryTypeHash      = "d2147cb2986ba2ea70de9b7e55c0f29c45ca3607e242f436daa2d4544cae69f5"
-	frozenDomainSeparator    = "f39667371bd9adcd1c3c72034702444784b646f87fd894eb4322dfa63057a939"
-	frozenDigestCanonZero    = "0f2bfa7044ab0551d7ce36428c2fcf6b8a2e30dec03508627cea83be3425831a"
-	frozenDigestCanonAll11   = "0f2baf68177124e6835cef41402ac95bfd9d9ade1aa5611d15dca9fc3072a38f"
-	frozenDigestCanonAllFF   = "8e2fa68df52c2a3220873c4cb031cff17838612e99be9145d7ba7ac8b744a531"
-	frozenEIP191DigestZeros  = "5e4106618209740b9f773a94c5667b9659a7a4e2691c7c8a78336e9889a6be07"
-	frozenEIP191DigestAll11  = "245a48de257ae28de2b11cb8fc02361fe87a20566dc63bec4492c3854b1aae52"
+	frozenProtocolSalt      = "81ec03154b75ffe861768e00c874a6ad5f82d6495cd456dccbf983152e54b58e"
+	frozenEntryTypeHash     = "d2147cb2986ba2ea70de9b7e55c0f29c45ca3607e242f436daa2d4544cae69f5"
+	frozenDomainSeparator   = "f39667371bd9adcd1c3c72034702444784b646f87fd894eb4322dfa63057a939"
+	frozenDigestCanonZero   = "0f2bfa7044ab0551d7ce36428c2fcf6b8a2e30dec03508627cea83be3425831a"
+	frozenDigestCanonAll11  = "0f2baf68177124e6835cef41402ac95bfd9d9ade1aa5611d15dca9fc3072a38f"
+	frozenDigestCanonAllFF  = "8e2fa68df52c2a3220873c4cb031cff17838612e99be9145d7ba7ac8b744a531"
+	frozenEIP191DigestZeros = "5e4106618209740b9f773a94c5667b9659a7a4e2691c7c8a78336e9889a6be07"
+	frozenEIP191DigestAll11 = "245a48de257ae28de2b11cb8fc02361fe87a20566dc63bec4492c3854b1aae52"
 )
 
 func TestEIP712_ProtocolSalt_FROZEN(t *testing.T) {
@@ -301,9 +303,9 @@ func TestEIP712_DomainSeparator_FROZEN(t *testing.T) {
 
 func TestEIP712_EntrySigningDigest_KnownVectors(t *testing.T) {
 	cases := []struct {
-		name     string
-		canon    [32]byte
-		wantHex  string
+		name    string
+		canon   [32]byte
+		wantHex string
 	}{
 		{"all-zero canonical hash", [32]byte{}, frozenDigestCanonZero},
 		{"all-0x11 canonical hash", fill32(0x11), frozenDigestCanonAll11},

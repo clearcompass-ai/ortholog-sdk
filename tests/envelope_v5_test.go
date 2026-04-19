@@ -31,16 +31,16 @@ func TestV5_CanonicalHashDeterministic(t *testing.T) {
 	// determinism property — every other protocol invariant
 	// (replayability, fraud proofs, SMT identity) depends on it.
 	header := envelope.ControlHeader{
-		Destination: testDestinationDID,
+		Destination:   testDestinationDID,
 		SignerDID:     "did:test:determinism",
 		AuthorityPath: sameSigner(),
 		EventTime:     1700000000,
 	}
-	e1, err := envelope.NewEntry(header, []byte("{}"))
+	e1, err := envelope.NewUnsignedEntry(header, []byte("{}"))
 	if err != nil {
 		t.Fatalf("NewEntry (first): %v", err)
 	}
-	e2, err := envelope.NewEntry(header, []byte("{}"))
+	e2, err := envelope.NewUnsignedEntry(header, []byte("{}"))
 	if err != nil {
 		t.Fatalf("NewEntry (second): %v", err)
 	}
@@ -60,14 +60,15 @@ func TestV5_RoundTripPreservesAllFields(t *testing.T) {
 	schemaRef := types.LogPosition{LogDID: "did:test:log", Sequence: 7}
 	eventTime := int64(1700000000)
 
-	entry, err := envelope.NewEntry(envelope.ControlHeader{
-		Destination: testDestinationDID,
+	entry, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
+		Destination:   testDestinationDID,
 		SignerDID:     "did:test:roundtrip",
 		TargetRoot:    &targetRoot,
 		AuthorityPath: sameSigner(),
 		SchemaRef:     &schemaRef,
 		EventTime:     eventTime,
 	}, []byte(`{"kind":"amendment","v":1}`))
+
 	if err != nil {
 		t.Fatalf("NewEntry: %v", err)
 	}
@@ -113,10 +114,10 @@ func TestV5_AuthoritySkipIsolatedFromAdmissionProof(t *testing.T) {
 		hash[i] = byte(i)
 	}
 
-	entry, err := envelope.NewEntry(envelope.ControlHeader{
+	entry, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
 		Destination: testDestinationDID,
-		SignerDID: "did:test:isolation",
-		EventTime: 1700000000,
+		SignerDID:   "did:test:isolation",
+		EventTime:   1700000000,
 		AdmissionProof: &envelope.AdmissionProofBody{
 			Mode:            2,
 			Difficulty:      20,
@@ -128,6 +129,7 @@ func TestV5_AuthoritySkipIsolatedFromAdmissionProof(t *testing.T) {
 		},
 		AuthoritySkip: &skip,
 	}, []byte("{}"))
+
 	if err != nil {
 		t.Fatalf("NewEntry: %v", err)
 	}
@@ -167,11 +169,12 @@ func TestV5_OversizedPayloadRejected(t *testing.T) {
 	// Payload alone exceeds MaxCanonicalBytes. NewEntry catches this during
 	// its post-serialize size check before returning the entry to the caller.
 	oversized := make([]byte, envelope.MaxCanonicalBytes+1)
-	_, err := envelope.NewEntry(envelope.ControlHeader{
+	_, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
 		Destination: testDestinationDID,
-		SignerDID: "did:test",
-		EventTime: 1700000000,
+		SignerDID:   "did:test",
+		EventTime:   1700000000,
 	}, oversized)
+
 	if !errors.Is(err, envelope.ErrCanonicalTooLarge) {
 		t.Errorf("oversized = %v, want ErrCanonicalTooLarge", err)
 	}
@@ -181,11 +184,12 @@ func TestV5_EmptySignerDIDRejected(t *testing.T) {
 	t.Parallel()
 	// Every entry requires a Signer_DID. NewEntry refuses empty strings
 	// to prevent unsigned or ambiguously-attributed entries entering the log.
-	_, err := envelope.NewEntry(envelope.ControlHeader{
+	_, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
 		Destination: testDestinationDID,
-		SignerDID: "",
-		EventTime: 1700000000,
+		SignerDID:   "",
+		EventTime:   1700000000,
 	}, nil)
+
 	if !errors.Is(err, envelope.ErrEmptySignerDID) {
 		t.Errorf("empty DID = %v, want ErrEmptySignerDID", err)
 	}
@@ -195,11 +199,12 @@ func TestV5_NonASCIISignerDIDRejected(t *testing.T) {
 	t.Parallel()
 	// Decision 15: SDK enforces ASCII-only DIDs in strict mode.
 	// The 0x80 byte is the first invalid high-bit character.
-	_, err := envelope.NewEntry(envelope.ControlHeader{
+	_, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
 		Destination: testDestinationDID,
-		SignerDID: "did:test:\x80",
-		EventTime: 1700000000,
+		SignerDID:   "did:test:\x80",
+		EventTime:   1700000000,
 	}, nil)
+
 	if !errors.Is(err, envelope.ErrNonASCIIDID) {
 		t.Errorf("non-ASCII DID = %v, want ErrNonASCIIDID", err)
 	}
@@ -214,12 +219,13 @@ func TestV5_TooManyEvidencePointers(t *testing.T) {
 	for i := range pointers {
 		pointers[i] = types.LogPosition{LogDID: "did:web:evidence", Sequence: uint64(i + 1)}
 	}
-	_, err := envelope.NewEntry(envelope.ControlHeader{
-		Destination: testDestinationDID,
+	_, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
+		Destination:      testDestinationDID,
 		SignerDID:        "did:test:evcap",
 		EventTime:        1700000000,
 		EvidencePointers: pointers,
 	}, nil)
+
 	if !errors.Is(err, envelope.ErrTooManyEvidencePointers) {
 		t.Errorf("too many evidence pointers = %v, want ErrTooManyEvidencePointers", err)
 	}

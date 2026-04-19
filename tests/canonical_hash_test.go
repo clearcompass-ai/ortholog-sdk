@@ -46,14 +46,14 @@ func TestCanonicalHash_ASCIINormalization(t *testing.T) {
 }
 
 func TestCanonicalHash_NonASCIIRejected(t *testing.T) {
-	_, err := envelope.NewEntry(envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:\x80bad"}, nil)
+	_, err := envelope.NewUnsignedEntry(envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:\x80bad"}, nil)
 	if err == nil {
 		t.Fatal("expected error for non-ASCII byte in ASCII-only mode")
 	}
 }
 
 func TestCanonicalHash_EmptyDIDRejected(t *testing.T) {
-	_, err := envelope.NewEntry(envelope.ControlHeader{Destination: testDestinationDID, SignerDID: ""}, nil)
+	_, err := envelope.NewUnsignedEntry(envelope.ControlHeader{Destination: testDestinationDID, SignerDID: ""}, nil)
 	if err == nil {
 		t.Fatal("expected error for empty Signer_DID")
 	}
@@ -249,11 +249,12 @@ func TestCanonicalHash_EntrySizeValidation(t *testing.T) {
 	for i := range pointers {
 		pointers[i] = pos(uint64(i + 1))
 	}
-	_, err := envelope.NewEntry(envelope.ControlHeader{
+	_, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
 		Destination:      testDestinationDID,
 		SignerDID:        "did:example:overcap",
 		EvidencePointers: pointers,
 	}, nil)
+
 	if err == nil {
 		t.Fatalf("expected error for %d Evidence_Pointers on non-snapshot", len(pointers))
 	}

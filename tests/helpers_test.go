@@ -31,7 +31,7 @@ func scopeAuth() *envelope.AuthorityPath  { v := envelope.AuthorityScopeAuthorit
 
 func makeEntry(t *testing.T, h envelope.ControlHeader, payload []byte) (*envelope.Entry, []byte) {
 	t.Helper()
-	entry, err := envelope.NewEntry(h, payload)
+	entry, err := envelope.NewUnsignedEntry(h, payload)
 	if err != nil {
 		t.Fatalf("NewEntry: %v", err)
 	}

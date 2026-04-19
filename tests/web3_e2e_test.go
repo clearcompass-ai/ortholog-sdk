@@ -1,19 +1,21 @@
 /*
 FILE PATH:
-    tests/web3_e2e_test.go
+
+	tests/web3_e2e_test.go
 
 DESCRIPTION:
-    End-to-end tests for each (DID method × signature algorithm) combination
-    the protocol supports. Each test exercises the full stack:
-        DID construction
-          -> canonical hash
-          -> sign with algorithm-specific primitive
-          -> envelope.AppendSignature
-          -> envelope.StripSignature
-          -> registry.Verify dispatches to method-specific verifier
-          -> verifier performs primitive-level verification
-    Any broken wiring fails here, regardless of whether per-verifier unit
-    tests pass in isolation.
+
+	End-to-end tests for each (DID method × signature algorithm) combination
+	the protocol supports. Each test exercises the full stack:
+	    DID construction
+	      -> canonical hash
+	      -> sign with algorithm-specific primitive
+	      -> envelope.AppendSignature
+	      -> envelope.StripSignature
+	      -> registry.Verify dispatches to method-specific verifier
+	      -> verifier performs primitive-level verification
+	Any broken wiring fails here, regardless of whether per-verifier unit
+	tests pass in isolation.
 
 KEY ARCHITECTURAL DECISIONS:
   - One test function per (method, algorithm) combination. Named tests keep
@@ -21,10 +23,10 @@ KEY ARCHITECTURAL DECISIONS:
   - Tests use a panicResolver for did:pkh and did:key (neither should touch
     the web resolver). A staticResolver is used for did:web tests.
   - Every test follows the same four-step template:
-        1. Produce keypair / DID
-        2. Sign canonical hash
-        3. Round-trip through envelope framing
-        4. Verify via the registry
+    1. Produce keypair / DID
+    2. Sign canonical hash
+    3. Round-trip through envelope framing
+    4. Verify via the registry
     Any deviation from this template indicates the test is measuring
     something other than end-to-end behavior.
 */
@@ -40,7 +42,6 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/signatures"
 	"github.com/clearcompass-ai/ortholog-sdk/did"
 )
-
 
 // -------------------------------------------------------------------------------------------------
 // 1) E2E — did:key + Ed25519 + SigAlgoEd25519

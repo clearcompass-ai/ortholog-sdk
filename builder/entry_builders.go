@@ -80,7 +80,7 @@ func BuildRootEntity(p RootEntityParams) (*envelope.Entry, error) {
 		return nil, err
 	}
 	ap := envelope.AuthoritySameSigner
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:         p.SignerDID,
 		Destination:       p.Destination,
 		AuthorityPath:     &ap,
@@ -89,6 +89,7 @@ func BuildRootEntity(p RootEntityParams) (*envelope.Entry, error) {
 		SubjectIdentifier: p.SubjectIdentifier,
 		EventTime:         p.EventTime,
 	}, p.Payload)
+
 }
 
 // ── 2. BuildAmendment ───────────────────────────────────────────────
@@ -116,7 +117,7 @@ func BuildAmendment(p AmendmentParams) (*envelope.Entry, error) {
 		return nil, ErrMissingTargetRoot
 	}
 	ap := envelope.AuthoritySameSigner
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:          p.SignerDID,
 		Destination:        p.Destination,
 		TargetRoot:         &p.TargetRoot,
@@ -127,6 +128,7 @@ func BuildAmendment(p AmendmentParams) (*envelope.Entry, error) {
 		SubjectIdentifier:  p.SubjectIdentifier,
 		EventTime:          p.EventTime,
 	}, p.Payload)
+
 }
 
 // ── 3. BuildDelegation ──────────────────────────────────────────────
@@ -153,7 +155,7 @@ func BuildDelegation(p DelegationParams) (*envelope.Entry, error) {
 		return nil, ErrMissingDelegateDID
 	}
 	ap := envelope.AuthoritySameSigner
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:     p.SignerDID,
 		Destination:   p.Destination,
 		AuthorityPath: &ap,
@@ -161,13 +163,14 @@ func BuildDelegation(p DelegationParams) (*envelope.Entry, error) {
 		SchemaRef:     p.SchemaRef,
 		EventTime:     p.EventTime,
 	}, p.Payload)
+
 }
 
 // ── 4. BuildSuccession ──────────────────────────────────────────────
 
 // SuccessionParams configures a succession entry.
 type SuccessionParams struct {
-	Destination  string            // DID of target exchange. Required.
+	Destination  string // DID of target exchange. Required.
 	SignerDID    string
 	TargetRoot   types.LogPosition // Entity being replaced.
 	NewSignerDID string            // Successor's DID (carried in payload).
@@ -186,7 +189,7 @@ func BuildSuccession(p SuccessionParams) (*envelope.Entry, error) {
 		return nil, ErrMissingTargetRoot
 	}
 	ap := envelope.AuthoritySameSigner
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:     p.SignerDID,
 		Destination:   p.Destination,
 		TargetRoot:    &p.TargetRoot,
@@ -194,6 +197,7 @@ func BuildSuccession(p SuccessionParams) (*envelope.Entry, error) {
 		SchemaRef:     p.SchemaRef,
 		EventTime:     p.EventTime,
 	}, p.Payload)
+
 }
 
 // ── 5. BuildRevocation ──────────────────────────────────────────────
@@ -217,13 +221,14 @@ func BuildRevocation(p RevocationParams) (*envelope.Entry, error) {
 		return nil, ErrMissingTargetRoot
 	}
 	ap := envelope.AuthoritySameSigner
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:     p.SignerDID,
 		Destination:   p.Destination,
 		TargetRoot:    &p.TargetRoot,
 		AuthorityPath: &ap,
 		EventTime:     p.EventTime,
 	}, p.Payload)
+
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -255,7 +260,7 @@ func BuildScopeCreation(p ScopeCreationParams) (*envelope.Entry, error) {
 		return nil, fmt.Errorf("%w: must contain Signer_DID", ErrEmptyAuthoritySet)
 	}
 	ap := envelope.AuthoritySameSigner
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:     p.SignerDID,
 		Destination:   p.Destination,
 		AuthorityPath: &ap,
@@ -263,13 +268,14 @@ func BuildScopeCreation(p ScopeCreationParams) (*envelope.Entry, error) {
 		SchemaRef:     p.SchemaRef,
 		EventTime:     p.EventTime,
 	}, p.Payload)
+
 }
 
 // ── 7. BuildScopeAmendment ──────────────────────────────────────────
 
 // ScopeAmendmentParams configures a scope amendment (Path C).
 type ScopeAmendmentParams struct {
-	Destination      string              // DID of target exchange. Required.
+	Destination      string // DID of target exchange. Required.
 	SignerDID        string
 	TargetRoot       types.LogPosition   // Scope position (self-referencing).
 	ScopePointer     types.LogPosition   // Same as TargetRoot for amendments.
@@ -294,7 +300,7 @@ func BuildScopeAmendment(p ScopeAmendmentParams) (*envelope.Entry, error) {
 		return nil, ErrEmptyAuthoritySet
 	}
 	ap := envelope.AuthorityScopeAuthority
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:        p.SignerDID,
 		Destination:      p.Destination,
 		TargetRoot:       &p.TargetRoot,
@@ -306,6 +312,7 @@ func BuildScopeAmendment(p ScopeAmendmentParams) (*envelope.Entry, error) {
 		SchemaRef:        p.SchemaRef,
 		EventTime:        p.EventTime,
 	}, p.Payload)
+
 }
 
 // ── 8. BuildScopeRemoval ────────────────────────────────────────────
@@ -331,7 +338,7 @@ func BuildScopeRemoval(p ScopeRemovalParams) (*envelope.Entry, error) {
 		return nil, ErrMissingScopePointer
 	}
 	ap := envelope.AuthorityScopeAuthority
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:      p.SignerDID,
 		Destination:    p.Destination,
 		TargetRoot:     &p.TargetRoot,
@@ -340,6 +347,7 @@ func BuildScopeRemoval(p ScopeRemovalParams) (*envelope.Entry, error) {
 		PriorAuthority: p.PriorAuthority,
 		EventTime:      p.EventTime,
 	}, p.Payload)
+
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -376,7 +384,7 @@ func BuildEnforcement(p EnforcementParams) (*envelope.Entry, error) {
 		return nil, ErrMissingScopePointer
 	}
 	ap := envelope.AuthorityScopeAuthority
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:        p.SignerDID,
 		Destination:      p.Destination,
 		TargetRoot:       &p.TargetRoot,
@@ -388,6 +396,7 @@ func BuildEnforcement(p EnforcementParams) (*envelope.Entry, error) {
 		SchemaRef:        p.SchemaRef,
 		EventTime:        p.EventTime,
 	}, p.Payload)
+
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -410,11 +419,12 @@ func BuildCommentary(p CommentaryParams) (*envelope.Entry, error) {
 	if err := validateCommon(p.SignerDID, p.Destination); err != nil {
 		return nil, err
 	}
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:   p.SignerDID,
 		Destination: p.Destination,
 		EventTime:   p.EventTime,
 	}, p.Payload)
+
 }
 
 // ── 11. BuildCosignature ────────────────────────────────────────────
@@ -437,12 +447,13 @@ func BuildCosignature(p CosignatureParams) (*envelope.Entry, error) {
 	if p.CosignatureOf.IsNull() {
 		return nil, ErrMissingCosignatureOf
 	}
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:     p.SignerDID,
 		Destination:   p.Destination,
 		CosignatureOf: &p.CosignatureOf,
 		EventTime:     p.EventTime,
 	}, p.Payload)
+
 }
 
 // ── 12. BuildRecoveryRequest ────────────────────────────────────────
@@ -461,11 +472,12 @@ func BuildRecoveryRequest(p RecoveryRequestParams) (*envelope.Entry, error) {
 	if err := validateCommon(p.SignerDID, p.Destination); err != nil {
 		return nil, err
 	}
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:   p.SignerDID,
 		Destination: p.Destination,
 		EventTime:   p.EventTime,
 	}, p.Payload)
+
 }
 
 // ── 13. BuildAnchorEntry ────────────────────────────────────────────
@@ -499,11 +511,12 @@ func BuildAnchorEntry(p AnchorParams) (*envelope.Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("builder/entry: marshal anchor payload: %w", err)
 	}
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:   p.SignerDID,
 		Destination: p.Destination,
 		EventTime:   p.EventTime,
 	}, payload)
+
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -514,7 +527,7 @@ func BuildAnchorEntry(p AnchorParams) (*envelope.Entry, error) {
 
 // KeyRotationParams configures a key rotation entry (Path A).
 type KeyRotationParams struct {
-	Destination  string             // DID of target exchange. Required.
+	Destination  string // DID of target exchange. Required.
 	SignerDID    string
 	TargetRoot   types.LogPosition  // DID profile entity.
 	NewPublicKey []byte             // New public key bytes (in payload).
@@ -539,7 +552,7 @@ func BuildKeyRotation(p KeyRotationParams) (*envelope.Entry, error) {
 		})
 	}
 	ap := envelope.AuthoritySameSigner
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:     p.SignerDID,
 		Destination:   p.Destination,
 		TargetRoot:    &p.TargetRoot,
@@ -547,13 +560,14 @@ func BuildKeyRotation(p KeyRotationParams) (*envelope.Entry, error) {
 		SchemaRef:     p.SchemaRef,
 		EventTime:     p.EventTime,
 	}, payload)
+
 }
 
 // ── 15. BuildKeyPrecommit ───────────────────────────────────────────
 
 // KeyPrecommitParams configures a key pre-commitment entry (Path A).
 type KeyPrecommitParams struct {
-	Destination string            // DID of target exchange. Required.
+	Destination string // DID of target exchange. Required.
 	SignerDID   string
 	TargetRoot  types.LogPosition // DID profile entity.
 	NextKeyHash string            // Hex-encoded hash of next public key.
@@ -578,7 +592,7 @@ func BuildKeyPrecommit(p KeyPrecommitParams) (*envelope.Entry, error) {
 		})
 	}
 	ap := envelope.AuthoritySameSigner
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:     p.SignerDID,
 		Destination:   p.Destination,
 		TargetRoot:    &p.TargetRoot,
@@ -586,6 +600,7 @@ func BuildKeyPrecommit(p KeyPrecommitParams) (*envelope.Entry, error) {
 		SchemaRef:     p.SchemaRef,
 		EventTime:     p.EventTime,
 	}, payload)
+
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -598,7 +613,7 @@ func BuildKeyPrecommit(p KeyPrecommitParams) (*envelope.Entry, error) {
 // PredecessorSchema lives in Domain Payload JSON — SchemaParameterExtractor
 // reads it. This builder does not parse payload.
 type SchemaEntryParams struct {
-	Destination           string   // DID of target exchange. Required.
+	Destination           string // DID of target exchange. Required.
 	SignerDID             string
 	Payload               []byte   // JSON with 10 well-known fields (incl predecessor_schema).
 	CommutativeOperations []uint32 // Non-empty → commutative OCC mode.
@@ -613,13 +628,14 @@ func BuildSchemaEntry(p SchemaEntryParams) (*envelope.Entry, error) {
 		return nil, err
 	}
 	ap := envelope.AuthoritySameSigner
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:             p.SignerDID,
 		Destination:           p.Destination,
 		AuthorityPath:         &ap,
 		CommutativeOperations: p.CommutativeOperations,
 		EventTime:             p.EventTime,
 	}, p.Payload)
+
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -657,7 +673,7 @@ func BuildPathBEntry(p PathBParams) (*envelope.Entry, error) {
 		return nil, ErrEmptyDelegationChain
 	}
 	ap := envelope.AuthorityDelegation
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:          p.SignerDID,
 		Destination:        p.Destination,
 		TargetRoot:         &p.TargetRoot,
@@ -669,6 +685,7 @@ func BuildPathBEntry(p PathBParams) (*envelope.Entry, error) {
 		SubjectIdentifier:  p.SubjectIdentifier,
 		EventTime:          p.EventTime,
 	}, p.Payload)
+
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -679,7 +696,7 @@ func BuildPathBEntry(p PathBParams) (*envelope.Entry, error) {
 
 // MirrorParams configures a cross-log mirror commentary entry.
 type MirrorParams struct {
-	Destination    string            // DID of target exchange. Required.
+	Destination    string // DID of target exchange. Required.
 	SignerDID      string
 	SourcePosition types.LogPosition // Entry being mirrored.
 	SourceLogDID   string            // Foreign log DID.
@@ -704,9 +721,10 @@ func BuildMirrorEntry(p MirrorParams) (*envelope.Entry, error) {
 			"source_sequence": p.SourcePosition.Sequence,
 		})
 	}
-	return envelope.NewEntry(envelope.ControlHeader{
+	return envelope.NewUnsignedEntry(envelope.ControlHeader{
 		SignerDID:   p.SignerDID,
 		Destination: p.Destination,
 		EventTime:   p.EventTime,
 	}, payload)
+
 }

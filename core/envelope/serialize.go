@@ -1,49 +1,96 @@
 /*
-Package envelope — serialize.go implements the canonical wire format.
+FILE PATH:
 
-Three entry points:
+	core/envelope/serialize.go
 
-	NewEntry(header, payload) → (*Entry, error)
-	  Validating constructor. Sets header.ProtocolVersion = currentProtocolVersion.
-	  Enforces write-version policy, size caps, and structural invariants.
-	  Only way to obtain an Entry at the ACTIVE protocol version.
+DESCRIPTION:
 
-	Serialize(e) → []byte
-	  Total function. Emits canonical bytes at e.Header.ProtocolVersion.
-	  Trusts caller: if the Entry was produced by NewEntry, always succeeds.
-	  Hand-constructed entries with malformed fields produce bad bytes —
-	  rejected at Deserialize, at operator admission, or at signature check.
+	Canonical wire format implementation for protocol v6. Defines the core
+	entry points — NewEntry, NewUnsignedEntry, Serialize, Deserialize —
+	plus the exported SigningPayload boundary that signers sign over.
 
-	Deserialize(b) → (*Entry, error)
-	  Validating parser. Enforces read-version policy, preamble structure,
-	  and per-field decoding. Populates Header.ProtocolVersion from the wire.
+KEY ARCHITECTURAL DECISIONS:
+  - v6 introduces a signatures section inside the canonical wire. Every
+    Serialize output carries the signatures that were present at
+    submission, so the Merkle leaf hash (tessera_compat.EntryLeafHash)
+    commits to both the signing content and the signatures. Under v5
+    the log attested only to who authorized (Header.SignerDID); under
+    v6 it additionally attests to who cryptographically signed. This
+    closes the transparency gap v5 silently carried.
+  - SigningPayload(e) is exported as a named boundary. It returns what
+    v5 called "canonical bytes" (preamble + header + payload_len +
+    payload). This is what every signer hashes before signing, and
+    what every verifier hashes before verifying. Serialize(e) =
+    SigningPayload(e) || signatures_section. This separation means
+    signatures commit to content but content does not commit to
+    signatures — signing a bare payload and then attaching multiple
+    signatures is a single-pass operation.
+  - Serialize is a total function. It matches the contract
+    tessera_compat.go relies on (EntryIdentity, EntryLeafHash,
+    MarshalBundleEntry, BundleEntries all treat Serialize as total,
+    mirroring Tessera's Entry.LeafHash() / Entry.MarshalBundleData()
+    signatures). Validation happens earlier, at NewEntry / Validate /
+    Deserialize, via the fallible internal serializeInternal. If a
+    caller skips validation and hand-constructs a malformed Entry,
+    Serialize panics — producing defensive-but-invalid bytes would be
+    silent corruption on the Merkle tree, and fail-loud is the correct
+    response.
+  - Two constructors, one strict. NewEntry requires signatures; a
+    nil/empty slice is rejected. NewUnsignedEntry skips the signature
+    invariant for the construction-then-sign flow used by
+    builder/entry_builders.go. Callers of NewUnsignedEntry MUST append
+    at least one Signature and MUST call Validate before passing the
+    entry to Serialize or to the log.
+  - Deserialize is strict. Unknown algoIDs reject. Malformed signatures
+    section rejects. Zero-sig section rejects. The Signatures[0] DID
+    invariant is enforced post-decode. There is no permissive-read path.
+  - Forward compatibility within the HBL region is preserved: a v6
+    parser reading a future v7 header skips unknown trailing HBL bytes,
+    then reads the payload, then reads the signatures section. The HBL
+    length prefix makes this safe.
+  - The signatures section is NOT inside the HBL. It lives after the
+    payload. A v6 parser can find it because the payload is
+    length-prefixed (uint32 PayloadLen), and everything remaining is
+    the signatures section.
 
-Wire format (v5):
+OVERVIEW:
 
-	Preamble (6 bytes, bytes 0–5, permanent):
-	  [uint16 Protocol_Version] [uint32 Header_Body_Length]
+	Wire format (v6):
 
-	Header body (HBL bytes):
-	  Fields in declaration order:
-	    SignerDID, Destination, TargetRoot, ... (see serializeHeaderBody).
-	  Destination lies immediately after SignerDID; the canonical hash
-	  therefore commits to the destination exchange DID and an entry
-	  signed for exchange A will not verify against exchange B.
-	  Admission proof is length-prefixed to isolate it from Authority_Skip
-	  (SDK-3 guarantee).
+	  Preamble (6 bytes):
+	    [uint16 ProtocolVersion=6] [uint32 HBL]
 
-	Payload: [uint32 Payload_Length] [Payload_Bytes]
+	  Header body (HBL bytes):
+	    Fields in declaration order (see serializeHeaderBody).
 
-Domain identity is NOT carried in the Control Header. Per the protocol's
-domain/protocol separation principle, domain semantics travel via
-SchemaRef: every domain-governed entry points to an immutable schema
-entry whose Domain Payload is the manifest. The Control Header is locked
-to protocol mechanics; domain vocabulary never crosses into it.
+	  Payload:
+	    [uint32 PayloadLen] [PayloadBytes]
 
-Forward compatibility: deserializers tolerate unknown trailing bytes
-within the HBL region. A v5 parser reading a future v6 entry consumes
-its known fields, skips any remaining HBL bytes, and reads the payload
-normally.
+	  Signatures section:
+	    [uint16 SigCount] [SignatureBlock]*
+
+	    where SignatureBlock =
+	      [uint16 DIDLen] [DIDBytes]
+	      [uint16 AlgoID]
+	      [uint32 SigLen] [SigBytes]
+
+	SigningPayload(e) returns bytes 0 through (6 + HBL + 4 + PayloadLen).
+	Serialize(e) returns SigningPayload(e) || signatures_section_bytes.
+
+	Deserialize reads the preamble, the HBL, the payload, then treats
+	the remainder as the signatures section (strict: must decode
+	cleanly, must have no trailing bytes).
+
+KEY DEPENDENCIES:
+  - api.go: currentProtocolVersion, size caps
+  - version_policy.go: CheckReadAllowed, CheckWriteAllowed
+  - control_header.go: ControlHeader struct, AuthorityPath, KeyGenMode,
+    AdmissionProofBody
+  - entry.go: Entry struct
+  - signature_algo.go: ValidateAlgorithmID
+  - signatures_section.go: Signature struct, AppendSignaturesSection,
+    ReadSignaturesSection, MaxSignaturesPerEntry
+  - destination.go: ValidateDestination
 */
 package envelope
 
@@ -57,9 +104,9 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
-// ─────────────────────────────────────────────────────────────────────────
-// Errors
-// ─────────────────────────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------------------------
+// 1) Construction and validation errors
+// -------------------------------------------------------------------------------------------------
 
 var (
 	ErrCanonicalTooLarge         = errors.New("envelope: canonical bytes exceed MaxCanonicalBytes (1 MiB)")
@@ -73,22 +120,53 @@ var (
 	ErrTooManyEvidencePointers   = errors.New("envelope: EvidencePointers exceeds MaxEvidencePointers (non-snapshot)")
 	ErrInvalidPresenceByte       = errors.New("envelope: presence byte must be 0 or 1")
 	ErrAdmissionProofTooLarge    = errors.New("envelope: admission proof body exceeds MaxAdmissionProofBody")
+
+	// ErrPrimarySignerMismatch is returned when Signatures[0].SignerDID
+	// does not equal Header.SignerDID. The primary signature must be from
+	// the authorizing party — the protocol's authority evaluation routes
+	// on Header.SignerDID, and if the primary signature comes from a
+	// different key the log would attest to an authorization the signer
+	// did not cryptographically claim.
+	ErrPrimarySignerMismatch = errors.New("envelope: Signatures[0].SignerDID must equal Header.SignerDID")
+
+	// ErrMissingSignatures is returned when Validate runs on an entry
+	// with zero signatures. NewUnsignedEntry produces such entries; the
+	// caller must append signatures before Validate/Serialize.
+	ErrMissingSignatures = errors.New("envelope: entry has no signatures (Signatures empty)")
 )
 
-// ─────────────────────────────────────────────────────────────────────────
-// NewEntry — validating constructor
-// ─────────────────────────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------------------------
+// 2) NewEntry — validating constructor for fully-signed entries
+// -------------------------------------------------------------------------------------------------
 
-// NewEntry constructs a new Entry at the currently-active protocol version.
-// Validates structural invariants and size caps. Overwrites
-// header.ProtocolVersion to the active version — callers cannot pin a new
-// entry to a non-ACTIVE version through this API. For cross-version
-// migration, deserialize the old entry, transform the header, and call
-// NewEntry to produce a fresh entry at the active version.
-func NewEntry(header ControlHeader, payload []byte) (*Entry, error) {
+// NewEntry constructs a new Entry at the currently-active protocol version
+// with its full signature set. This is the constructor for callers that
+// already hold every signature (primary + any cosignatures).
+//
+// Callers that need to construct an entry before signing (the 18 builders
+// in builder/entry_builders.go) use NewUnsignedEntry instead.
+//
+// Overwrites header.ProtocolVersion to the active version — callers cannot
+// pin a new entry to a non-active version through this API. For
+// cross-version migration, deserialize the old entry, transform the
+// header, and call NewEntry to produce a fresh entry at the active
+// version (the roundtrip rewrites the version).
+//
+// Validates:
+//   - Active version permits writes (defensive against policy-table
+//     drift during version-transition PRs)
+//   - Header invariants (non-empty SignerDID, valid destination, etc.)
+//   - At least one signature
+//   - Signatures[0].SignerDID == Header.SignerDID
+//   - Every signature is well-formed (handled by AppendSignaturesSection
+//     which runs validateSignatureForEncode)
+//   - Total serialized size within MaxCanonicalBytes
+func NewEntry(header ControlHeader, payload []byte, signatures []Signature) (*Entry, error) {
 	active := currentProtocolVersion
 	if err := CheckWriteAllowed(active); err != nil {
-		// Programming error: versionPolicy out of sync with currentProtocolVersion.
+		// Programming error: versionPolicy out of sync with
+		// currentProtocolVersion. The active version constant and the
+		// policy table must agree.
 		return nil, err
 	}
 	header.ProtocolVersion = active
@@ -97,20 +175,82 @@ func NewEntry(header ControlHeader, payload []byte) (*Entry, error) {
 		return nil, err
 	}
 
+	if len(signatures) == 0 {
+		return nil, ErrMissingSignatures
+	}
+	if signatures[0].SignerDID != header.SignerDID {
+		return nil, fmt.Errorf("%w: header=%q, signatures[0]=%q",
+			ErrPrimarySignerMismatch, header.SignerDID, signatures[0].SignerDID)
+	}
+
 	entry := &Entry{
 		Header:        header,
 		DomainPayload: append([]byte(nil), payload...),
+		Signatures:    append([]Signature(nil), signatures...),
 	}
 
-	// Size check: serialize and measure. This also guarantees Serialize
-	// will succeed on this entry (all invariants that Serialize implicitly
-	// depends on have been verified).
-	if size := len(Serialize(entry)); size > MaxCanonicalBytes {
-		return nil, fmt.Errorf("%w: computed size %d", ErrCanonicalTooLarge, size)
+	// Dry-run the encoding through the fallible internal form. If the
+	// signatures list has any encoding-level problem (unregistered
+	// algoID, oversize sig bytes, DID-length violation) the error
+	// surfaces here — before the entry is returned, and long before
+	// Serialize (total function) is called downstream.
+	out, err := serializeInternal(entry)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > MaxCanonicalBytes {
+		return nil, fmt.Errorf("%w: computed size %d", ErrCanonicalTooLarge, len(out))
 	}
 
 	return entry, nil
 }
+
+// -------------------------------------------------------------------------------------------------
+// 3) NewUnsignedEntry — constructor for the build-then-sign flow
+// -------------------------------------------------------------------------------------------------
+
+// NewUnsignedEntry constructs a new Entry at the currently-active protocol
+// version WITHOUT requiring signatures. Used exclusively by the 18
+// builders in builder/entry_builders.go, which produce entries before
+// the caller obtains a signature from the signing key.
+//
+// The returned entry has entry.Signatures == nil. The caller MUST:
+//
+//  1. Compute signingHash := sha256.Sum256(envelope.SigningPayload(entry))
+//  2. Sign signingHash with the primary signer's key
+//  3. Append the resulting Signature to entry.Signatures
+//  4. Optionally append cosigner Signatures
+//  5. Call entry.Validate() to enforce the full invariant set before
+//     passing to Serialize or submitting to the log
+//
+// This constructor validates the same header invariants as NewEntry but
+// does not size-check the serialized form (signatures are not yet
+// present, so size is below the eventual final size). The final size
+// check runs at entry.Validate() time.
+//
+// Overwrites header.ProtocolVersion to the active version, identical to
+// NewEntry.
+func NewUnsignedEntry(header ControlHeader, payload []byte) (*Entry, error) {
+	active := currentProtocolVersion
+	if err := CheckWriteAllowed(active); err != nil {
+		return nil, err
+	}
+	header.ProtocolVersion = active
+
+	if err := validateHeaderForWrite(&header); err != nil {
+		return nil, err
+	}
+
+	return &Entry{
+		Header:        header,
+		DomainPayload: append([]byte(nil), payload...),
+		Signatures:    nil,
+	}, nil
+}
+
+// -------------------------------------------------------------------------------------------------
+// 4) Header write-invariant check (internal)
+// -------------------------------------------------------------------------------------------------
 
 func validateHeaderForWrite(h *ControlHeader) error {
 	if h.SignerDID == "" {
@@ -121,7 +261,8 @@ func validateHeaderForWrite(h *ControlHeader) error {
 	}
 	// Destination binding: required field, validated for non-empty,
 	// non-whitespace, bounded length by ValidateDestination, plus ASCII
-	// conformance here (DIDs are ASCII by spec; consistent with SignerDID).
+	// conformance here (DIDs are ASCII by spec; consistent with
+	// SignerDID).
 	if err := ValidateDestination(h.Destination); err != nil {
 		return err
 	}
@@ -137,19 +278,23 @@ func validateHeaderForWrite(h *ControlHeader) error {
 	return nil
 }
 
+// -------------------------------------------------------------------------------------------------
+// 5) Entry.Validate — post-construction invariant gate
+// -------------------------------------------------------------------------------------------------
+
 // Validate reports whether the Entry satisfies every write-time invariant
-// that NewEntry enforces: header shape, destination validity, SignerDID
-// shape, evidence-pointer caps, and canonical-size bound.
+// required for Serialize to produce valid wire bytes. NewEntry callers
+// do not need to call Validate (NewEntry already enforces these).
+// NewUnsignedEntry callers MUST call Validate after appending signatures,
+// before Serialize.
 //
-// Callers that construct *Entry directly (rather than through NewEntry or
-// a builder) should call Validate before Serialize, signing, or any other
-// operation that treats the entry as authoritative. NewEntry and the
-// builders already run the same checks during construction; calling
-// Validate on an entry they produced is redundant but harmless.
-//
-// Validate returns nil for well-formed entries and a wrapped sentinel
-// (ErrDestinationEmpty, ErrDestinationWhitespace, ErrDestinationTooLong,
-// ErrCanonicalTooLarge, and the header-validation errors) otherwise.
+// Invariants checked:
+//   - Header write invariants (validateHeaderForWrite)
+//   - len(Signatures) >= 1 (ErrMissingSignatures)
+//   - len(Signatures) <= MaxSignaturesPerEntry (via serializeInternal)
+//   - Signatures[0].SignerDID == Header.SignerDID (ErrPrimarySignerMismatch)
+//   - Per-signature validity (via AppendSignaturesSection)
+//   - Total serialized size within MaxCanonicalBytes
 func (e *Entry) Validate() error {
 	if e == nil {
 		return errors.New("envelope: nil Entry")
@@ -157,11 +302,28 @@ func (e *Entry) Validate() error {
 	if err := validateHeaderForWrite(&e.Header); err != nil {
 		return err
 	}
-	if size := len(Serialize(e)); size > MaxCanonicalBytes {
-		return fmt.Errorf("%w: computed size %d", ErrCanonicalTooLarge, size)
+	if len(e.Signatures) == 0 {
+		return ErrMissingSignatures
+	}
+	if e.Signatures[0].SignerDID != e.Header.SignerDID {
+		return fmt.Errorf("%w: header=%q, signatures[0]=%q",
+			ErrPrimarySignerMismatch, e.Header.SignerDID, e.Signatures[0].SignerDID)
+	}
+	// Dry-run the encoding through the fallible internal form. If
+	// signatures have encoding-level problems (unregistered algoID,
+	// oversize sig bytes, DID-length violation), surface them here
+	// before Serialize (total function) is ever called.
+	out, err := serializeInternal(e)
+	if err != nil {
+		return err
+	}
+	if len(out) > MaxCanonicalBytes {
+		return fmt.Errorf("%w: computed size %d", ErrCanonicalTooLarge, len(out))
 	}
 	return nil
 }
+
+// isASCII reports whether every byte of s is in [0x00, 0x7F].
 func isASCII(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] > 0x7F {
@@ -172,8 +334,9 @@ func isASCII(s string) bool {
 }
 
 // isAuthoritySnapshotShape reports whether the header has the structural
-// shape of a Path C authority snapshot (AuthorityScopeAuthority + TargetRoot
-// + PriorAuthority). Snapshots are exempt from the evidence cap.
+// shape of a Path C authority snapshot (AuthorityScopeAuthority +
+// TargetRoot + PriorAuthority). Snapshots are exempt from the evidence
+// cap.
 func isAuthoritySnapshotShape(h *ControlHeader) bool {
 	if h.AuthorityPath == nil || *h.AuthorityPath != AuthorityScopeAuthority {
 		return false
@@ -181,18 +344,25 @@ func isAuthoritySnapshotShape(h *ControlHeader) bool {
 	return h.TargetRoot != nil && h.PriorAuthority != nil
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Serialize — total function
-// ─────────────────────────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------------------------
+// 6) SigningPayload — the signing boundary
+// -------------------------------------------------------------------------------------------------
 
-// Serialize emits the canonical wire bytes for an entry. Total function:
-// never returns an error. Entries constructed via NewEntry always serialize
-// to a valid byte sequence within MaxCanonicalBytes.
+// SigningPayload returns the bytes a signer signs over. Layout:
 //
-// Emits at the entry's Header.ProtocolVersion. For entries from NewEntry,
-// this is always currentProtocolVersion. Hand-constructed entries emit at
-// whatever version the caller set.
-func Serialize(e *Entry) []byte {
+//	[uint16 ProtocolVersion] [uint32 HBL] [HeaderBody] [uint32 PayloadLen] [PayloadBytes]
+//
+// This is identical to what v5's Serialize produced. Under v6, signers
+// compute sha256(SigningPayload(entry)) and sign the digest; verifiers
+// do the same.
+//
+// Serialize(entry) = SigningPayload(entry) || signatures_section. The
+// signatures are therefore over content-that-excludes-signatures, so
+// signing is a single-pass operation (no circular hash dependency).
+//
+// Callers: crypto/signatures/entry_verify.go (both sign and verify paths),
+// tests/web3_helpers_test.go (simulated wallet signing).
+func SigningPayload(e *Entry) []byte {
 	body := serializeHeaderBody(&e.Header)
 
 	total := 6 + len(body) + 4 + len(e.DomainPayload)
@@ -205,6 +375,57 @@ func Serialize(e *Entry) []byte {
 	return out
 }
 
+// -------------------------------------------------------------------------------------------------
+// 7) Serialize — canonical wire output (total function)
+// -------------------------------------------------------------------------------------------------
+
+// Serialize emits the canonical wire bytes for an entry:
+//
+//	SigningPayload(entry) || signatures_section
+//
+// Total function. Matches the contract tessera_compat.go relies on
+// (EntryIdentity, EntryLeafHash, MarshalBundleEntry, BundleEntries all
+// treat Serialize as total, mirroring Tessera's Entry.LeafHash() /
+// Entry.MarshalBundleData() signatures).
+//
+// The invariant that makes this total: any Entry produced by NewEntry,
+// Deserialize, or NewUnsignedEntry + Validate has already been
+// signature-validated. Those paths call serializeInternal up front and
+// propagate any encoding error. By the time Serialize runs on an entry
+// from any of those paths, encoding cannot fail.
+//
+// If a caller hand-constructs an Entry without going through the
+// validated paths and passes it to Serialize, the signatures-section
+// encoder may reject it (e.g., empty signature list, unregistered
+// algoID, oversize sig bytes). In that case Serialize panics with a
+// descriptive message. This is deliberate: the caller skipped
+// validation, and producing defensive-but-invalid bytes would be a
+// silent corruption on the Merkle tree. Fail loud, not silent.
+//
+// Callers that build entries by hand should call entry.Validate()
+// before Serialize.
+func Serialize(e *Entry) []byte {
+	out, err := serializeInternal(e)
+	if err != nil {
+		panic(fmt.Sprintf("envelope: Serialize on invalid entry (call Validate first): %v", err))
+	}
+	return out
+}
+
+// serializeInternal is Serialize's fallible form used by NewEntry and
+// Validate. Returns the same bytes Serialize would produce, plus any
+// encoding error from the signatures section. The error path is how
+// NewEntry and Validate surface "your entry has malformed signatures"
+// to callers before those entries ever reach the log.
+func serializeInternal(e *Entry) ([]byte, error) {
+	payload := SigningPayload(e)
+	return AppendSignaturesSection(payload, e.Signatures)
+}
+
+// serializeHeaderBody encodes the ControlHeader body fields in declaration
+// order. Unchanged from v5 — the header body layout is stable across the
+// v5→v6 transition. The only v6 wire change is the signatures section
+// appended after the payload.
 func serializeHeaderBody(h *ControlHeader) []byte {
 	var b []byte
 	b = appendLenPrefixedString(b, h.SignerDID)
@@ -236,16 +457,28 @@ func serializeHeaderBody(h *ControlHeader) []byte {
 	return b
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Deserialize — validating parser
-// ─────────────────────────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------------------------
+// 8) Deserialize — validating parser
+// -------------------------------------------------------------------------------------------------
 
 // Deserialize parses canonical bytes into an Entry. Validates preamble,
-// enforces read-version policy, and decodes per-field according to the
-// declared protocol version.
+// enforces read-version policy, decodes the header body, decodes the
+// payload, and decodes the signatures section.
+//
+// Strict at every layer:
+//   - Unknown protocol version → ErrUnknownVersion
+//   - Malformed preamble → ErrMalformedPreamble
+//   - Malformed header body → ErrMalformedHeader (wrapped)
+//   - Malformed payload → ErrMalformedPayload
+//   - Malformed signatures section → ErrMalformedSignaturesSection
+//   - Zero signatures → ErrEmptySignatureList
+//   - Signatures[0].SignerDID != Header.SignerDID → ErrPrimarySignerMismatch
+//   - Trailing bytes after signatures section → ErrTrailingBytes
 //
 // Tolerant of unknown trailing bytes within the HBL region — forward
-// compatibility for future additive field additions.
+// compatibility for future additive header field additions at v7. The
+// signatures section is NOT in the HBL, so this tolerance does not apply
+// to it; signatures section bytes must be exact.
 func Deserialize(canonical []byte) (*Entry, error) {
 	if len(canonical) > MaxCanonicalBytes {
 		return nil, ErrCanonicalTooLarge
@@ -267,7 +500,7 @@ func Deserialize(canonical []byte) (*Entry, error) {
 	}
 
 	headerBytes := canonical[6 : 6+hbl]
-	payloadRegion := canonical[6+hbl:]
+	afterHeader := canonical[6+hbl:]
 
 	header, err := deserializeHeaderBody(headerBytes)
 	if err != nil {
@@ -275,12 +508,31 @@ func Deserialize(canonical []byte) (*Entry, error) {
 	}
 	header.ProtocolVersion = version
 
-	payload, err := deserializePayload(payloadRegion)
+	payload, afterPayload, err := deserializePayload(afterHeader)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Entry{Header: *header, DomainPayload: payload}, nil
+	// Signatures section: everything remaining after the payload.
+	// ReadSignaturesSection is strict — no trailing bytes permitted.
+	sigs, err := ReadSignaturesSection(afterPayload)
+	if err != nil {
+		return nil, err
+	}
+
+	// Primary-signer invariant. The decoded header's SignerDID and the
+	// decoded signatures list's primary DID must agree. This is the same
+	// invariant NewEntry enforces; decoding is symmetric.
+	if sigs[0].SignerDID != header.SignerDID {
+		return nil, fmt.Errorf("%w: header=%q, signatures[0]=%q",
+			ErrPrimarySignerMismatch, header.SignerDID, sigs[0].SignerDID)
+	}
+
+	return &Entry{
+		Header:        *header,
+		DomainPayload: payload,
+		Signatures:    sigs,
+	}, nil
 }
 
 func deserializeHeaderBody(body []byte) (*ControlHeader, error) {
@@ -292,8 +544,8 @@ func deserializeHeaderBody(body []byte) (*ControlHeader, error) {
 		return nil, wrapField("SignerDID", err)
 	}
 	// Destination binding: read immediately after SignerDID. Must be
-	// non-empty on any v5+ entry; the builder/serializer ensures this
-	// for entries constructed through NewEntry.
+	// non-empty on any v6 entry; the builder/serializer ensures this for
+	// entries constructed through NewEntry.
 	if h.Destination, err = readLenPrefixedString(r); err != nil {
 		return nil, wrapField("Destination", err)
 	}
@@ -367,40 +619,49 @@ func deserializeHeaderBody(body []byte) (*ControlHeader, error) {
 		return nil, wrapField("AuthoritySkip", err)
 	}
 
-	// Forward compatibility: tolerate any trailing bytes beyond the fields
-	// this version knows about (future additive fields from a later
-	// protocol version). These bytes are covered by the canonical hash via
-	// the preamble's HBL, so they participate in entry identity, but this
-	// parser does not interpret them.
+	// Forward compatibility: tolerate any trailing bytes beyond the
+	// fields this version knows about (future additive fields from a
+	// later protocol version). These bytes are covered by the canonical
+	// hash via the preamble's HBL, so they participate in entry identity,
+	// but this parser does not interpret them.
 
 	return h, nil
 }
 
-func deserializePayload(region []byte) ([]byte, error) {
+// deserializePayload reads the payload_len + payload_bytes region and
+// returns the payload along with the remainder (which is the signatures
+// section region). A malformed payload — length prefix exceeds available
+// bytes — rejects with ErrMalformedPayload.
+func deserializePayload(region []byte) (payload []byte, remainder []byte, err error) {
 	if len(region) < 4 {
-		return nil, fmt.Errorf("%w: payload region %d < 4", ErrMalformedPayload, len(region))
+		return nil, nil, fmt.Errorf("%w: payload region %d < 4", ErrMalformedPayload, len(region))
 	}
 	payloadLen := binary.BigEndian.Uint32(region[0:4])
 	if 4+int(payloadLen) > len(region) {
-		return nil, fmt.Errorf("%w: payload length %d exceeds region %d",
+		return nil, nil, fmt.Errorf("%w: payload length %d exceeds region %d",
 			ErrMalformedPayload, payloadLen, len(region))
 	}
+	payloadEnd := 4 + int(payloadLen)
 	if payloadLen == 0 {
-		return []byte{}, nil
+		return []byte{}, region[payloadEnd:], nil
 	}
 	out := make([]byte, payloadLen)
-	copy(out, region[4:4+payloadLen])
-	return out, nil
+	copy(out, region[4:payloadEnd])
+	return out, region[payloadEnd:], nil
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Primitive writers (append-style, total)
-// ─────────────────────────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------------------------
+// 9) Primitive writers (append-style, total)
+// -------------------------------------------------------------------------------------------------
 
 func appendLenPrefixedString(b []byte, s string) []byte {
 	if len(s) > int(^uint16(0)) {
-		// Invariant violated by caller. Truncate defensively; the resulting
-		// bytes will fail to deserialize, surfacing the bug at read time.
+		// Invariant violated by caller. Truncate defensively; the
+		// resulting bytes will fail to deserialize, surfacing the bug
+		// at read time. This is load-bearing: we do not panic here
+		// because panicking during serialization would crash the
+		// whole operator process; the truncation is caught by the
+		// read-side length check.
 		s = s[:int(^uint16(0))]
 	}
 	b = binary.BigEndian.AppendUint16(b, uint16(len(s)))
@@ -488,9 +749,9 @@ func appendUint32List(b []byte, vs []uint32) []byte {
 	return b
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Admission Proof (length-prefixed body — SDK-3 isolation)
-// ─────────────────────────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------------------------
+// 10) Admission Proof — length-prefixed body (SDK-3 isolation, unchanged from v5)
+// -------------------------------------------------------------------------------------------------
 
 func appendAdmissionProof(b []byte, p *AdmissionProofBody) []byte {
 	if p == nil {
@@ -514,7 +775,6 @@ func appendAdmissionProof(b []byte, p *AdmissionProofBody) []byte {
 	body = append(body, p.Hash[:]...)
 
 	if len(body) > MaxAdmissionProofBody {
-		// Caller-side invariant violation. Truncate; bytes will fail to deserialize.
 		body = body[:MaxAdmissionProofBody]
 	}
 	b = binary.BigEndian.AppendUint16(b, uint16(len(body)))
@@ -599,9 +859,9 @@ func readAdmissionProof(r *bytes.Reader) (*AdmissionProofBody, error) {
 	return p, nil
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Primitive readers
-// ─────────────────────────────────────────────────────────────────────────
+// -------------------------------------------------------------------------------------------------
+// 11) Primitive readers
+// -------------------------------------------------------------------------------------------------
 
 func readLenPrefixedString(r *bytes.Reader) (string, error) {
 	var n uint16

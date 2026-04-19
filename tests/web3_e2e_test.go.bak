@@ -56,12 +56,22 @@ func TestE2E_DIDKey_Ed25519(t *testing.T) {
 	message := []byte("canonical entry content for did:key Ed25519")
 	sig := ed25519.Sign(kp.PrivateKey, message)
 
-	// Verify via registry. Under v6 the wire round-trip through
-	// AppendSignature/StripSignature no longer exists; the real
-	// assertion of this test is that registry dispatch routes to the
-	// Ed25519 verifier and accepts a valid signature.
+	// Wire round-trip
+	wire, err := envelope.AppendSignature(message, envelope.SigAlgoEd25519, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+	if !bytes.Equal(gotCanon, message) || gotAlgo != envelope.SigAlgoEd25519 {
+		t.Fatal("wire round-trip mismatch")
+	}
+
+	// Verify via registry
 	registry := newTestRegistry(t)
-	if err := registry.Verify(kp.DID, message, sig, envelope.SigAlgoEd25519); err != nil {
+	if err := registry.Verify(kp.DID, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
 	}
 }
@@ -84,8 +94,18 @@ func TestE2E_DIDKey_Secp256k1_ECDSA(t *testing.T) {
 		t.Fatalf("SignEntry: %v", err)
 	}
 
+	// Wire round-trip
+	wire, err := envelope.AppendSignature(canonicalHash[:], envelope.SigAlgoECDSA, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+
 	registry := newTestRegistry(t)
-	if err := registry.Verify(kp.DID, canonicalHash[:], sig, envelope.SigAlgoECDSA); err != nil {
+	if err := registry.Verify(kp.DID, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
 	}
 }
@@ -109,8 +129,17 @@ func TestE2E_DIDKey_P256_ECDSA(t *testing.T) {
 		t.Fatalf("SignEntry: %v", err)
 	}
 
+	wire, err := envelope.AppendSignature(canonicalHash[:], envelope.SigAlgoECDSA, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+
 	registry := newTestRegistry(t)
-	if err := registry.Verify(kp.DID, canonicalHash[:], sig, envelope.SigAlgoECDSA); err != nil {
+	if err := registry.Verify(kp.DID, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
 	}
 }
@@ -144,8 +173,17 @@ func TestE2E_DIDPKH_EIP191(t *testing.T) {
 	digest := signatures.EIP191Digest(canonicalHash[:])
 	sig := signEthereumRecoverable(priv, digest)
 
+	wire, err := envelope.AppendSignature(canonicalHash[:], envelope.SigAlgoEIP191, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+
 	registry := newTestRegistry(t)
-	if err := registry.Verify(didStr, canonicalHash[:], sig, envelope.SigAlgoEIP191); err != nil {
+	if err := registry.Verify(didStr, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
 	}
 }
@@ -169,8 +207,17 @@ func TestE2E_DIDPKH_EIP712(t *testing.T) {
 	digest := signatures.EntrySigningDigest(canonicalHash)
 	sig := signEthereumRecoverable(priv, digest)
 
+	wire, err := envelope.AppendSignature(canonicalHash[:], envelope.SigAlgoEIP712, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+
 	registry := newTestRegistry(t)
-	if err := registry.Verify(didStr, canonicalHash[:], sig, envelope.SigAlgoEIP712); err != nil {
+	if err := registry.Verify(didStr, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
 	}
 }
@@ -210,10 +257,19 @@ func TestE2E_DIDWeb_Secp256k1_ECDSA(t *testing.T) {
 		},
 	}
 
+	wire, err := envelope.AppendSignature(canonicalHash[:], envelope.SigAlgoECDSA, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+
 	resolver := &staticResolver{wantDID: didStr, doc: doc}
 	registry := did.DefaultVerifierRegistry(testDestinationDID, resolver)
 
-	if err := registry.Verify(didStr, canonicalHash[:], sig, envelope.SigAlgoECDSA); err != nil {
+	if err := registry.Verify(didStr, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
 	}
 }
@@ -244,10 +300,19 @@ func TestE2E_DIDWeb_Ed25519(t *testing.T) {
 		},
 	}
 
+	wire, err := envelope.AppendSignature(message, envelope.SigAlgoEd25519, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+
 	resolver := &staticResolver{wantDID: didStr, doc: doc}
 	registry := did.DefaultVerifierRegistry(testDestinationDID, resolver)
 
-	if err := registry.Verify(didStr, message, sig, envelope.SigAlgoEd25519); err != nil {
+	if err := registry.Verify(didStr, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
 	}
 }
@@ -290,10 +355,19 @@ func TestE2E_DIDWeb_RecoveryMethod(t *testing.T) {
 		},
 	}
 
+	wire, err := envelope.AppendSignature(canonicalHash[:], envelope.SigAlgoEIP712, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+
 	resolver := &staticResolver{wantDID: didStr, doc: doc}
 	registry := did.DefaultVerifierRegistry(testDestinationDID, resolver)
 
-	if err := registry.Verify(didStr, canonicalHash[:], sig, envelope.SigAlgoEIP712); err != nil {
+	if err := registry.Verify(didStr, gotCanon, gotSig, gotAlgo); err != nil {
 		t.Fatalf("registry.Verify: %v", err)
 	}
 }

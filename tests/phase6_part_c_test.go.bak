@@ -305,16 +305,10 @@ func newOperatorEntryServer(entries map[uint64]*types.EntryWithMetadata) *httpte
 			"sequence":            seq,
 			"canonical_hex":       hex.EncodeToString(meta.CanonicalBytes),
 			"log_time_unix_micro": meta.LogTime.UnixMicro(),
+			"sig_algo_id":         meta.SignatureAlgoID,
 		}
-		// Under v6, signatures live inside the canonical entry bytes.
-		// Deserialize to extract the primary signature's algo and bytes
-		// for the sidecar JSON fields that the operator's HTTP API still
-		// exposes for diagnostics.
-		if recovered, derr := envelope.Deserialize(meta.CanonicalBytes); derr == nil && len(recovered.Signatures) > 0 {
-			resp["sig_algo_id"] = recovered.Signatures[0].AlgoID
-			if len(recovered.Signatures[0].Bytes) > 0 {
-				resp["signature_hex"] = hex.EncodeToString(recovered.Signatures[0].Bytes)
-			}
+		if len(meta.SignatureBytes) > 0 {
+			resp["signature_hex"] = hex.EncodeToString(meta.SignatureBytes)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -463,14 +457,32 @@ func TestHTTPEntryFetcher_MultipleSequences(t *testing.T) {
 	}
 }
 
-// TestHTTPEntryFetcher_WithSignature was retired in the v6 migration.
-// It asserted that EntryWithMetadata.SignatureAlgoID and SignatureBytes
-// round-trip through the HTTP fetcher. Those sidecar fields were removed
-// in v6 because signatures now live inside CanonicalBytes. The v6-native
-// equivalent — "the fetcher preserves canonical bytes byte-for-byte,
-// including any signatures inside them" — is covered by
-// TestHTTPEntryFetcher_Deserializable above, which deserializes the
-// fetched bytes and verifies the resulting entry's full structure.
+func TestHTTPEntryFetcher_WithSignature(t *testing.T) {
+	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:sig"}, nil)
+	sig := make([]byte, 64)
+	sig[0] = 0xAB
+	entries := map[uint64]*types.EntryWithMetadata{
+		1: {
+			CanonicalBytes:  envelope.Serialize(entry),
+			LogTime:         time.Now(),
+			SignatureAlgoID: 1,
+			SignatureBytes:  sig,
+		},
+	}
+	ts := newOperatorEntryServer(entries)
+	defer ts.Close()
+
+	fetcher := logpkg.NewHTTPEntryFetcher(logpkg.HTTPEntryFetcherConfig{
+		BaseURL: ts.URL, LogDID: testLogDID,
+	})
+	meta, _ := fetcher.Fetch(pos(1))
+	if meta.SignatureAlgoID != 1 {
+		t.Fatalf("algo: %d", meta.SignatureAlgoID)
+	}
+	if len(meta.SignatureBytes) != 64 || meta.SignatureBytes[0] != 0xAB {
+		t.Fatal("signature bytes mismatch")
+	}
+}
 
 // ═════════════════════════════════════════════════════════════════════
 // 4. HTTPLeafReader (6 tests)

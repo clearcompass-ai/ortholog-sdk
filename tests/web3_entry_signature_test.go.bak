@@ -51,10 +51,22 @@ func TestEntrySignature_RoundTrip_ECDSA(t *testing.T) {
 		t.Fatalf("SignEntry produced %d bytes, want 64", len(sig))
 	}
 
-	// Signature verifies against the key. Under v6 the wire round-trip
-	// through AppendSignature/StripSignature no longer exists; the
-	// primitive-level verifier call IS the assertion of interest here.
-	if err := signatures.VerifyEntry(canonicalHash, sig, &priv.PublicKey); err != nil {
+	// Wire round-trip
+	canonical := []byte("canonical bytes")
+	wire, err := envelope.AppendSignature(canonical, envelope.SigAlgoECDSA, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+	if !bytes.Equal(gotCanon, canonical) || gotAlgo != envelope.SigAlgoECDSA || !bytes.Equal(gotSig, sig) {
+		t.Fatal("wire round-trip mismatch")
+	}
+
+	// Signature verifies against the key
+	if err := signatures.VerifyEntry(canonicalHash, gotSig, &priv.PublicKey); err != nil {
 		t.Fatalf("VerifyEntry: %v", err)
 	}
 }
@@ -76,8 +88,20 @@ func TestEntrySignature_RoundTrip_Ed25519(t *testing.T) {
 		t.Fatalf("ed25519 sig length %d, want 64", len(sig))
 	}
 
-	// Signature verifies. Under v6 the wire round-trip no longer exists;
-	// the primitive-level verifier is the assertion of interest.
+	// Wire round-trip
+	wire, err := envelope.AppendSignature(message, envelope.SigAlgoEd25519, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+	if !bytes.Equal(gotCanon, message) || gotAlgo != envelope.SigAlgoEd25519 || !bytes.Equal(gotSig, sig) {
+		t.Fatal("wire round-trip mismatch")
+	}
+
+	// Signature verifies
 	if err := signatures.VerifyEd25519(pub, message, sig); err != nil {
 		t.Fatalf("VerifyEd25519: %v", err)
 	}
@@ -108,9 +132,22 @@ func TestEntrySignature_RoundTrip_EIP191(t *testing.T) {
 		t.Fatalf("recoverable sig length %d, want 65", len(sig))
 	}
 
-	// Verify via address recovery. Under v6 the wire round-trip no longer
-	// exists; the primitive-level verifier is the assertion of interest.
-	if err := signatures.VerifySecp256k1EIP191(addr, canonicalHash, sig); err != nil {
+	// Wire round-trip
+	canonical := []byte("canonical bytes")
+	wire, err := envelope.AppendSignature(canonical, envelope.SigAlgoEIP191, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	_, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+	if gotAlgo != envelope.SigAlgoEIP191 || len(gotSig) != 65 {
+		t.Fatal("wire round-trip mismatch")
+	}
+
+	// Verify via address recovery
+	if err := signatures.VerifySecp256k1EIP191(addr, canonicalHash, gotSig); err != nil {
 		t.Fatalf("VerifySecp256k1EIP191: %v", err)
 	}
 }
@@ -137,9 +174,22 @@ func TestEntrySignature_RoundTrip_EIP712(t *testing.T) {
 	digest := signatures.EntrySigningDigest(canonicalHash)
 	sig := signEthereumRecoverable(priv, digest)
 
-	// Verify via address recovery. Under v6 the wire round-trip no longer
-	// exists; the primitive-level verifier is the assertion of interest.
-	if err := signatures.VerifySecp256k1EIP712(addr, canonicalHash, sig); err != nil {
+	// Wire round-trip
+	canonical := []byte("canonical bytes")
+	wire, err := envelope.AppendSignature(canonical, envelope.SigAlgoEIP712, sig)
+	if err != nil {
+		t.Fatalf("AppendSignature: %v", err)
+	}
+	_, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+	if err != nil {
+		t.Fatalf("StripSignature: %v", err)
+	}
+	if gotAlgo != envelope.SigAlgoEIP712 {
+		t.Fatalf("StripSignature algoID mismatch: got 0x%04x", gotAlgo)
+	}
+
+	// Verify via address recovery
+	if err := signatures.VerifySecp256k1EIP712(addr, canonicalHash, gotSig); err != nil {
 		t.Fatalf("VerifySecp256k1EIP712: %v", err)
 	}
 }

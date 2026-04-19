@@ -17,6 +17,13 @@ KEY ARCHITECTURAL DECISIONS:
     entries would have different log identities than SDK-signed entries.
     That would fragment the log across signer types — a protocol-level
     disaster.
+  - Tests #1-#4 were simplified in the v6 migration — the wire round-trip
+    through AppendSignature/StripSignature (both deleted in v6) was
+    boilerplate. The primitive-level verifier call is the actual assertion.
+  - Tests #5 and #6 were restated in the v6 migration at the Serialize /
+    SigningPayload level rather than the AppendSignature / StripSignature
+    level. The underlying invariants are unchanged; the surface they are
+    expressed against is the v6-native one.
   - Supplements existing tests/entry_signature_test.go. Does not replace.
 */
 package tests
@@ -149,57 +156,60 @@ func TestEntrySignature_RoundTrip_EIP712(t *testing.T) {
 // -------------------------------------------------------------------------------------------------
 
 // TestEntrySignature_CanonicalHashIndependentOfAlgoID verifies that the
-// canonical bytes of an entry do not depend on which algorithm signed it.
+// SigningPayload of an entry does not depend on which algorithm signed
+// it. The v5 version of this test used AppendSignature/StripSignature
+// over raw canonical bytes; v6 restates it at the entry level using
+// envelope.SigningPayload, which is what every signer actually signs.
 //
-// If this test fails, two signers using the same entry content but different
-// algorithms would produce entries with different canonical hashes, which
-// means different log identities, which fragments the log across signer
-// types. This is the kind of invariant that silently rots if not locked.
+// If this test fails, two signers using the same header and payload
+// but different algorithms would sign over different byte sequences,
+// producing signatures that commit to different content. That would
+// fragment the log across signer types — the protocol-level disaster
+// the v5 test was protecting against.
 func TestEntrySignature_CanonicalHashIndependentOfAlgoID(t *testing.T) {
-	// Same canonical bytes, four different algorithms.
-	canonical := []byte("the exact same canonical entry content")
+	// Same header, same payload, different algoIDs in the Signatures
+	// slice. SigningPayload must be byte-identical for all.
+	header := envelope.ControlHeader{
+		Destination: testDestinationDID,
+		SignerDID:   "did:example:canonical-test",
+	}
+	payload := []byte("the exact same canonical entry content")
 
-	algorithms := []struct {
-		id  uint16
-		sig []byte
-	}{
-		{envelope.SigAlgoECDSA, make([]byte, 64)},
-		{envelope.SigAlgoEd25519, make([]byte, 64)},
-		{envelope.SigAlgoEIP191, make([]byte, 65)},
-		{envelope.SigAlgoEIP712, make([]byte, 65)},
+	algorithms := []uint16{
+		envelope.SigAlgoECDSA,
+		envelope.SigAlgoEd25519,
+		envelope.SigAlgoEIP191,
+		envelope.SigAlgoEIP712,
+		envelope.SigAlgoJWZ,
 	}
 
-	var wires [][]byte
-	for _, a := range algorithms {
-		w, err := envelope.AppendSignature(canonical, a.id, a.sig)
+	var payloads [][]byte
+	for _, algoID := range algorithms {
+		entry, err := envelope.NewUnsignedEntry(header, payload)
 		if err != nil {
-			t.Fatalf("AppendSignature(0x%04x): %v", a.id, err)
+			t.Fatalf("NewUnsignedEntry(algo 0x%04x): %v", algoID, err)
 		}
-		wires = append(wires, w)
+		// Attach a signature with this algoID. SigningPayload must not
+		// depend on what's in Signatures — that's the invariant.
+		sigLen := 64
+		if algoID == envelope.SigAlgoEIP191 || algoID == envelope.SigAlgoEIP712 {
+			sigLen = 65
+		} else if algoID == envelope.SigAlgoJWZ {
+			sigLen = 512
+		}
+		entry.Signatures = []envelope.Signature{{
+			SignerDID: header.SignerDID,
+			AlgoID:    algoID,
+			Bytes:     make([]byte, sigLen),
+		}}
+		payloads = append(payloads, envelope.SigningPayload(entry))
 	}
 
-	// Each wire, when stripped, must yield the IDENTICAL canonical bytes.
-	for i, wire := range wires {
-		gotCanon, gotAlgo, _, err := envelope.StripSignature(wire)
-		if err != nil {
-			t.Fatalf("wire %d (algo 0x%04x): StripSignature: %v", i, algorithms[i].id, err)
-		}
-		if !bytes.Equal(gotCanon, canonical) {
-			t.Fatalf("wire %d (algo 0x%04x): canonical drifted\noriginal: %x\ngot:      %x",
-				i, algorithms[i].id, canonical, gotCanon)
-		}
-		if gotAlgo != algorithms[i].id {
-			t.Fatalf("wire %d: algoID roundtrip drifted", i)
-		}
-	}
-
-	// The four wires MUST differ from each other — they carry different
-	// signatures and algo IDs. But the canonical prefix of each is identical.
-	for i := 0; i < len(wires); i++ {
-		for j := i + 1; j < len(wires); j++ {
-			if bytes.Equal(wires[i], wires[j]) {
-				t.Fatalf("wires %d and %d identical — algo ID not encoded distinctly", i, j)
-			}
+	// All SigningPayloads must be byte-identical.
+	for i := 1; i < len(payloads); i++ {
+		if !bytes.Equal(payloads[0], payloads[i]) {
+			t.Fatalf("SigningPayload drift between algo 0x%04x and algo 0x%04x:\n[0]: %x\n[%d]: %x",
+				algorithms[0], algorithms[i], payloads[0], i, payloads[i])
 		}
 	}
 }
@@ -209,20 +219,37 @@ func TestEntrySignature_CanonicalHashIndependentOfAlgoID(t *testing.T) {
 // -------------------------------------------------------------------------------------------------
 
 // TestEntrySignature_WireLengthArithmetic asserts that the difference in
-// total wire length between a 64-byte-sig entry and a 65-byte-sig entry
-// is EXACTLY 1 byte. Any other delta indicates a variable-width encoding
-// snuck in somewhere.
+// total Serialize output between a 64-byte-sig entry and a 65-byte-sig
+// entry (with identical header, payload, and SignerDID on the
+// signature) is EXACTLY 1 byte. Under v6 this holds because the
+// sig length prefix is a fixed-width uint32; only the sig bytes
+// themselves differ in length.
+//
+// Any other delta indicates a variable-width encoding snuck in
+// somewhere — a wire-format regression.
 func TestEntrySignature_WireLengthArithmetic(t *testing.T) {
-	canonical := []byte("canonical")
+	const signerDID = "did:example:wire-arithmetic"
+	header := envelope.ControlHeader{
+		Destination: testDestinationDID,
+		SignerDID:   signerDID,
+	}
+	payload := []byte("payload")
 
-	w64, err := envelope.AppendSignature(canonical, envelope.SigAlgoECDSA, make([]byte, 64))
-	if err != nil {
-		t.Fatal(err)
+	build := func(algoID uint16, sigLen int) []byte {
+		entry, err := envelope.NewUnsignedEntry(header, payload)
+		if err != nil {
+			t.Fatalf("NewUnsignedEntry: %v", err)
+		}
+		entry.Signatures = []envelope.Signature{{
+			SignerDID: signerDID,
+			AlgoID:    algoID,
+			Bytes:     make([]byte, sigLen),
+		}}
+		return envelope.Serialize(entry)
 	}
-	w65, err := envelope.AppendSignature(canonical, envelope.SigAlgoEIP712, make([]byte, 65))
-	if err != nil {
-		t.Fatal(err)
-	}
+
+	w64 := build(envelope.SigAlgoECDSA, 64)
+	w65 := build(envelope.SigAlgoEIP712, 65)
 
 	if len(w65)-len(w64) != 1 {
 		t.Fatalf("wire length delta between 65-byte and 64-byte sigs is %d, expected exactly 1",

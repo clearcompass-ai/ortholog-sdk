@@ -33,7 +33,6 @@ KEY ARCHITECTURAL DECISIONS:
 package tests
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
 	"testing"

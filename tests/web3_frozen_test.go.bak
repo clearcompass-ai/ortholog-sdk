@@ -18,11 +18,8 @@ KEY ARCHITECTURAL DECISIONS:
   - ValidateAlgorithmID is tested exhaustively across every uint16 value,
     not just by spot-check. Spot-checks miss cases where a new constant
     is added but the registry isn't updated.
-  - Under v6 the wire-primitive tests (AppendSignature/ReadSignature/
-    StripSignature) were retired — those functions were removed. The
-    equivalent invariants are exercised via envelope.Serialize /
-    envelope.Deserialize / envelope.SigningPayload round-trips, or
-    retired with justification pointing to v6-native coverage.
+  - AppendSignature / ReadSignature are tested for their symmetric
+    validation — both reject unknown algoIDs, both reject length mismatches.
 */
 package tests
 
@@ -69,7 +66,6 @@ func TestAlgorithmID_ExhaustiveSweep(t *testing.T) {
 		envelope.SigAlgoEd25519: true,
 		envelope.SigAlgoEIP191:  true,
 		envelope.SigAlgoEIP712:  true,
-		envelope.SigAlgoJWZ:     true, // added in v6 for Polygon ID / Iden3
 	}
 	// Iterate every possible uint16 value. Tight loop, runs in <50 ms.
 	for i := 0; i < 65536; i++ {
@@ -91,205 +87,172 @@ func TestAlgorithmID_ExhaustiveSweep(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------------------------------
-// 3) Signature length — retired in v6
+// 3) Signature length — frozen per algorithm
 // -------------------------------------------------------------------------------------------------
 
-// TestSignatureLengthForAlgorithm_FROZEN was retired in the v6
-// migration. envelope.SignatureLengthForAlgorithm was removed because
-// v6 signatures carry their own length as an explicit uint32 field in
-// the wire format (see core/envelope/signatures_section.go). Length is
-// no longer an algorithm-level property — it is a per-signature field.
-// This design admits variable-length algorithms like SigAlgoJWZ
-// (Polygon ID ZK proofs, 1-4 KB typical) without wire-format changes.
-
-// -------------------------------------------------------------------------------------------------
-// 4) AlgoID validation on Serialize — v6 replaces AppendSignature tests
-// -------------------------------------------------------------------------------------------------
-
-// TestSerialize_RejectsUnknownAlgoID exercises envelope.Serialize
-// (via entry.Validate) rejecting an unknown algoID in a Signature
-// struct. v6 replaces the v5 encoding-layer test
-// TestAppendSignature_RejectsUnknownAlgoID with this equivalent.
-// Invariant: the serialization path validates every signature's
-// AlgoID against the registered set and rejects unknowns with
-// ErrUnknownAlgorithmID.
-func TestSerialize_RejectsUnknownAlgoID(t *testing.T) {
-	const signerDID = "did:example:bogus-algo"
-	entry, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
-		Destination: testDestinationDID,
-		SignerDID:   signerDID,
-	}, []byte("payload"))
-	if err != nil {
-		t.Fatalf("NewUnsignedEntry: %v", err)
+func TestSignatureLengthForAlgorithm_FROZEN(t *testing.T) {
+	cases := []struct {
+		name   string
+		algoID uint16
+		want   int
+	}{
+		{"SigAlgoECDSA", envelope.SigAlgoECDSA, 64},
+		{"SigAlgoEd25519", envelope.SigAlgoEd25519, 64},
+		{"SigAlgoEIP191", envelope.SigAlgoEIP191, 65},
+		{"SigAlgoEIP712", envelope.SigAlgoEIP712, 65},
+		{"unknown 0xBEEF", 0xBEEF, 0},
 	}
-	entry.Signatures = []envelope.Signature{{
-		SignerDID: signerDID,
-		AlgoID:    0xBEEF, // deliberately unregistered
-		Bytes:     make([]byte, 64),
-	}}
-
-	// entry.Validate runs serializeInternal which calls
-	// validateSignatureForEncode → ValidateAlgorithmID. An unregistered
-	// algoID surfaces ErrUnknownAlgorithmID in the error chain.
-	if err := entry.Validate(); err == nil {
-		t.Fatal("entry.Validate accepted signature with unregistered algoID 0xBEEF")
-	} else if !errors.Is(err, envelope.ErrUnknownAlgorithmID) {
-		t.Fatalf("wrong error type: %v (want ErrUnknownAlgorithmID)", err)
+	for _, c := range cases {
+		if got := envelope.SignatureLengthForAlgorithm(c.algoID); got != c.want {
+			t.Fatalf("%s: got %d, want %d", c.name, got, c.want)
+		}
 	}
 }
 
-// TestAppendSignature_RejectsLengthMismatch was retired in the v6
-// migration. v6 deliberately removed per-algorithm length enforcement
-// at the encoding layer because algorithms like SigAlgoJWZ are
-// variable-length by design. Each signature now carries its own
-// explicit uint32 length field. The invariant that cryptographic
-// verifiers reject wrong-length sigs is preserved at the verify layer
-// (see TestWitness_OnlyECDSASignaturesAccepted in
-// tests/web3_witness_boundary_test.go), which is the correct layer
-// for that invariant — the cryptographic primitive is the authority
-// on what shapes it accepts.
+// -------------------------------------------------------------------------------------------------
+// 4) AppendSignature — validates both sides of the wire symmetrically
+// -------------------------------------------------------------------------------------------------
 
-// TestSerialize_AcceptsAllRegisteredAlgorithms exercises
-// Serialize/Deserialize round-trip over an entry with a signature
-// for each registered algoID. v6 replaces the v5 encoding-layer test
-// TestAppendSignature_AcceptsAllRegisteredAlgorithms with this
-// equivalent. Invariant: every registered algoID round-trips cleanly
-// through the v6 wire format, byte-preserving the signature.
-func TestSerialize_AcceptsAllRegisteredAlgorithms(t *testing.T) {
+func TestAppendSignature_RejectsUnknownAlgoID(t *testing.T) {
+	canonical := []byte("canonical entry bytes")
+	sig := make([]byte, 64)
+	_, err := envelope.AppendSignature(canonical, 0xBEEF, sig)
+	if err == nil {
+		t.Fatal("AppendSignature accepted unregistered algoID 0xBEEF")
+	}
+	if !errors.Is(err, envelope.ErrUnknownAlgorithmID) {
+		t.Fatalf("wrong error type: %v", err)
+	}
+}
+
+func TestAppendSignature_RejectsLengthMismatch(t *testing.T) {
+	canonical := []byte("canonical")
 	cases := []struct {
 		name   string
 		algoID uint16
 		sigLen int
 	}{
-		{"ECDSA (64 bytes R||S)", envelope.SigAlgoECDSA, 64},
-		{"Ed25519 (64 bytes)", envelope.SigAlgoEd25519, 64},
-		{"EIP-191 (65 bytes r||s||v)", envelope.SigAlgoEIP191, 65},
-		{"EIP-712 (65 bytes r||s||v)", envelope.SigAlgoEIP712, 65},
-		{"JWZ (realistic 512-byte proof)", envelope.SigAlgoJWZ, 512},
+		{"ECDSA with 65-byte sig", envelope.SigAlgoECDSA, 65},
+		{"Ed25519 with 63-byte sig", envelope.SigAlgoEd25519, 63},
+		{"EIP-191 with 64-byte sig", envelope.SigAlgoEIP191, 64},
+		{"EIP-712 with 66-byte sig", envelope.SigAlgoEIP712, 66},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			const signerDID = "did:example:roundtrip"
-			entry, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
-				Destination: testDestinationDID,
-				SignerDID:   signerDID,
-			}, []byte("payload for "+c.name))
-			if err != nil {
-				t.Fatalf("NewUnsignedEntry: %v", err)
-			}
-			// Non-zero bytes so we can verify byte-preservation.
-			sig := make([]byte, c.sigLen)
-			for i := range sig {
-				sig[i] = byte((i + 1) & 0xff)
-			}
-			entry.Signatures = []envelope.Signature{{
-				SignerDID: signerDID,
-				AlgoID:    c.algoID,
-				Bytes:     sig,
-			}}
+		_, err := envelope.AppendSignature(canonical, c.algoID, make([]byte, c.sigLen))
+		if err == nil {
+			t.Fatalf("%s: AppendSignature accepted length mismatch", c.name)
+		}
+		if !errors.Is(err, envelope.ErrSignatureLengthMismatch) {
+			t.Fatalf("%s: wrong error type: %v", c.name, err)
+		}
+	}
+}
 
-			if err := entry.Validate(); err != nil {
-				t.Fatalf("Validate: %v", err)
-			}
-
-			wire := envelope.Serialize(entry)
-			recovered, err := envelope.Deserialize(wire)
-			if err != nil {
-				t.Fatalf("Deserialize: %v", err)
-			}
-			if len(recovered.Signatures) != 1 {
-				t.Fatalf("sig count: got %d, want 1", len(recovered.Signatures))
-			}
-			if recovered.Signatures[0].AlgoID != c.algoID {
-				t.Fatalf("algoID drift: got 0x%04x, want 0x%04x",
-					recovered.Signatures[0].AlgoID, c.algoID)
-			}
-			if !bytes.Equal(recovered.Signatures[0].Bytes, sig) {
-				t.Fatal("signature bytes drift")
-			}
-		})
+func TestAppendSignature_AcceptsAllRegisteredAlgorithms(t *testing.T) {
+	canonical := []byte("canonical")
+	for _, c := range []struct {
+		algoID uint16
+		sigLen int
+	}{
+		{envelope.SigAlgoECDSA, 64},
+		{envelope.SigAlgoEd25519, 64},
+		{envelope.SigAlgoEIP191, 65},
+		{envelope.SigAlgoEIP712, 65},
+	} {
+		wire, err := envelope.AppendSignature(canonical, c.algoID, make([]byte, c.sigLen))
+		if err != nil {
+			t.Fatalf("algoID 0x%04x: unexpected error %v", c.algoID, err)
+		}
+		if len(wire) != len(canonical)+2+c.sigLen {
+			t.Fatalf("algoID 0x%04x: wire length %d, expected %d",
+				c.algoID, len(wire), len(canonical)+2+c.sigLen)
+		}
 	}
 }
 
 // -------------------------------------------------------------------------------------------------
-// 5) AlgoID validation on Deserialize — v6 replaces ReadSignature tests
+// 5) ReadSignature — symmetric validation
 // -------------------------------------------------------------------------------------------------
 
-// TestDeserialize_RejectsUnknownAlgoID exercises the v6 decoder's
-// algorithm-ID validation. v6 replaces the v5 decoder-layer test
-// TestReadSignature_RejectsUnknownAlgoID with this equivalent.
-// Invariant: every code path that produces an Entry validates every
-// signature's AlgoID. Constructing an in-memory Entry with a bad
-// algoID and calling Validate() reproduces the exact check the
-// decoder's read path invokes via serializeInternal.
-func TestDeserialize_RejectsUnknownAlgoID(t *testing.T) {
-	const signerDID = "did:example:mutate-algo"
-	bad, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
-		Destination: testDestinationDID,
-		SignerDID:   signerDID,
-	}, []byte("payload"))
-	if err != nil {
-		t.Fatalf("NewUnsignedEntry: %v", err)
+func TestReadSignature_RejectsUnknownAlgoID(t *testing.T) {
+	canonical := []byte("canonical")
+	// Craft wire directly: [canonical][0xBE][0xEF][64 sig bytes]
+	wire := append([]byte{}, canonical...)
+	wire = append(wire, 0xBE, 0xEF)
+	wire = append(wire, make([]byte, 64)...)
+	_, _, err := envelope.ReadSignature(wire, len(canonical))
+	if err == nil {
+		t.Fatal("ReadSignature accepted algoID 0xBEEF")
 	}
-	bad.Signatures = []envelope.Signature{{
-		SignerDID: signerDID,
-		AlgoID:    0xBEEF,
-		Bytes:     make([]byte, 64),
-	}}
-
-	if err := bad.Validate(); err == nil {
-		t.Fatal("Validate accepted signature with unregistered algoID 0xBEEF")
-	} else if !errors.Is(err, envelope.ErrUnknownAlgorithmID) {
-		t.Fatalf("wrong error type: %v (want ErrUnknownAlgorithmID)", err)
-	}
-
-	// Positive-case sanity: a valid entry serializes and deserializes
-	// cleanly with the same algoID validation in the read path.
-	good, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
-		Destination: testDestinationDID,
-		SignerDID:   signerDID,
-	}, []byte("payload"))
-	if err != nil {
-		t.Fatalf("NewUnsignedEntry (good): %v", err)
-	}
-	good.Signatures = []envelope.Signature{{
-		SignerDID: signerDID,
-		AlgoID:    envelope.SigAlgoECDSA,
-		Bytes:     make([]byte, 64),
-	}}
-	if err := good.Validate(); err != nil {
-		t.Fatalf("positive case Validate: %v", err)
-	}
-	wire := envelope.Serialize(good)
-	if _, err := envelope.Deserialize(wire); err != nil {
-		t.Fatalf("positive case Deserialize: %v", err)
+	if !errors.Is(err, envelope.ErrUnknownAlgorithmID) {
+		t.Fatalf("wrong error type: %v", err)
 	}
 }
 
-// TestReadSignature_RejectsLengthMismatch was retired in the v6
-// migration. See TestAppendSignature_RejectsLengthMismatch retirement
-// comment above for rationale — v6 removed per-algorithm length
-// enforcement in favor of explicit per-signature length fields.
+func TestReadSignature_RejectsLengthMismatch(t *testing.T) {
+	canonical := []byte("canonical")
+	// Tag with ECDSA (expects 64) but append 65 bytes.
+	wire := append([]byte{}, canonical...)
+	wire = append(wire, 0x00, 0x01) // SigAlgoECDSA
+	wire = append(wire, make([]byte, 65)...)
+	_, _, err := envelope.ReadSignature(wire, len(canonical))
+	if err == nil {
+		t.Fatal("ReadSignature accepted 65-byte trailer for SigAlgoECDSA")
+	}
+	if !errors.Is(err, envelope.ErrSignatureLengthMismatch) {
+		t.Fatalf("wrong error type: %v", err)
+	}
+}
 
 // -------------------------------------------------------------------------------------------------
-// 6) StripSignature — retired in v6
+// 6) StripSignature — unambiguous framing
 // -------------------------------------------------------------------------------------------------
 
-// TestStripSignature_RoundTrip_EachAlgorithm was retired in the v6
-// migration. AppendSignature and StripSignature were removed — v6
-// signatures are part of the canonical entry, not a separable wire
-// trailer. The v6-native round-trip invariant ("an entry with
-// signatures round-trips through Serialize/Deserialize preserving
-// every field including signatures") is covered by
-// TestCanonicalHash_RoundTrip in tests/canonical_hash_test.go and by
-// TestSerialize_AcceptsAllRegisteredAlgorithms above.
+func TestStripSignature_RoundTrip_EachAlgorithm(t *testing.T) {
+	canonical := []byte("canonical entry bytes")
+	for _, c := range []struct {
+		algoID uint16
+		sigLen int
+	}{
+		{envelope.SigAlgoECDSA, 64},
+		{envelope.SigAlgoEd25519, 64},
+		{envelope.SigAlgoEIP191, 65},
+		{envelope.SigAlgoEIP712, 65},
+	} {
+		sig := make([]byte, c.sigLen)
+		for i := range sig {
+			sig[i] = byte(i + 1) // non-zero so we can verify byte-preservation
+		}
+		wire, err := envelope.AppendSignature(canonical, c.algoID, sig)
+		if err != nil {
+			t.Fatalf("algoID 0x%04x: AppendSignature: %v", c.algoID, err)
+		}
+		gotCanon, gotAlgo, gotSig, err := envelope.StripSignature(wire)
+		if err != nil {
+			t.Fatalf("algoID 0x%04x: StripSignature: %v", c.algoID, err)
+		}
+		if !bytes.Equal(gotCanon, canonical) {
+			t.Fatalf("algoID 0x%04x: canonical drift", c.algoID)
+		}
+		if gotAlgo != c.algoID {
+			t.Fatalf("algoID 0x%04x: got algo 0x%04x", c.algoID, gotAlgo)
+		}
+		if !bytes.Equal(gotSig, sig) {
+			t.Fatalf("algoID 0x%04x: sig bytes drift", c.algoID)
+		}
+	}
+}
 
-// TestStripSignature_TooShort was retired in the v6 migration.
-// StripSignature was removed; ErrWireTooShort no longer a defined
-// error sentinel. v6 short-input rejection behavior for
-// envelope.Deserialize is covered by the envelope_v5_test.go and
-// envelope parser tests (invalid inputs return wrapped errors from
-// io.ReadFull or binary.Read, not a specific "too short" sentinel).
+func TestStripSignature_TooShort(t *testing.T) {
+	// 10 bytes cannot contain even a 64-byte trailer + 2-byte algo.
+	_, _, _, err := envelope.StripSignature(make([]byte, 10))
+	if err == nil {
+		t.Fatal("StripSignature accepted 10-byte wire")
+	}
+	if !errors.Is(err, envelope.ErrWireTooShort) {
+		t.Fatalf("wrong error type: %v", err)
+	}
+}
 
 // -------------------------------------------------------------------------------------------------
 // 7) EIP-712 domain constants — frozen forever

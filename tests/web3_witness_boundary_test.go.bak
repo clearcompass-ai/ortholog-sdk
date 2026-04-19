@@ -43,16 +43,25 @@ import (
 // The mechanism: AppendSignature with SigAlgoECDSA and a 65-byte signature
 // is rejected by the encode-side length check. If this were permissive,
 // attackers could smuggle wallet-format sigs past the SDK-native verifier.
-// TestWitness_RejectsEthereumSigLengths was retired in the v6
-// migration. This test exercised an encoding-level length check that
-// v6 deliberately removed (algorithms like SigAlgoJWZ are
-// variable-length). The real security invariant — "the witness
-// signature path rejects Ethereum-format 65-byte wallet signatures" —
-// is preserved and tested correctly by
-// TestWitness_OnlyECDSASignaturesAccepted below, which exercises the
-// cryptographic verifier (signatures.VerifyEntry) directly. That is
-// the correct layer for the invariant: the verifier is the authority
-// on what signatures it accepts, not the framing code.
+func TestWitness_RejectsEthereumSigLengths(t *testing.T) {
+	canonical := []byte("canonical witness payload")
+
+	// Attempt to frame a 65-byte signature (EIP-191/712 size) as SDK ECDSA.
+	eth65 := make([]byte, 65)
+	_, err := envelope.AppendSignature(canonical, envelope.SigAlgoECDSA, eth65)
+	if err == nil {
+		t.Fatal("AppendSignature accepted 65-byte sig tagged as SigAlgoECDSA — boundary violation")
+	}
+	if !errors.Is(err, envelope.ErrSignatureLengthMismatch) {
+		t.Fatalf("wrong error type: %v", err)
+	}
+
+	// Attempt to frame a 65-byte signature (EIP-191/712 size) as SDK Ed25519.
+	_, err = envelope.AppendSignature(canonical, envelope.SigAlgoEd25519, eth65)
+	if err == nil {
+		t.Fatal("AppendSignature accepted 65-byte sig tagged as SigAlgoEd25519 — boundary violation")
+	}
+}
 
 // -------------------------------------------------------------------------------------------------
 // 2) Raw VerifyEntry enforces 64-byte signatures
@@ -133,9 +142,22 @@ func TestWitness_OnlyECDSASignaturesAccepted(t *testing.T) {
 // what the witness layer expects. The witness code assumes algoID of
 // SigAlgoECDSA means 64 bytes; if that changes, witness deserialization
 // silently corrupts.
-// TestWitness_AlgorithmClassification was retired in the v6
-// migration. envelope.SignatureLengthForAlgorithm was removed because
-// v6 signatures are length-prefixed per-sig in the wire format, making
-// algorithm-level length classification meaningless. See
-// TestSignatureLengthForAlgorithm_FROZEN retirement comment in
-// tests/web3_frozen_test.go for full rationale.
+func TestWitness_AlgorithmClassification(t *testing.T) {
+	// SDK-native: 64-byte
+	if envelope.SignatureLengthForAlgorithm(envelope.SigAlgoECDSA) != 64 {
+		t.Fatal("SigAlgoECDSA classified as non-64 — witness deserialize depends on this")
+	}
+	if envelope.SignatureLengthForAlgorithm(envelope.SigAlgoEd25519) != 64 {
+		t.Fatal("SigAlgoEd25519 classified as non-64")
+	}
+
+	// Wallet-format: 65-byte. These must NEVER be used for witness cosigs,
+	// but the classification must still be correct for the dispatch code
+	// that routes away from the witness path to make sense.
+	if envelope.SignatureLengthForAlgorithm(envelope.SigAlgoEIP191) != 65 {
+		t.Fatal("SigAlgoEIP191 classified as non-65")
+	}
+	if envelope.SignatureLengthForAlgorithm(envelope.SigAlgoEIP712) != 65 {
+		t.Fatal("SigAlgoEIP712 classified as non-65")
+	}
+}

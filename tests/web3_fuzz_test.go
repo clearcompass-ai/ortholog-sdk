@@ -20,6 +20,9 @@ KEY ARCHITECTURAL DECISIONS:
     the fuzzer a head start.
   - Run nightly: `go test -fuzz=FuzzParseDIDPKH -fuzztime=10m ./tests`.
     In per-PR CI, these exist as smoke tests; real fuzz budget is nightly.
+  - Under v6, FuzzStripSignature was replaced with FuzzDeserialize. The
+    v5 wire-primitive StripSignature was removed; envelope.Deserialize is
+    the new untrusted-input boundary for the wire format.
 */
 package tests
 
@@ -103,41 +106,56 @@ func FuzzParseDIDKey(f *testing.F) {
 }
 
 // -------------------------------------------------------------------------------------------------
-// 3) FuzzStripSignature — wire-format reverse-engineering
+// 3) FuzzDeserialize — wire-format reverse-engineering (v6 replacement)
 // -------------------------------------------------------------------------------------------------
 
-// FuzzStripSignature hammers the wire-format decode path with arbitrary byte
-// sequences. The function infers signature length from the trailer algorithm
-// ID — malformed inputs must produce errors, not panics.
-func FuzzStripSignature(f *testing.F) {
-	// Seed with known-valid wire bytes across all four algorithms.
-	canonical := []byte("canonical")
-	for _, algoID := range []uint16{
-		envelope.SigAlgoECDSA,
-		envelope.SigAlgoEd25519,
-		envelope.SigAlgoEIP191,
-		envelope.SigAlgoEIP712,
+// FuzzDeserialize hammers the v6 entry decode path with arbitrary byte
+// sequences. This replaces the v5 FuzzStripSignature target — the
+// envelope.StripSignature function was removed in v6, and Deserialize
+// is the new untrusted-input boundary for the wire format.
+//
+// Contract: Deserialize MUST NOT panic for any byte sequence. Malformed
+// inputs must produce wrapped errors, not crashes.
+func FuzzDeserialize(f *testing.F) {
+	// Seed with valid serialized entries across all registered
+	// signature algorithms, to give the fuzzer realistic starting points.
+	for _, algoCase := range []struct {
+		algoID uint16
+		sigLen int
+	}{
+		{envelope.SigAlgoECDSA, 64},
+		{envelope.SigAlgoEd25519, 64},
+		{envelope.SigAlgoEIP191, 65},
+		{envelope.SigAlgoEIP712, 65},
+		{envelope.SigAlgoJWZ, 512},
 	} {
-		sigLen := envelope.SignatureLengthForAlgorithm(algoID)
-		if wire, err := envelope.AppendSignature(canonical, algoID, make([]byte, sigLen)); err == nil {
-			f.Add(wire)
+		const signerDID = "did:example:fuzzseed"
+		entry, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
+			Destination: testDestinationDID,
+			SignerDID:   signerDID,
+		}, []byte("fuzz seed payload"))
+		if err != nil {
+			continue
+		}
+		entry.Signatures = []envelope.Signature{{
+			SignerDID: signerDID,
+			AlgoID:    algoCase.algoID,
+			Bytes:     make([]byte, algoCase.sigLen),
+		}}
+		if err := entry.Validate(); err == nil {
+			f.Add(envelope.Serialize(entry))
 		}
 	}
 	// Seed with pathological inputs.
 	f.Add([]byte{})
 	f.Add([]byte{0x00})
-	f.Add(make([]byte, 10))
-	f.Add(make([]byte, 65))
-	f.Add(make([]byte, 66))
-	f.Add(make([]byte, 67))
-	// Valid framing bytes but junk canonical.
-	junk := make([]byte, 100)
-	junk[len(junk)-67] = 0x00
-	junk[len(junk)-66] = 0x01
-	f.Add(junk)
+	// Length-prefix edge cases and boundary sizes.
+	for _, n := range []int{1, 2, 3, 4, 5, 6, 7, 8, 10, 16, 32, 64, 100, 128, 256} {
+		f.Add(make([]byte, n))
+	}
 
 	f.Fuzz(func(t *testing.T, wire []byte) {
-		_, _, _, _ = envelope.StripSignature(wire) // MUST NOT panic
+		_, _ = envelope.Deserialize(wire) // MUST NOT panic
 	})
 }
 
@@ -148,13 +166,15 @@ func FuzzStripSignature(f *testing.F) {
 // FuzzValidateAlgorithmID is a trivial target but it locks the contract that
 // ValidateAlgorithmID is a total function over uint16. Any future refactor
 // that makes it panic on a specific input is caught immediately.
+//
+// v6 removed the SignatureLengthForAlgorithm call; only ValidateAlgorithmID
+// remains.
 func FuzzValidateAlgorithmID(f *testing.F) {
 	for _, v := range []uint16{0, 1, 2, 3, 4, 5, 0xFFFF, 0xBEEF, 0xDEAD} {
 		f.Add(v)
 	}
 	f.Fuzz(func(t *testing.T, algoID uint16) {
 		_ = envelope.ValidateAlgorithmID(algoID) // MUST NOT panic
-		_ = envelope.SignatureLengthForAlgorithm(algoID)
 	})
 }
 

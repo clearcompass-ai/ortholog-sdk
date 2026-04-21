@@ -200,3 +200,47 @@ func BundleEntries(entries []*Entry) []byte {
 	}
 	return out
 }
+
+// Append to core/envelope/tessera_compat.go
+
+// EntryLeafHashBytes is EntryLeafHash for callers that hold the
+// canonical bytes of an entry directly (e.g., from
+// types.EntryWithMetadata.CanonicalBytes), avoiding the *Entry
+// intermediate.
+//
+// Produces exactly the same hash EntryLeafHash produces for the same
+// bytes: SHA-256(0x00 || canonical).
+//
+// Callers:
+//   - core/smt/merkle_wrap.go:    StubMerkleTree.AppendLeaf
+//   - verifier/cross_log.go:      BuildCrossLogProof source + anchor hashes
+//   - operator builder/loop.go:   leaf-hash computation before AppendLeaf
+//     (once operator is migrated to v6)
+func EntryLeafHashBytes(canonical []byte) [32]byte {
+	h := sha256.New()
+	h.Write([]byte{RFC6962LeafPrefix})
+	h.Write(canonical)
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+// MerkleInteriorHash computes the RFC 6962 §2.1 interior node hash:
+// SHA-256(0x01 || left || right).
+//
+// Exposed because downstream Merkle implementations (the SDK's stub
+// tree, cross-log verifiers computing subtree roots, fraud-proof
+// replay) must match this exactly to be interoperable with Tessera
+// and with each other. Inlining this byte layout in multiple places
+// is how the SDK previously drifted out of RFC 6962 compliance.
+//
+// Callers:
+//   - core/smt/merkle_wrap.go: StubMerkleTree.hashLevel
+//   - any future verifier that computes subtree roots independently
+func MerkleInteriorHash(left, right [32]byte) [32]byte {
+	var buf [65]byte
+	buf[0] = RFC6962NodePrefix
+	copy(buf[1:33], left[:])
+	copy(buf[33:65], right[:])
+	return sha256.Sum256(buf[:])
+}

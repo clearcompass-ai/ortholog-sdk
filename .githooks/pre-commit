@@ -1,0 +1,23 @@
+#!/bin/sh
+# Run goimports on staged Go files
+staged_go=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$')
+[ -z "$staged_go" ] && exit 0
+
+# Check goimports is available
+if ! command -v goimports >/dev/null 2>&1; then
+    echo "goimports not found; install with: brew install goimports"
+    exit 1
+fi
+
+# Run goimports and re-stage any changed files
+for f in $staged_go; do
+    goimports -w "$f"
+    git add "$f"
+done
+
+# Also verify the package still builds
+go build ./... >/dev/null 2>&1 || {
+    echo "go build failed after goimports — fix errors before committing"
+    exit 1
+}
+exit 0

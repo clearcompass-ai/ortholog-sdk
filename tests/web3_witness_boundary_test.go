@@ -25,10 +25,8 @@ KEY ARCHITECTURAL DECISIONS:
 package tests
 
 import (
-	"errors"
 	"testing"
 
-	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/signatures"
 )
 

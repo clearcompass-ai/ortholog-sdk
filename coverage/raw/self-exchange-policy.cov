@@ -1,0 +1,15 @@
+mode: atomic
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:125.90,126.18 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:126.18,128.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:129.2,129.20 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:129.20,131.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:132.2,132.39 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:132.39,135.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:137.2,142.33 3 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:142.33,145.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:150.2,150.23 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:150.23,153.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:155.2,155.12 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:163.74,165.2 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:168.76,170.2 1 0
+github.com/clearcompass-ai/ortholog-sdk/exchange/policy/freshness.go:173.77,175.2 1 0

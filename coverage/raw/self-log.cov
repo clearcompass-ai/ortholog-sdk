@@ -1,0 +1,21 @@
+mode: atomic
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:102.72,104.18 2 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:104.18,106.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:107.2,111.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:125.91,129.16 3 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:129.16,131.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:132.2,134.44 2 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:134.44,136.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:137.2,137.38 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:137.38,139.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:143.2,144.16 2 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:144.16,146.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:148.2,149.51 2 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:149.51,151.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:153.2,153.28 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:153.28,155.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:156.2,157.16 2 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:157.16,159.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:161.2,169.31 2 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:169.31,171.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/log/http_entry_fetcher.go:180.2,180.18 1 0

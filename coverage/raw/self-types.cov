@@ -1,0 +1,27 @@
+mode: atomic
+github.com/clearcompass-ai/ortholog-sdk/types/escrow_package.go:19.38,20.52 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/escrow_package.go:20.52,22.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:16.36,18.2 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:20.52,22.2 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:24.51,25.30 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:25.30,27.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:28.2,28.36 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:31.38,32.16 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:32.16,34.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:35.2,35.51 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:38.47,39.39 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:39.39,41.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/log_position.go:42.2,42.12 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/schema_parameters.go:163.61,164.12 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/schema_parameters.go:164.12,166.3 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/schema_parameters.go:167.2,167.11 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/schema_parameters.go:168.31,169.17 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/schema_parameters.go:170.26,171.11 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/schema_parameters.go:172.10,173.48 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/schema_parameters.go:188.48,189.11 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/schema_parameters.go:190.31,191.27 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/schema_parameters.go:192.26,193.21 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/schema_parameters.go:194.10,195.22 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/smt_leaf.go:9.43,11.2 1 0
+github.com/clearcompass-ai/ortholog-sdk/types/tree_head.go:19.51,31.2 11 0
+github.com/clearcompass-ai/ortholog-sdk/types/witness_rotation.go:17.46,19.2 1 0

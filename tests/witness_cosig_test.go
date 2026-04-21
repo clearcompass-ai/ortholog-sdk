@@ -1,3 +1,32 @@
+/*
+FILE PATH:
+
+	tests/witness_cosig_test.go
+
+DESCRIPTION:
+
+	Tests for witness.VerifyTreeHead (and its resolution variant).
+	Covers the K-of-N quorum logic, error paths, BLS mock dispatch,
+	and DID-based key resolution.
+
+WAVE 2 CHANGE:
+
+	Pre-Wave-2 each CosignedTreeHead carried a head-level SchemeTag
+	and every WitnessSignature in Signatures implicitly inherited
+	that scheme. Post-Wave-2, each WitnessSignature carries its own
+	SchemeTag; the head no longer has one.
+
+	This file updates every literal to the new shape:
+	  - Every WitnessSignature now declares SchemeTag explicitly
+	  - Every CosignedTreeHead no longer carries SchemeTag
+	  - BLS-intent literals declare SchemeTag: signatures.SchemeBLS
+	  - All other literals declare SchemeTag: signatures.SchemeECDSA
+
+	The test semantics are preserved: ECDSA tests still verify ECDSA
+	signatures through the dispatcher's ECDSA path, BLS tests still
+	exercise the BLS mock verifier, and error-path tests still
+	exercise the same error conditions.
+*/
 package tests
 
 import (
@@ -17,6 +46,8 @@ import (
 
 // buildSignedHead generates totalKeys fresh ECDSA keys, signs a tree head
 // with the first sigCount of them, and returns the cosigned head + key set.
+//
+// Wave 2: per-signature SchemeTag populated on every WitnessSignature.
 func buildSignedHead(t *testing.T, treeSize uint64, sigCount, totalKeys int) (types.CosignedTreeHead, []types.WitnessPublicKey) {
 	t.Helper()
 	head := types.TreeHead{
@@ -43,13 +74,16 @@ func buildSignedHead(t *testing.T, treeSize uint64, sigCount, totalKeys int) (ty
 			if err != nil {
 				t.Fatalf("sign %d: %v", i, err)
 			}
-			sigs[i] = types.WitnessSignature{PubKeyID: id, SigBytes: sigBytes}
+			sigs[i] = types.WitnessSignature{
+				PubKeyID:  id,
+				SchemeTag: signatures.SchemeECDSA, // Wave 2: per-signature scheme
+				SigBytes:  sigBytes,
+			}
 		}
 	}
 
 	return types.CosignedTreeHead{
 		TreeHead:   head,
-		SchemeTag:  signatures.SchemeECDSA,
 		Signatures: sigs,
 	}, keys
 }
@@ -131,9 +165,11 @@ func TestWitnessCosig_EmptyWitnessSet_Error(t *testing.T) {
 
 func TestWitnessCosig_NoSignatures_Error(t *testing.T) {
 	keys := make([]types.WitnessPublicKey, 3)
+	// Wave 2: head no longer carries SchemeTag. This test exercises the
+	// "no signatures present" error path, which triggers before any
+	// per-signature scheme dispatch happens.
 	head := types.CosignedTreeHead{
 		TreeHead:   types.TreeHead{TreeSize: 100},
-		SchemeTag:  signatures.SchemeECDSA,
 		Signatures: nil,
 	}
 	_, err := witness.VerifyTreeHead(head, keys, 1, nil)
@@ -171,10 +207,14 @@ func TestWitnessCosig_ResultDetails(t *testing.T) {
 }
 
 func TestWitnessCosig_BLS_NoVerifier_Error(t *testing.T) {
+	// Wave 2: the head no longer carries SchemeTag, but the single
+	// signature declares SchemeBLS per-signature. The dispatcher
+	// recognizes BLS intent and rejects because blsVerifier is nil.
 	head := types.CosignedTreeHead{
-		TreeHead:   types.TreeHead{TreeSize: 100},
-		SchemeTag:  signatures.SchemeBLS,
-		Signatures: []types.WitnessSignature{{SigBytes: []byte("agg")}},
+		TreeHead: types.TreeHead{TreeSize: 100},
+		Signatures: []types.WitnessSignature{
+			{SchemeTag: signatures.SchemeBLS, SigBytes: []byte("agg")},
+		},
 	}
 	keys := make([]types.WitnessPublicKey, 3)
 	for i := range keys {
@@ -187,12 +227,29 @@ func TestWitnessCosig_BLS_NoVerifier_Error(t *testing.T) {
 }
 
 func TestWitnessCosig_BLS_MockVerifier_Pass(t *testing.T) {
+	// Wave 2: construct three explicit BLS-tagged WitnessSignatures
+	// rather than using `make([]WitnessSignature, 3)` which would
+	// produce zero-tag signatures that the dispatcher rejects.
+	//
+	// The mock BLSVerifier returns all-true regardless of input
+	// bytes; we just need valid scheme-tag dispatch to reach it.
+	sigs := []types.WitnessSignature{
+		{SchemeTag: signatures.SchemeBLS},
+		{SchemeTag: signatures.SchemeBLS},
+		{SchemeTag: signatures.SchemeBLS},
+	}
 	head := types.CosignedTreeHead{
 		TreeHead:   types.TreeHead{TreeSize: 100},
-		SchemeTag:  signatures.SchemeBLS,
-		Signatures: make([]types.WitnessSignature, 3),
+		Signatures: sigs,
 	}
+	// Populate matching keys so the dispatcher can map sig → key.
+	// The mock verifier doesn't care about key contents; the
+	// dispatcher only needs a PubKeyID match.
 	keys := make([]types.WitnessPublicKey, 3)
+	for i := range keys {
+		keys[i] = types.WitnessPublicKey{PublicKey: []byte("key")}
+	}
+
 	mock := &mockBLSVerifierP4{results: []bool{true, true, true}}
 	result, err := witness.VerifyTreeHead(head, keys, 3, mock)
 	if err != nil {

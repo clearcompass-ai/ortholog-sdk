@@ -9,21 +9,34 @@ Three phases:
 	ExecuteRecovery: reconstructs keys, re-encrypts artifacts, publishes
 	  succession entries
 
-Additionally: EscalateToArbitration for custody disputes where the
+Additionally: EvaluateArbitration for custody disputes where the
 incumbent exchange contests the recovery. Requires schema-declared
 supermajority (default ⌈2N/3⌉, per OverrideThresholdRule) of escrow
 nodes plus optional independent identity witness cosignature (when
 override_requires_independent_witness is true in the schema).
 
-Naming fix #1: uses ReconstructGF256 (the real Phase 1 function name),
-not "escrow.CombineShares".
+BUG-009 FIX (this revision):
 
-Naming fix #2: uses escrow.VerifyShare for per-share validation during
-collection, instead of inlining the tag check.
+	EvaluateArbitration had three independent holes in its witness
+	cosignature validation path, all of which enabled a compromised
+	escrow operator to fabricate override authorization:
 
-Wave 2: the hardcoded ⌈2N/3⌉ in EvaluateArbitration is now schema-driven
-via SchemaParams.OverrideThreshold. Default (missing field) remains
-two-thirds, preserving all pre-Wave-2 behavior.
+	  1. Deserialize error was silently tolerated — malformed witness
+	     bytes did not block OverrideAuthorized.
+
+	  2. Witness cosignature was not bound to the recovery request —
+	     any cosignature of any entry satisfied the witness requirement.
+
+	  3. Independence check was absent — a witness signed by an escrow
+	     node was accepted, defeating the independence requirement.
+
+	All three fixes land in the requiresWitness block. The fix also
+	adds ArbitrationParams.EscrowNodeSet as a new required field when
+	the schema declares OverrideRequiresIndependentWitness=true.
+
+	The EscrowApprovals loop was already semantically correct (it did
+	bind via .Equal()); this revision refactors it to use
+	IsCosignatureOf for SDK-wide consistency, but behavior is unchanged.
 
 Destination binding: every public Params struct that produces an entry
 carries a Destination field (DID of the target exchange). The lifecycle
@@ -47,6 +60,7 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
+	"github.com/clearcompass-ai/ortholog-sdk/verifier"
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -61,6 +75,7 @@ var (
 	ErrArbitrationRequired   = fmt.Errorf("lifecycle/recovery: custody dispute requires arbitration")
 	ErrInsufficientOverride  = fmt.Errorf("lifecycle/recovery: override requires schema-declared supermajority")
 	ErrMissingWitnessCosig   = fmt.Errorf("lifecycle/recovery: schema requires independent identity witness cosignature")
+	ErrMissingEscrowNodeSet  = fmt.Errorf("lifecycle/recovery: OverrideRequiresIndependentWitness requires EscrowNodeSet")
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -69,41 +84,21 @@ var (
 
 // InitiateRecoveryParams configures a recovery request.
 type InitiateRecoveryParams struct {
-	// Destination is the DID of the target exchange for the produced
-	// entry. Required. Validated by envelope.ValidateDestination.
-	Destination string
-
-	// NewExchangeDID is the DID of the exchange initiating recovery.
-	NewExchangeDID string
-
-	// HolderDID is the holder whose keys are being recovered.
-	HolderDID string
-
-	// Reason describes why recovery is needed (exchange failure, migration).
-	Reason string
-
-	// EscrowPackageCID is the CID of the holder's escrow package on CAS.
+	Destination      string
+	NewExchangeDID   string
+	HolderDID        string
+	Reason           string
 	EscrowPackageCID storage.CID
-
-	// EventTime is the entry timestamp (Unix microseconds).
-	EventTime int64
+	EventTime        int64
 }
 
 // InitiateRecoveryResult holds the recovery request entry.
 type InitiateRecoveryResult struct {
-	// RequestEntry is the commentary entry to submit to the operator.
-	RequestEntry *envelope.Entry
-
-	// RequestPayload is the parsed payload for reference.
+	RequestEntry   *envelope.Entry
 	RequestPayload map[string]any
 }
 
 // InitiateRecovery publishes a recovery request commentary entry.
-// The entry signals to escrow nodes that M-of-N share reconstruction
-// is needed. Each escrow node discovers this via monitoring (ScanFromPosition
-// or QueryByCosignatureOf) and decides whether to participate.
-//
-// Returns the entry for the caller to submit to the operator.
 func InitiateRecovery(p InitiateRecoveryParams) (*InitiateRecoveryResult, error) {
 	if err := envelope.ValidateDestination(p.Destination); err != nil {
 		return nil, fmt.Errorf("lifecycle/recovery: %w", err)
@@ -149,53 +144,22 @@ func InitiateRecovery(p InitiateRecoveryParams) (*InitiateRecoveryResult, error)
 
 // CollectSharesParams configures share collection.
 type CollectSharesParams struct {
-	// EscrowPackageCID is the CID of the escrowed package on CAS.
-	EscrowPackageCID storage.CID
-
-	// ContentStore fetches the escrow package from CAS.
-	ContentStore storage.ContentStore
-
-	// DecryptedShares are the shares decrypted by each escrow node.
-	// Each node fetches the package, decrypts their share using their
-	// private key (ECIES), and provides the plaintext share.
-	// The caller collects these off-chain or from cosignature entries.
-	DecryptedShares []escrow.Share
-
-	// RequiredThreshold is the M in M-of-N. If zero, reads from the
-	// escrow package metadata.
+	EscrowPackageCID  storage.CID
+	ContentStore      storage.ContentStore
+	DecryptedShares   []escrow.Share
 	RequiredThreshold int
 }
 
 // CollectedShares holds the validated shares ready for reconstruction.
 type CollectedShares struct {
-	// ValidShares are shares that passed VerifyShare validation.
-	ValidShares []escrow.Share
-
-	// InvalidCount is the number of shares that failed validation.
-	InvalidCount int
-
-	// InvalidReasons maps share index to validation error.
-	InvalidReasons map[int]string
-
-	// SufficientForRecovery is true when ValidShares >= RequiredThreshold.
+	ValidShares           []escrow.Share
+	InvalidCount          int
+	InvalidReasons        map[int]string
 	SufficientForRecovery bool
-
-	// Threshold is the M from M-of-N.
-	Threshold int
+	Threshold             int
 }
 
-// CollectShares validates individual shares as they arrive from escrow
-// nodes. Uses escrow.VerifyShare (naming fix #2) for per-share validation.
-//
-// The caller collects shares from escrow nodes (off-chain or via
-// cosignature entries on the log). Each share is validated:
-//  1. Field tag = 0x01 (GF(256)) — escrow.VerifyShare
-//  2. Index != 0 (reserved)
-//  3. Value length = 32 bytes
-//  4. No duplicate indices
-//
-// Invalid shares are recorded but do not block collection. Recovery
-// proceeds as soon as M valid shares are available.
+// CollectShares validates individual shares as they arrive from escrow nodes.
 func CollectShares(p CollectSharesParams) (*CollectedShares, error) {
 	result := &CollectedShares{
 		InvalidReasons: make(map[int]string),
@@ -204,14 +168,12 @@ func CollectShares(p CollectSharesParams) (*CollectedShares, error) {
 
 	seen := make(map[byte]bool)
 	for i, share := range p.DecryptedShares {
-		// Validate using escrow.VerifyShare (naming fix #2).
 		if err := escrow.VerifyShare(share); err != nil {
 			result.InvalidCount++
 			result.InvalidReasons[i] = err.Error()
 			continue
 		}
 
-		// Deduplicate by index.
 		if seen[share.Index] {
 			result.InvalidCount++
 			result.InvalidReasons[i] = fmt.Sprintf("duplicate share index %d", share.Index)
@@ -231,73 +193,26 @@ func CollectShares(p CollectSharesParams) (*CollectedShares, error) {
 
 // ExecuteRecoveryParams configures key reconstruction and re-encryption.
 type ExecuteRecoveryParams struct {
-	// Destination is the DID of the target exchange for any succession
-	// entry produced. Required. Validated by envelope.ValidateDestination.
-	Destination string
-
-	// Shares are the validated shares from CollectShares.
-	Shares []escrow.Share
-
-	// ArtifactCIDs are the CIDs of artifacts to re-encrypt under the new key.
-	// Callers re-encrypt any artifacts whose keys were derived from the
-	// reconstructed material. The list is domain-specific; the SDK treats
-	// the CIDs opaquely.
-	ArtifactCIDs []storage.CID
-
-	// ContentStore fetches and pushes artifacts during re-encryption.
-	ContentStore storage.ContentStore
-
-	// KeyStore stores new artifact keys after re-encryption.
-	KeyStore ArtifactKeyStore
-
-	// NewExchangeDID is the signer for succession entries.
+	Destination    string
+	Shares         []escrow.Share
+	ArtifactCIDs   []storage.CID
+	ContentStore   storage.ContentStore
+	KeyStore       ArtifactKeyStore
 	NewExchangeDID string
-
-	// TargetRoot is the holder's entity position for succession.
-	TargetRoot *types.LogPosition
-
-	// EventTime is the entry timestamp.
-	EventTime int64
+	TargetRoot     *types.LogPosition
+	EventTime      int64
 }
 
 // RecoveryResult holds the outcome of key reconstruction and re-encryption.
 type RecoveryResult struct {
-	// ReconstructedKeyMaterial is the raw reconstructed secret (44 bytes:
-	// 32-byte AES key + 12-byte nonce). Zeroed after re-encryption.
-	// Exposed for the caller to verify before proceeding.
-	ReconstructedKeyMaterial []byte
-
-	// ReEncryptedArtifacts maps old CID → new CID for each re-encrypted artifact.
-	ReEncryptedArtifacts map[string]storage.CID
-
-	// SuccessionEntry is the optional succession entry for the holder's entity.
-	// The caller submits this to the operator.
-	SuccessionEntry *envelope.Entry
-
-	// VendorDIDMappingRecovered is retained for backward compatibility
-	// with callers that inspected it. The SDK does not set it (domain
-	// concern); domain code may populate it after inspecting its own
-	// artifact list.
+	ReconstructedKeyMaterial  []byte
+	ReEncryptedArtifacts      map[string]storage.CID
+	SuccessionEntry           *envelope.Entry
 	VendorDIDMappingRecovered bool
 }
 
 // ExecuteRecovery reconstructs the holder's keys from escrow shares and
 // re-encrypts all artifacts under new keys.
-//
-// Naming fix #1: uses escrow.ReconstructGF256 (the real name), not
-// "escrow.CombineShares".
-//
-// Steps:
-//  1. Reconstruct key material via escrow.ReconstructGF256
-//  2. Parse the 44-byte secret into ArtifactKey (32-byte key + 12-byte nonce)
-//  3. For each artifact CID:
-//     a. Fetch ciphertext from ContentStore
-//     b. Decrypt with old key
-//     c. Re-encrypt with new key
-//     d. Push new ciphertext, store new key
-//     e. Delete old key (cryptographic erasure)
-//  4. Build succession entry for the holder's entity
-//  5. Zero reconstructed key material
 func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 	if err := envelope.ValidateDestination(p.Destination); err != nil {
 		return nil, fmt.Errorf("lifecycle/recovery: %w", err)
@@ -306,13 +221,11 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 		return nil, ErrInsufficientShares
 	}
 
-	// 1. Reconstruct key material (naming fix #1: ReconstructGF256).
 	keyMaterial, err := escrow.ReconstructGF256(p.Shares)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrReconstructionFailed, err)
 	}
 
-	// 2. Parse into ArtifactKey.
 	if len(keyMaterial) != artifact.KeySize+artifact.NonceSize {
 		return nil, fmt.Errorf("%w: reconstructed %d bytes, expected %d",
 			ErrReconstructionFailed, len(keyMaterial), artifact.KeySize+artifact.NonceSize)
@@ -326,21 +239,17 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 		ReEncryptedArtifacts:     make(map[string]storage.CID),
 	}
 
-	// 3. Re-encrypt each artifact.
 	for _, oldCID := range p.ArtifactCIDs {
 		reResult, err := ReEncryptWithGrant(ReEncryptWithGrantParams{
 			OldCID:              oldCID,
 			KeyStore:            &recoveryKeyAdapter{key: oldKey, targetCID: oldCID},
 			ContentStore:        p.ContentStore,
-			DeleteOldCiphertext: false, // Preserve old ciphertext during recovery.
+			DeleteOldCiphertext: false,
 		})
 		if err != nil {
-			// Non-fatal: some artifacts may be unreachable (CAS loss).
-			// Record the failure but continue with other artifacts.
 			continue
 		}
 
-		// Store new key in the caller's key store.
 		if p.KeyStore != nil {
 			if err := p.KeyStore.Store(reResult.NewCID, reResult.NewKey); err != nil {
 				continue
@@ -350,7 +259,6 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 		result.ReEncryptedArtifacts[oldCID.String()] = reResult.NewCID
 	}
 
-	// 4. Build succession entry.
 	if p.TargetRoot != nil && p.NewExchangeDID != "" {
 		eventTime := p.EventTime
 		if eventTime == 0 {
@@ -373,7 +281,7 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 		}
 	}
 
-	// 5. Zero reconstructed key material.
+	// Zero reconstructed key material.
 	for i := range keyMaterial {
 		keyMaterial[i] = 0
 	}
@@ -388,10 +296,20 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Custody Dispute Escalation
+// Custody Dispute Arbitration
 // ─────────────────────────────────────────────────────────────────────
 
 // ArbitrationParams configures an escrow arbitration override.
+//
+// # BUG-009 API change
+//
+// EscrowNodeSet is new in this revision. When the schema declares
+// OverrideRequiresIndependentWitness=true, this field MUST be
+// populated with the set of escrow node DIDs so that the
+// independence check can run. An empty set in that configuration
+// is rejected with ErrMissingEscrowNodeSet — a missing escrow-node
+// set would silently disable the independence check, which was the
+// pre-fix behavior.
 type ArbitrationParams struct {
 	// RecoveryRequestPos is the position of the InitiateRecovery entry.
 	RecoveryRequestPos types.LogPosition
@@ -403,52 +321,59 @@ type ArbitrationParams struct {
 	// TotalEscrowNodes is N (total escrow nodes for this holder).
 	TotalEscrowNodes int
 
+	// EscrowNodeSet is the set of escrow node DIDs for this holder.
+	// Required when SchemaParams.OverrideRequiresIndependentWitness
+	// is true. If nil/empty in that configuration,
+	// EvaluateArbitration returns ErrMissingEscrowNodeSet.
+	EscrowNodeSet map[string]bool
+
 	// WitnessCosignature is the independent identity witness cosignature.
 	// Required when the schema declares override_requires_independent_witness.
-	// Nil if not required.
 	WitnessCosignature *types.EntryWithMetadata
 
-	// SchemaParams provides the override policy. Two fields are read:
-	//   - OverrideThreshold: schema-declared supermajority rule
-	//     (default ThresholdTwoThirdsMajority = ⌈2N/3⌉)
-	//   - OverrideRequiresIndependentWitness: requires witness cosig when true
-	// Nil SchemaParams means both defaults apply.
+	// SchemaParams provides the override policy. Nil means defaults
+	// (two-thirds threshold, no witness requirement).
 	SchemaParams *types.SchemaParameters
 }
 
 // ArbitrationResult holds the outcome of arbitration evaluation.
 type ArbitrationResult struct {
-	// OverrideAuthorized is true when the supermajority is met and
-	// all required cosignatures are present.
 	OverrideAuthorized bool
-
-	// ApprovalCount is the number of valid escrow node approvals.
-	ApprovalCount int
-
-	// RequiredCount is the schema-declared supermajority (default ⌈2N/3⌉).
-	RequiredCount int
-
-	// HasWitnessCosig is true if an independent witness cosigned.
-	HasWitnessCosig bool
-
-	// Reason describes why the override was or wasn't authorized.
-	Reason string
+	ApprovalCount      int
+	RequiredCount      int
+	HasWitnessCosig    bool
+	Reason             string
 }
 
 // EvaluateArbitration checks whether an escrow arbitration override has
-// sufficient approvals. The threshold is schema-declared via
-// SchemaParams.OverrideThreshold; the SDK default (two-thirds) applies
-// when SchemaParams is nil or when the schema omits the field.
-// If the schema declares override_requires_independent_witness, an
-// additional identity witness cosignature is required.
+// sufficient approvals and a valid independent witness cosignature
+// bound to the specific recovery request.
+//
+// # BUG-009 FIXES APPLIED HERE
+//
+// Fix 1 — Deserialize error blocks authorization. Previously a
+// malformed witness cosignature was silently tolerated.
+//
+// Fix 2 — Witness cosignature bound to p.RecoveryRequestPos via
+// IsCosignatureOf. Previously any non-nil CosignatureOf satisfied.
+//
+// Fix 3 — Independence check: witness signer must not be in
+// p.EscrowNodeSet. Previously no such check existed.
+//
+// Configuration guard: if OverrideRequiresIndependentWitness=true and
+// EscrowNodeSet is empty, returns ErrMissingEscrowNodeSet. A missing
+// set in that configuration silently disables fix 3, so we fail fast
+// instead.
+//
+// The EscrowApprovals loop uses IsCosignatureOf for SDK-wide
+// consistency; this loop's binding check was already correct pre-fix,
+// so only the style changes.
 func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 	if p.TotalEscrowNodes <= 0 {
 		return nil, fmt.Errorf("lifecycle/recovery: invalid escrow node count %d", p.TotalEscrowNodes)
 	}
 
-	// Resolve schema-declared override policy. Nil SchemaParams or a
-	// zero-valued OverrideThreshold both map to ThresholdTwoThirdsMajority
-	// via the enum's zero-value semantics — no additional guards needed.
+	// Resolve schema-declared override policy.
 	var threshold types.OverrideThresholdRule
 	requiresWitness := false
 	if p.SchemaParams != nil {
@@ -457,17 +382,22 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 	}
 	required := threshold.RequiredApprovals(p.TotalEscrowNodes)
 
-	// Count unique escrow node approvals.
+	// Configuration sanity: witness requirement demands an escrow node set
+	// for the independence check. Fail fast rather than silently skipping.
+	if requiresWitness && len(p.EscrowNodeSet) == 0 {
+		return nil, ErrMissingEscrowNodeSet
+	}
+
+	// Count unique escrow node approvals. Uses IsCosignatureOf for
+	// SDK-wide consistency; behavior is unchanged from pre-fix
+	// (this loop was already binding correctly).
 	seen := make(map[string]bool)
 	for _, meta := range p.EscrowApprovals {
 		entry, err := envelope.Deserialize(meta.CanonicalBytes)
 		if err != nil {
 			continue
 		}
-		if entry.Header.CosignatureOf == nil {
-			continue
-		}
-		if !entry.Header.CosignatureOf.Equal(p.RecoveryRequestPos) {
+		if !verifier.IsCosignatureOf(entry, p.RecoveryRequestPos) {
 			continue
 		}
 		if seen[entry.Header.SignerDID] {
@@ -488,17 +418,37 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 		return result, nil
 	}
 
-	// Check witness cosignature if required.
+	// Witness cosignature checks — this is where the three BUG-009
+	// fixes land.
 	if requiresWitness {
 		if p.WitnessCosignature == nil {
 			result.Reason = "supermajority met but independent witness cosignature required"
 			return result, nil
 		}
-		// Verify the witness is NOT an escrow node (independence requirement).
+
+		// BUG-009 fix 1: deserialize error blocks authorization.
 		witnessEntry, err := envelope.Deserialize(p.WitnessCosignature.CanonicalBytes)
-		if err == nil && witnessEntry.Header.CosignatureOf != nil {
-			result.HasWitnessCosig = true
+		if err != nil {
+			result.Reason = fmt.Sprintf("witness cosignature deserialize failed: %v", err)
+			return result, nil
 		}
+
+		// BUG-009 fix 2: witness cosig must reference the recovery request.
+		// BUG-009 fix 2: witness cosig must reference the recovery request.
+		if !verifier.IsCosignatureOf(witnessEntry, p.RecoveryRequestPos) {
+			result.Reason = "witness cosignature does not reference recovery request position"
+			return result, nil
+		}
+
+		// BUG-009 fix 3: witness must be independent of escrow.
+		if p.EscrowNodeSet[witnessEntry.Header.SignerDID] {
+			result.Reason = fmt.Sprintf(
+				"witness %s is an escrow node; independence requirement violated",
+				witnessEntry.Header.SignerDID)
+			return result, nil
+		}
+
+		result.HasWitnessCosig = true
 	}
 
 	result.OverrideAuthorized = true
@@ -514,9 +464,6 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 // recoveryKeyAdapter — satisfies ArtifactKeyStore for single-key recovery
 // ─────────────────────────────────────────────────────────────────────
 
-// recoveryKeyAdapter wraps a single reconstructed key to satisfy
-// ArtifactKeyStore for ReEncryptWithGrant. Used internally during
-// ExecuteRecovery when we have the old key but not a full key store.
 type recoveryKeyAdapter struct {
 	key       artifact.ArtifactKey
 	targetCID storage.CID

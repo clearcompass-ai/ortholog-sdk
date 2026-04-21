@@ -151,8 +151,10 @@ func newTestWitness(t *testing.T) *testWitness {
 	}
 }
 
-// cosign produces an ECDSA cosignature on a tree head, using the same
-// primitive the production witness cosign path uses.
+// cosign produces a types.WitnessSignature over the given tree head
+// using the ECDSA cosignature primitive the production witness cosign
+// path uses. The returned signature declares SchemeTag: SchemeECDSA
+// so the dispatcher routes it to the ECDSA verification path.
 func (w *testWitness) cosign(t *testing.T, head types.TreeHead) types.WitnessSignature {
 	t.Helper()
 	sig, err := signatures.SignWitnessCosignature(head, w.priv)
@@ -160,8 +162,9 @@ func (w *testWitness) cosign(t *testing.T, head types.TreeHead) types.WitnessSig
 		t.Fatalf("SignWitnessCosignature: %v", err)
 	}
 	return types.WitnessSignature{
-		PubKeyID: w.publicKey.ID,
-		SigBytes: sig,
+		PubKeyID:  w.publicKey.ID,
+		SchemeTag: signatures.SchemeECDSA,
+		SigBytes:  sig,
 	}
 }
 
@@ -315,12 +318,10 @@ func buildWellFormedProof(t *testing.T) (
 
 	sourceCosigned := types.CosignedTreeHead{
 		TreeHead:   sourceHead,
-		SchemeTag:  signatures.SchemeECDSA,
 		Signatures: []types.WitnessSignature{witness.cosign(t, sourceHead)},
 	}
 	localCosigned := types.CosignedTreeHead{
 		TreeHead:   localHead,
-		SchemeTag:  signatures.SchemeECDSA,
 		Signatures: []types.WitnessSignature{witness.cosign(t, localHead)},
 	}
 
@@ -536,8 +537,7 @@ func TestVerifyCrossLogProof_RejectsForgedAnchorEntry(t *testing.T) {
 	forgedProof.AnchorEntryHash = forgedHash
 	forgedProof.AnchorEntryCanonical = forgedCanonical
 	forgedProof.LocalTreeHead = types.CosignedTreeHead{
-		TreeHead:  forgedLocalHead,
-		SchemeTag: signatures.SchemeECDSA,
+		TreeHead: forgedLocalHead,
 	}
 	forgedProof.LocalInclusion = *forgedInclusion
 

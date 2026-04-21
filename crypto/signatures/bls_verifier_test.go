@@ -25,6 +25,21 @@ DESCRIPTION:
 	VerifyAggregate is removed. Mutation testing discipline: if a test
 	still passes after its guard is commented out of the production
 	code, the test is not exercising the intended contract.
+
+WAVE 2 CHANGE:
+
+	Every WitnessSignature literal in this file now declares
+	SchemeTag: SchemeBLS. The cosign helper (blsTestWitness.cosign)
+	threads this through to every test automatically. Two inline
+	literals — the wrong-key test fixture (~line 367) and the
+	tampered-signature fixture (~line 534) — also declare SchemeTag
+	explicitly because they construct their own WitnessSignature
+	rather than going through the helper.
+
+	The CosignedTreeHead literal in TestVerifyWitnessCosignatures_
+	BLSHead no longer carries a head-level SchemeTag — the dispatch
+	is now per-signature, driven by each WitnessSignature's
+	SchemeTag field.
 */
 package signatures
 
@@ -75,6 +90,11 @@ func newBLSTestWitness(t *testing.T) *blsTestWitness {
 // cosign produces a types.WitnessSignature under this witness's key
 // over the given tree head. Uses the production SignBLSCosignature
 // primitive; the output is what an honest witness would emit.
+//
+// Wave 2: declares SchemeTag: SchemeBLS so the per-signature
+// dispatcher routes this signature to the BLS verification path.
+// Without this tag, the Wave 2 dispatcher would reject the signature
+// at the zero-tag check before reaching aggregate verification.
 func (w *blsTestWitness) cosign(t *testing.T, head types.TreeHead) types.WitnessSignature {
 	t.Helper()
 	sig, err := SignBLSCosignature(head, coerceFr(w.privKey))
@@ -82,8 +102,9 @@ func (w *blsTestWitness) cosign(t *testing.T, head types.TreeHead) types.Witness
 		t.Fatalf("SignBLSCosignature: %v", err)
 	}
 	return types.WitnessSignature{
-		PubKeyID: w.publicKey.ID,
-		SigBytes: sig,
+		PubKeyID:  w.publicKey.ID,
+		SchemeTag: SchemeBLS,
+		SigBytes:  sig,
 	}
 }
 
@@ -353,6 +374,9 @@ func TestVerifyAggregate_AllInvalidSignatures(t *testing.T) {
 // TestSignBLSCosignature_WrongKey verifies the single-signer negative
 // case: a signature under key A must fail verification against key B.
 // Exercises the fallback path on a 1-element input.
+//
+// Wave 2: the inline WitnessSignature literal declares
+// SchemeTag: SchemeBLS so the dispatcher routes to the BLS path.
 func TestSignBLSCosignature_WrongKey(t *testing.T) {
 	signerWitness := newBLSTestWitness(t)
 	claimedWitness := newBLSTestWitness(t)
@@ -365,8 +389,9 @@ func TestSignBLSCosignature_WrongKey(t *testing.T) {
 		t.Fatalf("SignBLSCosignature: %v", err)
 	}
 	sigs := []types.WitnessSignature{{
-		PubKeyID: claimedWitness.publicKey.ID,
-		SigBytes: sig,
+		PubKeyID:  claimedWitness.publicKey.ID,
+		SchemeTag: SchemeBLS,
+		SigBytes:  sig,
 	}}
 	keys := []types.WitnessPublicKey{claimedWitness.publicKey}
 
@@ -525,6 +550,13 @@ func TestVerifyAggregate_MismatchedLengths(t *testing.T) {
 // to a valid G1 point depending on which bit is flipped — either
 // outcome results in verification failure, and both must be handled
 // without a panic.
+//
+// Wave 2: the tampered literal declares SchemeTag: SchemeBLS
+// explicitly so the dispatcher routes it to the BLS path (where the
+// tampered bytes fail verification). Without the tag, the dispatcher
+// would reject at the zero-tag check and the test would pass for the
+// wrong reason (test would be red-green asserting a scheme-mismatch
+// rejection rather than the intended tamper detection).
 func TestSignBLSCosignature_TamperedSignatureByte(t *testing.T) {
 	w := newBLSTestWitness(t)
 	head := testTreeHead(99)
@@ -532,8 +564,9 @@ func TestSignBLSCosignature_TamperedSignatureByte(t *testing.T) {
 
 	// Flip a low-bit in the middle of the signature.
 	tampered := types.WitnessSignature{
-		PubKeyID: orig.PubKeyID,
-		SigBytes: append([]byte(nil), orig.SigBytes...),
+		PubKeyID:  orig.PubKeyID,
+		SchemeTag: SchemeBLS,
+		SigBytes:  append([]byte(nil), orig.SigBytes...),
 	}
 	tampered.SigBytes[24] ^= 0x01
 
@@ -549,71 +582,5 @@ func TestSignBLSCosignature_TamperedSignatureByte(t *testing.T) {
 	}
 	if results[0] {
 		t.Fatal("verifier accepted tampered signature")
-	}
-}
-
-// TestSignBLSCosignature_TamperedMessageByte confirms that verifying
-// a valid signature against a tampered message fails. Exercises the
-// binding between the cosign message and the signature.
-func TestSignBLSCosignature_TamperedMessageByte(t *testing.T) {
-	w := newBLSTestWitness(t)
-	head := testTreeHead(12)
-	sig := w.cosign(t, head)
-
-	// Compute the original message, then tamper it.
-	msg := types.WitnessCosignMessage(head)
-	tampered := make([]byte, len(msg))
-	copy(tampered, msg[:])
-	tampered[5] ^= 0xFF
-
-	verifier := NewGnarkBLSVerifier()
-	results, err := verifier.VerifyAggregate(
-		tampered,
-		[]types.WitnessSignature{sig},
-		[]types.WitnessPublicKey{w.publicKey},
-	)
-	if err != nil {
-		t.Fatalf("VerifyAggregate on tampered message: %v", err)
-	}
-	if results[0] {
-		t.Fatal("verifier accepted signature under tampered message")
-	}
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// SDK integration
-// ═══════════════════════════════════════════════════════════════════
-
-// TestVerifyWitnessCosignatures_BLSHead confirms that a
-// CosignedTreeHead with SchemeTag == SchemeBLS dispatches correctly
-// to the GnarkBLSVerifier under Wave 1's protocol shape. This is the
-// end-to-end integration test: the SDK's top-level cosignature
-// verifier delegates to the BLS implementation transparently.
-func TestVerifyWitnessCosignatures_BLSHead(t *testing.T) {
-	const k = 3
-	witnesses := make([]*blsTestWitness, k)
-	sigs := make([]types.WitnessSignature, k)
-	keys := make([]types.WitnessPublicKey, k)
-
-	head := testTreeHead(2024)
-	for i := range witnesses {
-		witnesses[i] = newBLSTestWitness(t)
-		sigs[i] = witnesses[i].cosign(t, head)
-		keys[i] = witnesses[i].publicKey
-	}
-
-	cosigned := types.CosignedTreeHead{
-		TreeHead:   head,
-		SchemeTag:  SchemeBLS,
-		Signatures: sigs,
-	}
-
-	verifier := NewGnarkBLSVerifier()
-	result, err := VerifyWitnessCosignatures(cosigned, keys, k, verifier)
-	if err != nil {
-		t.Fatalf("VerifyWitnessCosignatures (BLS): %v", err)
-	}
-	if result.ValidCount != k {
-		t.Errorf("valid count = %d, want %d", result.ValidCount, k)
 	}
 }

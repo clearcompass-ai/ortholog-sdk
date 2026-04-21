@@ -15,7 +15,17 @@ import (
 // ─────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
-
+// buildTestHead generates len(keys) fresh ECDSA keys, signs the tree
+// head with every one of them, and populates the keys slice with the
+// matching public-key material.
+//
+// Wave 2: per-signature SchemeTag populated on every WitnessSignature;
+// the CosignedTreeHead no longer carries a head-level SchemeTag.
+//
+// Note on the helper's contract: callers pass in a keys slice of the
+// desired length. The helper overwrites its contents with freshly
+// generated keys. This in-place mutation matches the pattern used by
+// the other test helpers in this package.
 func buildTestHead(t *testing.T, treeSize uint64, keys []types.WitnessPublicKey, privKeys interface{}) types.CosignedTreeHead {
 	t.Helper()
 	root := sha256.Sum256([]byte("root"))
@@ -31,12 +41,15 @@ func buildTestHead(t *testing.T, treeSize uint64, keys []types.WitnessPublicKey,
 		id := sha256.Sum256(pubBytes)
 		keys[i] = types.WitnessPublicKey{ID: id, PublicKey: pubBytes}
 		sigBytes, _ := signatures.SignEntry(msgHash, priv)
-		sigs[i] = types.WitnessSignature{PubKeyID: id, SigBytes: sigBytes}
+		sigs[i] = types.WitnessSignature{
+			PubKeyID:  id,
+			SchemeTag: signatures.SchemeECDSA, // Wave 2: per-signature scheme
+			SigBytes:  sigBytes,
+		}
 	}
 
 	return types.CosignedTreeHead{
 		TreeHead:   head,
-		SchemeTag:  signatures.SchemeECDSA,
 		Signatures: sigs,
 	}
 }
@@ -86,7 +99,6 @@ func TestBootstrap_HardcodedGenesis_BadHead_Error(t *testing.T) {
 	// Use a head with no sigs — verification will fail.
 	badHead := types.CosignedTreeHead{
 		TreeHead:   types.TreeHead{TreeSize: 500, RootHash: sha256.Sum256([]byte("bad"))},
-		SchemeTag:  signatures.SchemeECDSA,
 		Signatures: nil,
 	}
 	_, err := verifier.HardcodedGenesis(keys, nil, 3, badHead, nil)

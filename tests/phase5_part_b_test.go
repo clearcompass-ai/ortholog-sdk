@@ -7,6 +7,30 @@ Phase 5 Part B: 20 tests covering:
   - Fraud proof verification (7 tests)
 
 All tests use in-memory infrastructure. No Postgres required.
+
+BUG-016 FIX COMPATIBILITY
+─────────────────────────
+Three contest-override positive-path tests were authored against the
+pre-BUG-016 behavior, where `collectEvidenceSigners` counted any
+signer regardless of what their entry was for. After the fix, evidence
+entries must be real cosignatures of the contest.
+
+Updated tests:
+
+  - TestContest_OverriddenWithSupermajority_Unblocked
+    ev1/ev2 now carry CosignatureOf=&contestPos
+
+  - TestContest_OverrideWithWitnessCosig_Unblocked
+    ev1/ev2 now carry CosignatureOf=&contestPos
+    witnessCosig now cosigns the contest (not the pending entry)
+
+  - TestRotation_Tier3_ContestedThenOverridden
+    ev1/ev2 now carry CosignatureOf=&contestPos
+
+Semantic: "authority approving the override" means the authority
+cosigns the contest. The pre-fix tests modeled this as "authority
+signs some entry which is listed as evidence," which is the exact
+pattern the BUG-016 attack exploits.
 */
 package tests
 
@@ -64,13 +88,11 @@ func (h *pbHarness) advanceAuthorityTip(t *testing.T, entityPos, newTip types.Lo
 func TestContest_NoContest_Unblocked(t *testing.T) {
 	h := newPBHarness()
 
-	// Entity + scope.
 	entityPos := p5pos(1)
 	h.addEntity(t, entityPos, "did:example:entity")
 	scopePos := p5pos(2)
 	h.addEntityWithPayload(t, scopePos, "did:example:judge", nil)
 
-	// Pending operation (scope enforcement targeting entity).
 	pendingPos := p5pos(3)
 	pendingEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
@@ -111,7 +133,6 @@ func TestContest_Contested_Blocked(t *testing.T) {
 		Key: smt.DeriveKey(scopePos), OriginTip: scopePos, AuthorityTip: scopePos,
 	})
 
-	// Pending operation.
 	pendingPos := p5pos(3)
 	pendingEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
@@ -122,7 +143,6 @@ func TestContest_Contested_Blocked(t *testing.T) {
 	}, nil)
 	h.storeEntry(t, pendingPos, pendingEntry)
 
-	// Contest entry: CosignatureOf == pendingPos, in authority chain.
 	contestPos := p5pos(4)
 	contestEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:    testDestinationDID,
@@ -151,6 +171,14 @@ func TestContest_Contested_Blocked(t *testing.T) {
 	}
 }
 
+// TestContest_OverriddenWithSupermajority_Unblocked
+//
+// BUG-016 FIX UPDATE: evidence entries (ev1, ev2) are now real
+// cosignatures of the contest. Before the fix, they were plain
+// entries and `collectEvidenceSigners` counted them via signer
+// identity alone; this exact pattern is the BUG-016 attack vector.
+// Post-fix semantics: "authority approving the override" means
+// authority cosigns the contest being overridden.
 func TestContest_OverriddenWithSupermajority_Unblocked(t *testing.T) {
 	h := newPBHarness()
 
@@ -168,7 +196,6 @@ func TestContest_OverriddenWithSupermajority_Unblocked(t *testing.T) {
 		Key: smt.DeriveKey(scopePos), OriginTip: scopePos, AuthorityTip: scopePos,
 	})
 
-	// Pending.
 	pendingPos := p5pos(3)
 	h.storeEntry(t, pendingPos, buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
@@ -178,7 +205,6 @@ func TestContest_OverriddenWithSupermajority_Unblocked(t *testing.T) {
 		ScopePointer:  p5ptrTo(scopePos),
 	}, nil))
 
-	// Contest.
 	contestPos := p5pos(4)
 	h.storeEntry(t, contestPos, buildTestEntry(t, envelope.ControlHeader{
 		Destination:    testDestinationDID,
@@ -190,14 +216,24 @@ func TestContest_OverriddenWithSupermajority_Unblocked(t *testing.T) {
 		PriorAuthority: p5ptrTo(pendingPos),
 	}, nil))
 
-	// Evidence entries for override (distinct signers).
+	// Evidence entries: AUTHORITIES COSIGNING THE CONTEST.
+	// Under BUG-016-fixed semantics, only cosignatures of contestPos
+	// contribute to the override approval count.
 	ev1 := p5pos(5)
-	h.storeEntry(t, ev1, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a"}, nil))
+	h.storeEntry(t, ev1, buildTestEntry(t, envelope.ControlHeader{
+		Destination:   testDestinationDID,
+		SignerDID:     "did:example:a",
+		CosignatureOf: p5ptrTo(contestPos),
+	}, nil))
 	ev2 := p5pos(6)
-	h.storeEntry(t, ev2, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c"}, nil))
+	h.storeEntry(t, ev2, buildTestEntry(t, envelope.ControlHeader{
+		Destination:   testDestinationDID,
+		SignerDID:     "did:example:c",
+		CosignatureOf: p5ptrTo(contestPos),
+	}, nil))
 
-	// Override entry referencing contest in EvidencePointers.
-	// ⌈2*3/3⌉ = 2 needed. Override signer + 2 evidence = 3 distinct → passes.
+	// ⌈2*3/3⌉ = 2 required. Evidence contributes {a, c}, override's
+	// own signer contributes {b}. Union = 3 distinct. Passes.
 	overridePos := p5pos(7)
 	h.storeEntry(t, overridePos, buildTestEntry(t, envelope.ControlHeader{
 		Destination:      testDestinationDID,
@@ -258,9 +294,14 @@ func TestContest_OverrideBelowThreshold_StillBlocked(t *testing.T) {
 		CosignatureOf: p5ptrTo(pendingPos), PriorAuthority: p5ptrTo(pendingPos),
 	}, nil))
 
-	// Override with only 2 distinct signers (need 4).
+	// Only 1 evidence cosig from "c" — plus override's own signer "a"
+	// gives 2 distinct. Need 4. Stays blocked.
 	ev1 := p5pos(5)
-	h.storeEntry(t, ev1, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c"}, nil))
+	h.storeEntry(t, ev1, buildTestEntry(t, envelope.ControlHeader{
+		Destination:   testDestinationDID,
+		SignerDID:     "did:example:c",
+		CosignatureOf: p5ptrTo(contestPos),
+	}, nil))
 
 	overridePos := p5pos(6)
 	h.storeEntry(t, overridePos, buildTestEntry(t, envelope.ControlHeader{
@@ -296,7 +337,6 @@ func TestContest_OverrideWithoutRequiredWitness_Blocked(t *testing.T) {
 		Key: smt.DeriveKey(scopePos), OriginTip: scopePos, AuthorityTip: scopePos,
 	})
 
-	// Schema requiring witness cosig.
 	schemaPos := p5pos(10)
 	h.storeEntry(t, schemaPos, buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
@@ -319,11 +359,19 @@ func TestContest_OverrideWithoutRequiredWitness_Blocked(t *testing.T) {
 		CosignatureOf: p5ptrTo(pendingPos), PriorAuthority: p5ptrTo(pendingPos),
 	}, nil))
 
-	// Override with enough signers but NO witness cosig.
+	// Evidence cosigs enough for threshold, but NO witness cosig.
 	ev1 := p5pos(5)
-	h.storeEntry(t, ev1, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a"}, nil))
+	h.storeEntry(t, ev1, buildTestEntry(t, envelope.ControlHeader{
+		Destination:   testDestinationDID,
+		SignerDID:     "did:example:a",
+		CosignatureOf: p5ptrTo(contestPos),
+	}, nil))
 	ev2 := p5pos(6)
-	h.storeEntry(t, ev2, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c"}, nil))
+	h.storeEntry(t, ev2, buildTestEntry(t, envelope.ControlHeader{
+		Destination:   testDestinationDID,
+		SignerDID:     "did:example:c",
+		CosignatureOf: p5ptrTo(contestPos),
+	}, nil))
 
 	overridePos := p5pos(7)
 	h.storeEntry(t, overridePos, buildTestEntry(t, envelope.ControlHeader{
@@ -345,6 +393,13 @@ func TestContest_OverrideWithoutRequiredWitness_Blocked(t *testing.T) {
 	}
 }
 
+// TestContest_OverrideWithWitnessCosig_Unblocked
+//
+// BUG-016 FIX UPDATE: both evidence cosigs AND the witness cosig
+// now bind to the contest position. Previously ev1/ev2 were plain
+// entries (BUG-016a pattern) and witnessCosig cosigned the PENDING
+// entry rather than the CONTEST (BUG-016b pattern). Post-fix the
+// semantic is: witness attests "the contest is valid, override it."
 func TestContest_OverrideWithWitnessCosig_Unblocked(t *testing.T) {
 	h := newPBHarness()
 
@@ -382,17 +437,29 @@ func TestContest_OverrideWithWitnessCosig_Unblocked(t *testing.T) {
 		CosignatureOf: p5ptrTo(pendingPos), PriorAuthority: p5ptrTo(pendingPos),
 	}, nil))
 
-	// Evidence + independent witness cosignature.
+	// Authority cosigs of the contest (threshold = 2, provided = 2).
 	ev1 := p5pos(5)
-	h.storeEntry(t, ev1, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a"}, nil))
+	h.storeEntry(t, ev1, buildTestEntry(t, envelope.ControlHeader{
+		Destination:   testDestinationDID,
+		SignerDID:     "did:example:a",
+		CosignatureOf: p5ptrTo(contestPos),
+	}, nil))
 	ev2 := p5pos(6)
-	h.storeEntry(t, ev2, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c"}, nil))
-	// Witness cosig: signer NOT in authority set, has CosignatureOf.
+	h.storeEntry(t, ev2, buildTestEntry(t, envelope.ControlHeader{
+		Destination:   testDestinationDID,
+		SignerDID:     "did:example:c",
+		CosignatureOf: p5ptrTo(contestPos),
+	}, nil))
+
+	// Independent witness cosig: signer NOT in authority set, and
+	// the cosignature is OF THE CONTEST (not the pending entry).
+	// Under pre-BUG-016 semantics, this cosigned pendingPos and was
+	// accepted as witness evidence anyway — that was the bug.
 	witnessCosig := p5pos(8)
 	h.storeEntry(t, witnessCosig, buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:independent-witness",
-		CosignatureOf: p5ptrTo(pendingPos),
+		CosignatureOf: p5ptrTo(contestPos),
 	}, nil))
 
 	overridePos := p5pos(7)
@@ -434,14 +501,12 @@ func setupRotationHarness(t *testing.T, maturationSecs, activationDelaySecs int6
 	t.Helper()
 	h := newPBHarness()
 
-	// Schema with maturation epoch and activation delay.
 	schemaPos := p5pos(1)
 	h.addEntityWithPayload(t, schemaPos, "did:example:schema", mustJSON(map[string]any{
 		"maturation_epoch": maturationSecs,
 		"activation_delay": activationDelaySecs,
 	}))
 
-	// DID profile entity with optional next_key_hash.
 	profilePos := p5pos(2)
 	var profilePayload []byte
 	if nextKeyHash != "" {
@@ -449,7 +514,7 @@ func setupRotationHarness(t *testing.T, maturationSecs, activationDelaySecs int6
 	}
 	h.addEntityWithPayload(t, profilePos, "did:example:holder", profilePayload)
 
-	return h, schemaPos, profilePos, p5pos(0) // rotationPos set by caller
+	return h, schemaPos, profilePos, p5pos(0)
 }
 
 func TestRotation_Tier2_MaturedPrecommitment(t *testing.T) {
@@ -457,7 +522,7 @@ func TestRotation_Tier2_MaturedPrecommitment(t *testing.T) {
 
 	schemaPos := p5pos(1)
 	h.addEntityWithPayload(t, schemaPos, "did:example:schema", mustJSON(map[string]any{
-		"maturation_epoch": 1, // 1 second maturation.
+		"maturation_epoch": 1,
 	}))
 
 	keyHash := fmt.Sprintf("%x", sha256.Sum256([]byte("new-public-key-bytes")))
@@ -470,7 +535,6 @@ func TestRotation_Tier2_MaturedPrecommitment(t *testing.T) {
 	h.setLeaf(t, smt.DeriveKey(profilePos), types.SMTLeaf{
 		Key: smt.DeriveKey(profilePos), OriginTip: profilePos, AuthorityTip: profilePos,
 	})
-	// Backdate the profile entry LogTime so maturation has passed.
 	h.fetcher.entries[profilePos].LogTime = time.Now().Add(-1 * time.Hour)
 
 	rotPos := p5pos(3)
@@ -501,7 +565,7 @@ func TestRotation_Tier3_ImmaturePrecommitment(t *testing.T) {
 
 	schemaPos := p5pos(1)
 	h.addEntityWithPayload(t, schemaPos, "did:example:schema", mustJSON(map[string]any{
-		"maturation_epoch": 999999, // Very long maturation.
+		"maturation_epoch": 999999,
 		"activation_delay": 3600,
 	}))
 
@@ -543,7 +607,7 @@ func TestRotation_Tier3_NoPrecommitment(t *testing.T) {
 	}))
 
 	profilePos := p5pos(2)
-	h.addEntityWithPayload(t, profilePos, "did:example:holder", nil) // No next_key_hash.
+	h.addEntityWithPayload(t, profilePos, "did:example:holder", nil)
 
 	rotPos := p5pos(3)
 	h.storeEntry(t, rotPos, buildTestEntry(t, envelope.ControlHeader{
@@ -582,7 +646,6 @@ func TestRotation_Tier3_ContestedBlocked(t *testing.T) {
 		AuthorityPath: sameSigner(), SchemaRef: p5ptrTo(schemaPos),
 	}, nil))
 
-	// Add contest.
 	contestPos := p5pos(4)
 	h.storeEntry(t, contestPos, buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
@@ -607,6 +670,13 @@ func TestRotation_Tier3_ContestedBlocked(t *testing.T) {
 	}
 }
 
+// TestRotation_Tier3_ContestedThenOverridden
+//
+// BUG-016 FIX UPDATE: evidence entries (ev1, ev2) now cosign the
+// contest. The key rotation's authority set is "a, b, c" (via
+// scopePos), threshold is ⌈2*3/3⌉ = 2. The override gets contributions
+// from ev1=a (cosigning contest), ev2=c (cosigning contest), plus
+// override signer a = {a, c}. That's 2 distinct, meeting threshold.
 func TestRotation_Tier3_ContestedThenOverridden(t *testing.T) {
 	h := newPBHarness()
 
@@ -644,10 +714,21 @@ func TestRotation_Tier3_ContestedThenOverridden(t *testing.T) {
 		CosignatureOf: p5ptrTo(rotPos), PriorAuthority: p5ptrTo(rotPos),
 	}, nil))
 
+	// Authority cosigs of the contest (authorities a and c approve
+	// the override). Under post-BUG-016 semantics these must carry
+	// CosignatureOf = &contestPos, not be plain entries.
 	ev1 := p5pos(5)
-	h.storeEntry(t, ev1, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a"}, nil))
+	h.storeEntry(t, ev1, buildTestEntry(t, envelope.ControlHeader{
+		Destination:   testDestinationDID,
+		SignerDID:     "did:example:a",
+		CosignatureOf: p5ptrTo(contestPos),
+	}, nil))
 	ev2 := p5pos(6)
-	h.storeEntry(t, ev2, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c"}, nil))
+	h.storeEntry(t, ev2, buildTestEntry(t, envelope.ControlHeader{
+		Destination:   testDestinationDID,
+		SignerDID:     "did:example:c",
+		CosignatureOf: p5ptrTo(contestPos),
+	}, nil))
 
 	overridePos := p5pos(7)
 	h.storeEntry(t, overridePos, buildTestEntry(t, envelope.ControlHeader{
@@ -692,7 +773,6 @@ func TestRotation_MaturationBoundary(t *testing.T) {
 	baseTime := time.Now().UTC()
 	h.fetcher.entries[profilePos].LogTime = baseTime
 
-	// Rotation exactly at epoch boundary → Tier 2.
 	rotAtPos := p5pos(3)
 	h.storeEntry(t, rotAtPos, buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
@@ -706,7 +786,6 @@ func TestRotation_MaturationBoundary(t *testing.T) {
 		t.Fatal("exactly at epoch should be Tier 2")
 	}
 
-	// Rotation 1 second before epoch → Tier 3.
 	rotBeforePos := p5pos(4)
 	h.storeEntry(t, rotBeforePos, buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
@@ -725,8 +804,6 @@ func TestRotation_MaturationBoundary(t *testing.T) {
 // 3. Fraud Proofs (7 tests)
 // ═════════════════════════════════════════════════════════════════════
 
-// buildCommitmentFixture creates entries, processes them, and returns
-// the commitment + fetcher for fraud proof testing.
 func buildCommitmentFixture(t *testing.T, n int) (types.SMTDerivationCommitment, *MockFetcher) {
 	t.Helper()
 	tree := smt.NewTree(smt.NewInMemoryLeafStore(), smt.NewInMemoryNodeCache())
@@ -774,7 +851,6 @@ func TestFraud_ValidCommitment(t *testing.T) {
 func TestFraud_SingleCorruptMutation(t *testing.T) {
 	commitment, fetcher := buildCommitmentFixture(t, 3)
 
-	// Corrupt one mutation's NewOriginTip.
 	if len(commitment.Mutations) > 0 {
 		commitment.Mutations[0].NewOriginTip = p5pos(9999)
 	}
@@ -789,7 +865,6 @@ func TestFraud_SingleCorruptMutation(t *testing.T) {
 	if len(result.Proofs) < 1 {
 		t.Fatal("should have at least 1 fraud proof")
 	}
-	// Verify the proof identifies the correct leaf.
 	found := false
 	for _, p := range result.Proofs {
 		if p.ClaimedNewOriginTip.Equal(p5pos(9999)) {
@@ -804,7 +879,6 @@ func TestFraud_SingleCorruptMutation(t *testing.T) {
 func TestFraud_MultipleCorruptMutations(t *testing.T) {
 	commitment, fetcher := buildCommitmentFixture(t, 5)
 
-	// Corrupt multiple mutations.
 	for i := range commitment.Mutations {
 		if i < 2 {
 			commitment.Mutations[i].NewOriginTip = p5pos(uint64(8000 + i))
@@ -842,15 +916,12 @@ func TestFraud_EmptyCommitment_Valid(t *testing.T) {
 func TestFraud_WrongPreRoot(t *testing.T) {
 	commitment, fetcher := buildCommitmentFixture(t, 3)
 
-	// Change PriorSMTRoot → seeded tree will have different starting state.
 	commitment.PriorSMTRoot = [32]byte{0xFF}
 
 	result, err := verifier.VerifyDerivationCommitment(commitment, fetcher, nil, testLogDID)
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
-	// With wrong pre-root, the seeded state is the same (we seed from mutations'
-	// old tips, not from the root). But PostSMTRoot won't match.
 	if result.Valid {
 		t.Fatal("wrong PriorSMTRoot should cause PostSMTRoot mismatch → invalid")
 	}
@@ -859,7 +930,6 @@ func TestFraud_WrongPreRoot(t *testing.T) {
 func TestFraud_CorrectMutationsWrongPostRoot(t *testing.T) {
 	commitment, fetcher := buildCommitmentFixture(t, 3)
 
-	// Keep mutations correct but corrupt PostSMTRoot.
 	commitment.PostSMTRoot = [32]byte{0xAA}
 
 	result, err := verifier.VerifyDerivationCommitment(commitment, fetcher, nil, testLogDID)
@@ -874,12 +944,11 @@ func TestFraud_CorrectMutationsWrongPostRoot(t *testing.T) {
 func TestFraud_CommitmentClaimsExtraMutation(t *testing.T) {
 	commitment, fetcher := buildCommitmentFixture(t, 3)
 
-	// Add a phantom mutation that the replay won't produce.
 	phantom := types.LeafMutation{
 		LeafKey:         smt.DeriveKey(p5pos(777)),
-		OldOriginTip:    types.LogPosition{}, // null — "new leaf" claim
+		OldOriginTip:    types.LogPosition{},
 		NewOriginTip:    p5pos(778),
-		OldAuthorityTip: types.LogPosition{}, // null — "new leaf" claim
+		OldAuthorityTip: types.LogPosition{},
 		NewAuthorityTip: p5pos(778),
 	}
 	commitment.Mutations = append(commitment.Mutations, phantom)
@@ -892,7 +961,6 @@ func TestFraud_CommitmentClaimsExtraMutation(t *testing.T) {
 	if result.Valid {
 		t.Fatal("phantom mutation should be detected as fraud")
 	}
-	// Should have a proof for the phantom leaf.
 	found := false
 	for _, p := range result.Proofs {
 		if p.LeafKey == smt.DeriveKey(p5pos(777)) {

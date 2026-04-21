@@ -4,14 +4,30 @@ for a pending operation have been met. Used by monitoring services to
 determine when an activation entry should be published.
 
 Four conditions checked (all from SchemaParameters):
-  1. Activation delay elapsed: LogTime + ActivationDelay ≤ now
-  2. Cosignature threshold met: count of valid cosignatures ≥ CosignatureThreshold
-  3. Maturation epoch passed: LogTime + MaturationEpoch ≤ now (for key rotation)
-  4. Credential validity period not expired: LogTime + CredentialValidityPeriod > now
+ 1. Activation delay elapsed: LogTime + ActivationDelay ≤ now
+ 2. Cosignature threshold met: count of valid cosignatures ≥ CosignatureThreshold
+ 3. Maturation epoch passed: LogTime + MaturationEpoch ≤ now (for key rotation)
+ 4. Credential validity period not expired: LogTime + CredentialValidityPeriod > now
 
 Two entry points:
-  EvaluateConditions: full evaluation given a pending position + cosignatures
-  CheckActivationReady: quick boolean check for monitoring loops
+
+	EvaluateConditions: full evaluation given a pending position + cosignatures
+	CheckActivationReady: quick boolean check for monitoring loops
+
+BUG-015 FIX (this revision):
+
+	countValidCosignatures now routes cosignature-to-position binding
+	through verifier.IsCosignatureOf rather than the raw
+	`CosignatureOf != nil` check it previously used. The raw check
+	admitted any cosignature as approval regardless of what it was for,
+	enabling an attacker to replay cosignatures of unrelated approvals
+	as satisfaction of this operation's CosignatureThreshold.
+
+	Signature change: countValidCosignatures and evaluateCosignatureThreshold
+	now accept the pending position explicitly as a parameter, because
+	*envelope.Entry (the deserialized form) does not carry position —
+	position lives on EntryWithMetadata. The caller (EvaluateConditions)
+	already has p.PendingPos and threads it through.
 
 Consumed by:
   - judicial-network/monitoring/sealing_compliance.go → EvaluateConditions
@@ -49,10 +65,10 @@ const (
 
 // ConditionDetail describes one evaluated condition.
 type ConditionDetail struct {
-	Name    string
-	State   ConditionState
-	Reason  string
-	MetAt   *time.Time // When the condition was or will be met. Nil if N/A.
+	Name   string
+	State  ConditionState
+	Reason string
+	MetAt  *time.Time // When the condition was or will be met. Nil if N/A.
 }
 
 // ConditionResult holds the full evaluation of all conditions for a
@@ -155,8 +171,10 @@ func EvaluateConditions(p EvaluateConditionsParams) (*ConditionResult, error) {
 	result.Conditions = append(result.Conditions, evaluateActivationDelay(params, entryTime, p.Now))
 
 	// Condition 2: Cosignature threshold.
-	cosigDetail := evaluateCosignatureThreshold(params, p.Cosignatures, pendingEntry)
-	result.CosignatureCount = countValidCosignatures(p.Cosignatures, pendingEntry)
+	// BUG-015 fix: pass p.PendingPos explicitly so countValidCosignatures
+	// can bind each cosignature to the correct position.
+	cosigDetail := evaluateCosignatureThreshold(params, p.Cosignatures, pendingEntry, p.PendingPos)
+	result.CosignatureCount = countValidCosignatures(p.Cosignatures, pendingEntry, p.PendingPos)
 	result.Conditions = append(result.Conditions, cosigDetail)
 
 	// Condition 3: Maturation epoch.
@@ -167,16 +185,9 @@ func EvaluateConditions(p EvaluateConditionsParams) (*ConditionResult, error) {
 
 	// 4. Compute aggregate.
 	result.AllMet = true
-	var earliest *time.Time
 	for _, c := range result.Conditions {
 		if c.State == ConditionPending || c.State == ConditionFailed {
 			result.AllMet = false
-		}
-		if c.State == ConditionPending && c.MetAt != nil {
-			if earliest == nil || c.MetAt.Before(*earliest) {
-				t := *c.MetAt
-				earliest = &t
-			}
 		}
 	}
 	// EarliestActivation is the LATEST of all pending "MetAt" times
@@ -242,7 +253,17 @@ func evaluateActivationDelay(params *types.SchemaParameters, entryTime time.Time
 	}
 }
 
-func evaluateCosignatureThreshold(params *types.SchemaParameters, cosignatures []types.EntryWithMetadata, pendingEntry *envelope.Entry) ConditionDetail {
+// evaluateCosignatureThreshold counts valid cosignatures and reports
+// whether the schema's CosignatureThreshold is satisfied.
+//
+// BUG-015 fix: accepts pendingPos explicitly so the underlying count
+// binds each cosignature to the pending operation's position.
+func evaluateCosignatureThreshold(
+	params *types.SchemaParameters,
+	cosignatures []types.EntryWithMetadata,
+	pendingEntry *envelope.Entry,
+	pendingPos types.LogPosition,
+) ConditionDetail {
 	if params == nil || params.CosignatureThreshold <= 0 {
 		return ConditionDetail{
 			Name:   "cosignature_threshold",
@@ -251,7 +272,7 @@ func evaluateCosignatureThreshold(params *types.SchemaParameters, cosignatures [
 		}
 	}
 
-	validCount := countValidCosignatures(cosignatures, pendingEntry)
+	validCount := countValidCosignatures(cosignatures, pendingEntry, pendingPos)
 	threshold := params.CosignatureThreshold
 
 	if validCount >= threshold {
@@ -323,9 +344,29 @@ func evaluateCredentialValidity(params *types.SchemaParameters, entryTime time.T
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
-// countValidCosignatures counts cosignature entries whose CosignatureOf
-// matches the pending entry's position. Each unique signer counts once.
-func countValidCosignatures(cosignatures []types.EntryWithMetadata, pendingEntry *envelope.Entry) int {
+// countValidCosignatures counts cosignature entries bound to the pending
+// operation's position. Each unique signer counts once. The pending
+// entry's own signer is excluded (self-cosignature is not approval).
+//
+// # BUG-015 FIX
+//
+// Previously this function checked only `CosignatureOf != nil`, which
+// admitted any cosignature regardless of what it referenced. An
+// attacker could satisfy CosignatureThreshold by replaying cosignatures
+// from unrelated approvals.
+//
+// The fix routes the binding check through verifier.IsCosignatureOf,
+// which requires the cosignature to explicitly reference pendingPos.
+//
+// The pendingPos parameter is passed explicitly by the caller because
+// *envelope.Entry does not carry position — position lives on the
+// EntryWithMetadata wrapper. EvaluateConditions has p.PendingPos on
+// hand and threads it through.
+func countValidCosignatures(
+	cosignatures []types.EntryWithMetadata,
+	pendingEntry *envelope.Entry,
+	pendingPos types.LogPosition,
+) int {
 	seen := make(map[string]bool)
 	count := 0
 	for _, meta := range cosignatures {
@@ -333,9 +374,12 @@ func countValidCosignatures(cosignatures []types.EntryWithMetadata, pendingEntry
 		if err != nil {
 			continue
 		}
-		if entry.Header.CosignatureOf == nil {
+		// BUG-015 fix: bind the cosignature to the pending position.
+		// Previously this was a raw `CosignatureOf != nil` check.
+		if !IsCosignatureOf(entry, pendingPos) {
 			continue
 		}
+
 		// Exclude self-cosignature (signer cosigning their own entry).
 		if entry.Header.SignerDID == pendingEntry.Header.SignerDID {
 			continue

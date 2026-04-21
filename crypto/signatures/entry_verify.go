@@ -331,3 +331,32 @@ func SignEntry(hash [32]byte, privkey *ecdsa.PrivateKey) ([]byte, error) {
 	copy(out[64-len(sBytes):64], sBytes)
 	return out, nil
 }
+
+// -------------------------------------------------------------------------------------------------
+// 8) PrivKeyFromBytes — construct secp256k1 *ecdsa.PrivateKey from 32-byte scalar
+// -------------------------------------------------------------------------------------------------
+
+// PrivKeyFromBytes constructs an *ecdsa.PrivateKey on the secp256k1 curve
+// from a 32-byte big-endian scalar.
+//
+// Validates:
+//   - Length is exactly 32 bytes.
+//   - Scalar is in range [1, n-1] where n is the curve order.
+//
+// The returned key is compatible with SignEntry, the stdlib ecdsa.Sign,
+// and any other code expecting an *ecdsa.PrivateKey on a registered
+// elliptic.Curve.
+//
+// Callers who have a key in a different wire format (DER, PEM, hex
+// string) should convert to raw 32 bytes first. This keeps the SDK
+// focused on one encoding.
+func PrivKeyFromBytes(scalar []byte) (*ecdsa.PrivateKey, error) {
+	if len(scalar) != 32 {
+		return nil, fmt.Errorf("signatures: secp256k1 private key must be 32 bytes, got %d", len(scalar))
+	}
+	priv := secp256k1.PrivKeyFromBytes(scalar)
+	if priv == nil {
+		return nil, errors.New("signatures: invalid secp256k1 scalar")
+	}
+	return priv.ToECDSA(), nil
+}

@@ -119,7 +119,7 @@
 				
 				<option value="file31">github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/blind_routing.go (75.0%)</option>
 				
-				<option value="file32">github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/ecies.go (78.5%)</option>
+				<option value="file32">github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/ecies.go (74.7%)</option>
 				
 				<option value="file33">github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/share_format.go (70.0%)</option>
 				
@@ -5433,9 +5433,9 @@ func (t *Tree) GenerateBatchProof(keys [][32]byte) (*types.BatchProof, error) <s
         for nk, hash := range allSiblings </span><span class="cov7" title="120">{
                 nodes = append(nodes, types.ProofNode{Depth: nk.Depth, Position: nk.Position, Hash: hash})
         }</span>
-        <span class="cov2" title="3">sort.Slice(nodes, func(i, j int) bool </span><span class="cov10" title="559">{
-                if nodes[i].Depth != nodes[j].Depth </span><span class="cov9" title="313">{ return nodes[i].Depth &lt; nodes[j].Depth }</span>
-                <span class="cov8" title="246">return nodes[i].Position &lt; nodes[j].Position</span>
+        <span class="cov2" title="3">sort.Slice(nodes, func(i, j int) bool </span><span class="cov10" title="582">{
+                if nodes[i].Depth != nodes[j].Depth </span><span class="cov9" title="342">{ return nodes[i].Depth &lt; nodes[j].Depth }</span>
+                <span class="cov8" title="240">return nodes[i].Position &lt; nodes[j].Position</span>
         })
         <span class="cov2" title="3">return &amp;types.BatchProof{SMTNodes: nodes, Entries: entries}, nil</span>
 }
@@ -7766,7 +7766,7 @@ func hashToPoint(input []byte) (*big.Int, *big.Int) <span class="cov4" title="7"
         exp := new(big.Int).Add(p, big.NewInt(1))
         exp.Rsh(exp, 2) // (p+1)/4
 
-        for counter := uint32(0); ; counter++ </span><span class="cov5" title="14">{
+        for counter := uint32(0); ; counter++ </span><span class="cov4" title="11">{
                 // Hash input with counter
                 h := sha256.New()
                 h.Write([]byte("ortholog-pre-h2c"))
@@ -7798,7 +7798,7 @@ func hashToPoint(input []byte) (*big.Int, *big.Int) <span class="cov4" title="7"
 
                 if yCheck.Cmp(ySquared) == 0 </span><span class="cov4" title="7">{
                         // Valid point. Use even y (canonical).
-                        if y.Bit(0) == 1 </span><span class="cov3" title="5">{
+                        if y.Bit(0) == 1 </span><span class="cov1" title="1">{
                                 y.Sub(p, y)
                         }</span>
                         // Verify on curve
@@ -7807,7 +7807,7 @@ func hashToPoint(input []byte) (*big.Int, *big.Int) <span class="cov4" title="7"
                         }</span>
                 }
                 // Not a valid point, try next counter
-                <span class="cov4" title="7">if counter &gt; 1000 </span><span class="cov0" title="0">{
+                <span class="cov3" title="4">if counter &gt; 1000 </span><span class="cov0" title="0">{
                         // Should never happen — roughly half of x values yield valid points
                         panic("hashToPoint: exceeded 1000 iterations")</span>
                 }
@@ -7850,10 +7850,10 @@ func hashToScalar(x, y *big.Int, n *big.Int) *big.Int <span class="cov5" title="
 // padBigInt pads a big.Int to exactly 32 bytes (secp256k1 scalar width).
 func padBigInt(b *big.Int) []byte <span class="cov9" title="261">{
         buf := b.Bytes()
-        if len(buf) &gt;= 32 </span><span class="cov9" title="247">{
+        if len(buf) &gt;= 32 </span><span class="cov9" title="248">{
                 return buf[len(buf)-32:]
         }</span>
-        <span class="cov5" title="14">padded := make([]byte, 32)
+        <span class="cov4" title="13">padded := make([]byte, 32)
         copy(padded[32-len(buf):], buf)
         return padded</span>
 }
@@ -7952,7 +7952,7 @@ func gf256Mul(a, b byte) byte <span class="cov8" title="44772">{
         for b &gt; 0 </span><span class="cov10" title="189216">{
                 if b&amp;1 != 0 </span><span class="cov9" title="117336">{ result ^= a }</span>
                 <span class="cov10" title="189216">carry := a &amp; 0x80; a &lt;&lt;= 1
-                if carry != 0 </span><span class="cov9" title="79280">{ a ^= 0x1B }</span>
+                if carry != 0 </span><span class="cov9" title="79276">{ a ^= 0x1B }</span>
                 <span class="cov10" title="189216">b &gt;&gt;= 1</span>
         }
         <span class="cov8" title="44772">return result</span>
@@ -8189,10 +8189,10 @@ func padScalar(b *big.Int) []byte <span class="cov8" title="30">{
 // than a correctly padded implementation (SEC 1 v2 §4.1 field element encoding).
 func padCoord(c *big.Int) []byte <span class="cov10" title="60">{
         buf := c.Bytes()
-        if len(buf) &gt;= 32 </span><span class="cov9" title="57">{
+        if len(buf) &gt;= 32 </span><span class="cov10" title="60">{
                 return buf[:32]
         }</span>
-        <span class="cov3" title="3">padded := make([]byte, 32)
+        <span class="cov0" title="0">padded := make([]byte, 32)
         copy(padded[32-len(buf):], buf)
         return padded</span>
 }
@@ -8884,7 +8884,7 @@ func SignEntry(hash [32]byte, privkey *ecdsa.PrivateKey) ([]byte, error) <span c
         // Normalize S to the low half of the curve order.
         <span class="cov8" title="100">curveOrder := privkey.Curve.Params().N
         halfOrder := new(big.Int).Rsh(curveOrder, 1)
-        if s.Cmp(halfOrder) &gt; 0 </span><span class="cov7" title="57">{
+        if s.Cmp(halfOrder) &gt; 0 </span><span class="cov7" title="48">{
                 s = new(big.Int).Sub(curveOrder, s)
         }</span>
 
@@ -8994,13 +8994,13 @@ const EthereumSignatureLen = 65
 // NOTE: This is NOT SHA3-256. Ethereum uses the pre-standardization Keccak
 // variant. Using sha3.New256() instead would produce different hashes and
 // break signature verification.
-func Keccak256(data ...[]byte) [32]byte <span class="cov9" title="2976">{
+func Keccak256(data ...[]byte) [32]byte <span class="cov9" title="2968">{
         h := sha3.NewLegacyKeccak256()
-        for _, d := range data </span><span class="cov10" title="6215">{
+        for _, d := range data </span><span class="cov10" title="6207">{
                 // sha3.Hash.Write never returns an error per the stdlib contract.
                 _, _ = h.Write(d)
         }</span>
-        <span class="cov9" title="2976">var out [32]byte
+        <span class="cov9" title="2968">var out [32]byte
         copy(out[:], h.Sum(nil))
         return out</span>
 }
@@ -9021,7 +9021,7 @@ func RecoverSecp256k1(digest [32]byte, sig []byte) ([]byte, error) <span class="
         }</span>
 
         <span class="cov8" title="1064">v := sig[64]
-        if v &gt;= 27 </span><span class="cov8" title="1057">{
+        if v &gt;= 27 </span><span class="cov8" title="1056">{
                 v -= 27
         }</span>
         <span class="cov8" title="1064">if v &gt; 1 </span><span class="cov4" title="20">{
@@ -9037,11 +9037,11 @@ func RecoverSecp256k1(digest [32]byte, sig []byte) ([]byte, error) <span class="
         copy(compact[33:65], sig[32:64])
 
         pub, _, err := decredecdsa.RecoverCompact(compact, digest[:])
-        if err != nil </span><span class="cov6" title="247">{
+        if err != nil </span><span class="cov6" title="255">{
                 return nil, fmt.Errorf("signatures/ethereum: recover: %w", err)
         }</span>
 
-        <span class="cov7" title="797">return pub.SerializeUncompressed(), nil</span>
+        <span class="cov7" title="789">return pub.SerializeUncompressed(), nil</span>
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -9054,12 +9054,12 @@ func RecoverSecp256k1(digest [32]byte, sig []byte) ([]byte, error) <span class="
 //
 // Input MUST be 65 bytes with a 0x04 prefix byte. Any other format is
 // rejected with ErrInvalidUncompressedPubkey.
-func AddressFromPubkey(pub []byte) ([EthereumAddressLen]byte, error) <span class="cov7" title="808">{
+func AddressFromPubkey(pub []byte) ([EthereumAddressLen]byte, error) <span class="cov7" title="800">{
         var out [EthereumAddressLen]byte
         if len(pub) != UncompressedPubkeyLen || pub[0] != 0x04 </span><span class="cov0" title="0">{
                 return out, ErrInvalidUncompressedPubkey
         }</span>
-        <span class="cov7" title="808">h := Keccak256(pub[1:])
+        <span class="cov7" title="800">h := Keccak256(pub[1:])
         copy(out[:], h[12:])
         return out, nil</span>
 }
@@ -9213,14 +9213,14 @@ func VerifySecp256k1EIP712(expected [EthereumAddressLen]byte, canonicalHash [32]
 // the three did:pkh verifiers above.
 func recoverAndCompare(expected [EthereumAddressLen]byte, digest [32]byte, sig []byte) error <span class="cov10" title="1067">{
         pub, err := RecoverSecp256k1(digest, sig)
-        if err != nil </span><span class="cov8" title="270">{
+        if err != nil </span><span class="cov8" title="278">{
                 return err
         }</span>
-        <span class="cov9" title="797">addr, err := AddressFromPubkey(pub)
+        <span class="cov9" title="789">addr, err := AddressFromPubkey(pub)
         if err != nil </span><span class="cov0" title="0">{
                 return err
         }</span>
-        <span class="cov9" title="797">if addr != expected </span><span class="cov9" title="779">{
+        <span class="cov9" title="789">if addr != expected </span><span class="cov9" title="771">{
                 return fmt.Errorf("%w: expected 0x%x, got 0x%x", ErrAddressMismatch, expected, addr)
         }</span>
         <span class="cov4" title="18">return nil</span>

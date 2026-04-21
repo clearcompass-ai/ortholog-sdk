@@ -2,30 +2,18 @@
 #
 # audit.sh — evidence-based coverage audit of the ortholog-sdk
 #
-# Produces:
-#   coverage/
-#     coverage.html              ← clickable HTML coverage map
-#     raw/
-#       merged.cov               ← unified coverage profile
-#       tests-driving.cov        ← tests/ driving all production packages
-#       self-*.cov               ← per-package self-tests
-#     report/
-#       summary.md               ← START HERE (human-readable overview)
-#       per-function.txt         ← every function with coverage %
-#       untested-functions.txt   ← all 0% functions
-#       per-package.tsv          ← package-level roll-up by lines
-#       call-site-audit.txt      ← for each 0% function: how many callers
-#       gaps-by-priority.md      ← ranked gap list (LOC × callers)
+# Wave 1b fix: LOC counter was returning 1 for every function because
+# paths in untested-functions.txt include the module prefix
+# (e.g. "github.com/clearcompass-ai/ortholog-sdk/core/smt/tree.go")
+# which is not a valid filesystem path. The fix strips the module
+# prefix so the relative path (e.g. "core/smt/tree.go") resolves
+# correctly via open().
 #
-# USAGE:
-#   cd ~/workspace/ortholog-sdk
-#   bash audit.sh
+# The fix also adds a self-check: if the LOC counter emits mostly 1s,
+# the script warns that the counter may still be broken. This catches
+# regressions from future edits.
 
 set -eu
-
-# ---------------------------------------------------------------------
-# Setup
-# ---------------------------------------------------------------------
 
 if [ ! -f go.mod ]; then
   echo "ERROR: run from repo root (go.mod not found)" >&2
@@ -39,13 +27,10 @@ REPORT_DIR="$OUT_DIR/report"
 rm -rf "$OUT_DIR"
 mkdir -p "$RAW_DIR" "$REPORT_DIR"
 
-# Extract THIS module's path from go.mod directly. Bypasses workspace
-# weirdness where `go list -m` may return multiple modules.
 MODULE=$(awk '/^module / { print $2; exit }' go.mod)
 echo "Module: $MODULE"
 echo
 
-# Production packages for THIS module only. Filter out cmd/ and tests.
 PROD_PACKAGES=$(go list ./... 2>/dev/null \
   | grep "^$MODULE" \
   | grep -v "^$MODULE/tests$" \
@@ -53,13 +38,11 @@ PROD_PACKAGES=$(go list ./... 2>/dev/null \
   | sort)
 
 TEST_PACKAGES=$(go list ./... 2>/dev/null | grep "^$MODULE/tests$" || true)
-
 PROD_COUNT=$(printf '%s\n' "$PROD_PACKAGES" | grep -c . || echo 0)
 
 echo "=== Production packages ($PROD_COUNT) ==="
 printf '%s\n' "$PROD_PACKAGES"
 echo
-
 echo "=== Test packages ==="
 printf '%s\n' "$TEST_PACKAGES"
 echo
@@ -96,7 +79,6 @@ echo
 echo "=== Method (b): tests/ driving all production packages ==="
 
 COVERPKG=$(printf '%s' "$PROD_PACKAGES" | tr '\n' ',' | sed 's/,$//')
-
 TESTS_DRIVING="$RAW_DIR/tests-driving.cov"
 if go test -count=1 -coverprofile="$TESTS_DRIVING" -covermode=atomic \
     -coverpkg="$COVERPKG" ./tests/ >/dev/null 2>&1; then
@@ -119,13 +101,10 @@ MERGED="$RAW_DIR/merged.cov"
 
 python3 - "$MERGED" $PER_PKG_FILES "$TESTS_DRIVING" <<'PY'
 import sys, os
-
 out_path = sys.argv[1]
 in_paths = sys.argv[2:]
-
 mode = None
-blocks = {}  # (loc, stmts) -> max count
-
+blocks = {}
 for p in in_paths:
     if not os.path.isfile(p) or os.path.getsize(p) == 0:
         continue
@@ -143,19 +122,16 @@ for p in in_paths:
                 continue
             loc, stmts, count = parts
             try:
-                stmts_i = int(stmts)
-                count_i = int(count)
+                stmts_i, count_i = int(stmts), int(count)
             except ValueError:
                 continue
             key = (loc, stmts_i)
             if key not in blocks or blocks[key] < count_i:
                 blocks[key] = count_i
-
 with open(out_path, 'w') as out:
     out.write((mode or 'mode: atomic') + '\n')
     for (loc, stmts), count in sorted(blocks.items()):
         out.write(f'{loc} {stmts} {count}\n')
-
 print(f'  merged: {len(blocks)} unique coverage blocks')
 PY
 echo
@@ -169,7 +145,6 @@ echo "=== Analyzing merged coverage ==="
 FUNC_REPORT="$REPORT_DIR/per-function.txt"
 if ! go tool cover -func="$MERGED" > "$FUNC_REPORT" 2>"$REPORT_DIR/cover-errors.log"; then
   echo "  ERROR: go tool cover -func failed"
-  echo "  see $REPORT_DIR/cover-errors.log"
   cat "$REPORT_DIR/cover-errors.log"
   exit 1
 fi
@@ -192,12 +167,9 @@ PER_PKG_TSV="$REPORT_DIR/per-package.tsv"
 python3 - "$MERGED" "$UNTESTED" "$PER_PKG_TSV" "$MODULE" <<'PY'
 import sys
 from collections import defaultdict
-
 merged_path, untested_path, out_path, module = sys.argv[1:5]
-
 total_stmts = defaultdict(int)
 covered_stmts = defaultdict(int)
-
 with open(merged_path) as f:
     for line in f:
         line = line.strip()
@@ -214,7 +186,6 @@ with open(merged_path) as f:
         total_stmts[pkg] += stmts
         if count > 0:
             covered_stmts[pkg] += stmts
-
 untested_by_pkg = defaultdict(int)
 with open(untested_path) as f:
     for line in f:
@@ -225,7 +196,6 @@ with open(untested_path) as f:
         dir_path = '/'.join(file_path.split('/')[:-1])
         pkg = dir_path.replace(module + '/', '') if dir_path.startswith(module) else dir_path
         untested_by_pkg[pkg] += 1
-
 rows = []
 for pkg in sorted(total_stmts):
     tot = total_stmts[pkg]
@@ -233,14 +203,11 @@ for pkg in sorted(total_stmts):
     pct = 100.0 * cov / tot if tot > 0 else 0.0
     untested = untested_by_pkg.get(pkg, 0)
     rows.append((pkg, cov, tot, pct, untested))
-
 rows.sort(key=lambda r: r[3])
-
 with open(out_path, 'w') as out:
     out.write('package\tcovered\ttotal\tpct\tuntested_fns\n')
     for pkg, cov, tot, pct, untested in rows:
         out.write(f'{pkg}\t{cov}\t{tot}\t{pct:.1f}\t{untested}\n')
-
 print()
 print('=== Per-package coverage (worst first) ===')
 print(f'{"package":<45} {"cov":>7} {"tot":>7} {"pct":>7} {"untested":>9}')
@@ -262,8 +229,7 @@ CALL_AUDIT="$REPORT_DIR/call-site-audit.txt"
   echo "# ZERO refs = dead code; non-zero = unexercised path"
   echo ""
   printf "%-60s %-32s %10s %10s %10s\n" "LOCATION" "FUNCTION" "PROD_REFS" "TEST_REFS" "TOTAL"
-  echo "────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
-
+  echo "────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
   while IFS= read -r line; do
     [ -z "$line" ] && continue
     loc=$(printf '%s' "$line" | awk '{print $1}')
@@ -279,15 +245,15 @@ echo "  wrote $CALL_AUDIT"
 echo
 
 # ---------------------------------------------------------------------
-# Priority
+# Priority — WAVE 1b FIX: strip module prefix before opening file
 # ---------------------------------------------------------------------
 
 PRIO_MD="$REPORT_DIR/gaps-by-priority.md"
-python3 - "$UNTESTED" "$CALL_AUDIT" "$PRIO_MD" <<'PY'
-import sys, re
+python3 - "$UNTESTED" "$CALL_AUDIT" "$PRIO_MD" "$MODULE" <<'PY'
+import sys, re, os
+untested_path, audit_path, out_path, module = sys.argv[1:5]
 
-untested_path, audit_path, out_path = sys.argv[1:4]
-
+# Parse call-site audit
 refs = {}
 with open(audit_path) as f:
     for line in f:
@@ -302,11 +268,36 @@ with open(audit_path) as f:
         except (ValueError, IndexError):
             pass
 
-def func_loc(file_path, func_name):
-    try:
-        lines = open(file_path).read().splitlines()
-    except FileNotFoundError:
+
+def strip_module_prefix(path, module):
+    """
+    Convert 'github.com/.../ortholog-sdk/core/smt/tree.go'
+    to      'core/smt/tree.go' so open() can find it.
+
+    This is THE Wave 1b fix. Previously, the full path was passed to
+    open() which always returned FileNotFoundError → LOC=1 for every
+    function, destroying the priority ranking.
+    """
+    prefix = module + '/'
+    if path.startswith(prefix):
+        return path[len(prefix):]
+    return path
+
+
+def func_loc(file_path, func_name, module):
+    """
+    Count lines of a Go function by finding its declaration and
+    walking to the matching closing brace. Returns 1 on any error
+    (file missing, function not found, brace imbalance).
+    """
+    real_path = strip_module_prefix(file_path, module)
+    if not os.path.isfile(real_path):
         return 1
+    try:
+        lines = open(real_path).read().splitlines()
+    except (FileNotFoundError, OSError):
+        return 1
+
     pat = re.compile(r'^\s*func\s+(\([^)]*\)\s+)?' + re.escape(func_name) + r'\b')
     start = None
     for i, line in enumerate(lines):
@@ -315,6 +306,7 @@ def func_loc(file_path, func_name):
             break
     if start is None:
         return 1
+
     depth, opened = 0, False
     for i in range(start, len(lines)):
         for ch in lines[i]:
@@ -327,6 +319,7 @@ def func_loc(file_path, func_name):
                     return i - start + 1
     return max(1, len(lines) - start)
 
+
 entries = []
 with open(untested_path) as f:
     for line in f:
@@ -335,13 +328,24 @@ with open(untested_path) as f:
             continue
         loc, fn = parts[0], parts[1]
         path = loc.split(':')[0]
-        loc_count = func_loc(path, fn)
+        loc_count = func_loc(path, fn, module)
         prod, test = refs.get(fn, (0, 0))
         priority = loc_count * (1 + prod)
-        entries.append({'path': path, 'fn': fn, 'loc': loc_count,
-                        'prod': prod, 'test': test, 'priority': priority})
+        entries.append({
+            'path': path, 'fn': fn, 'loc': loc_count,
+            'prod': prod, 'test': test, 'priority': priority,
+        })
 
 entries.sort(key=lambda e: -e['priority'])
+
+# Self-check: guard against future regressions of the LOC=1 bug.
+one_liners = sum(1 for e in entries if e['loc'] == 1)
+total = len(entries)
+if total > 0 and one_liners == total:
+    print(f'  WARNING: every function reports LOC=1 — LOC counter likely broken')
+elif total > 10 and one_liners > total * 0.9:
+    print(f'  WARNING: {one_liners}/{total} functions report LOC=1 '
+          f'(may indicate partial bug — investigate)')
 
 with open(out_path, 'w') as out:
     out.write("# Coverage Gaps — Prioritized\n\n")
@@ -349,17 +353,18 @@ with open(out_path, 'w') as out:
     out.write("| Rank | Path | Function | LOC | Prod | Test | Priority |\n")
     out.write("|-----:|------|----------|----:|-----:|-----:|---------:|\n")
     for i, e in enumerate(entries[:50], 1):
-        out.write(f"| {i} | `{e['path']}` | `{e['fn']}` | {e['loc']} | {e['prod']} | {e['test']} | {e['priority']} |\n")
+        short_path = strip_module_prefix(e['path'], module)
+        out.write(f"| {i} | `{short_path}` | `{e['fn']}` | {e['loc']} | {e['prod']} | {e['test']} | {e['priority']} |\n")
 
 print()
 print('=== Top 20 gaps by priority ===')
-print(f'{"rank":>4} {"path":<55} {"function":<32} {"LOC":>4} {"prio":>6}')
-print('─' * 110)
+print(f'{"rank":>4} {"path":<40} {"function":<32} {"LOC":>4} {"prio":>6}')
+print('─' * 95)
 for i, e in enumerate(entries[:20], 1):
-    p = e['path']
-    if len(p) > 54:
-        p = '...' + p[-51:]
-    print(f'{i:>4} {p:<55} {e["fn"]:<32} {e["loc"]:>4} {e["priority"]:>6}')
+    p = strip_module_prefix(e['path'], module)
+    if len(p) > 39:
+        p = '...' + p[-36:]
+    print(f'{i:>4} {p:<40} {e["fn"]:<32} {e["loc"]:>4} {e["priority"]:>6}')
 PY
 echo
 
@@ -393,7 +398,7 @@ SUMMARY="$REPORT_DIR/summary.md"
   echo "- \`untested-functions.txt\` — 0% list"
   echo "- \`per-package.tsv\` — package roll-up"
   echo "- \`call-site-audit.txt\` — references per 0% function"
-  echo "- \`gaps-by-priority.md\` — ranked gaps"
+  echo "- \`gaps-by-priority.md\` — ranked gaps (with real LOC)"
   echo "- \`../coverage.html\` — HTML coverage map"
 } > "$SUMMARY"
 

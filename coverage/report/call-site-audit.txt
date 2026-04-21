@@ -2,7 +2,7 @@
 # ZERO refs = dead code; non-zero = unexercised path
 
 LOCATION                                                     FUNCTION                          PROD_REFS  TEST_REFS      TOTAL
-────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 github.com/clearcompass-ai/ortholog-sdk/builder/algorithm.go:347: verifyApprovalPointers                    2          0          2
 github.com/clearcompass-ai/ortholog-sdk/builder/concurrency.go:114: AllKeys                                   2          0          2
 github.com/clearcompass-ai/ortholog-sdk/builder/concurrency.go:123: WindowSize                                2          0          2

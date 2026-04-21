@@ -215,7 +215,7 @@ github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/ecies.go:89:			DecryptFrom
 github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/ecies.go:139:			EncryptShareForNode		66.7%
 github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/ecies.go:152:			DecryptShareFromNode		100.0%
 github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/ecies.go:163:			padScalar			50.0%
-github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/ecies.go:177:			padCoord			100.0%
+github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/ecies.go:177:			padCoord			50.0%
 github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/share_format.go:22:		SerializeShare			72.7%
 github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/share_format.go:31:		DeserializeShare		66.7%
 github.com/clearcompass-ai/ortholog-sdk/crypto/escrow/verify_share.go:26:		VerifyShare			71.4%

@@ -8,7 +8,7 @@ core/smt	296	452	65.5	16
 did	341	506	67.4	17
 core/envelope	394	579	68.0	4
 builder	441	617	71.5	6
-crypto/escrow	163	203	80.3	1
+crypto/escrow	160	203	78.8	1
 log	23	28	82.1	0
 crypto/signatures	172	204	84.3	0
 verifier	597	708	84.3	0

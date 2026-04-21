@@ -1,0 +1,33 @@
+{
+  "module": "github.com/clearcompass-ai/ortholog-sdk",
+  "target_package": "github.com/clearcompass-ai/ortholog-sdk/crypto",
+  "target_rel": "crypto",
+  "functions": [
+    {
+      "name": "HashBytes",
+      "signature": "func crypto.HashBytes(data []byte) [32]byte",
+      "is_method": false,
+      "exported": true,
+      "location": {
+        "file": "/Users/anil/workspace/ortholog-sdk/crypto/hash.go",
+        "line": 20
+      },
+      "line_count": 3,
+      "doc": "HashBytes returns SHA-256 of arbitrary bytes.\n\nFor Entry canonical hashes, do NOT use this function. Use the\nTessera-aligned primitives in the envelope package:\n\n  - envelope.EntryIdentity(entry)      — dedup key (SHA-256 of canonical bytes)\n  - envelope.EntryLeafHash(entry)      — RFC 6962 Merkle leaf hash for Tessera\n  - envelope.MarshalBundleEntry(entry) — c2sp.org/tlog-tiles bundle framing\n\nMixing HashBytes with Entry canonical bytes would bypass destination-\nbinding validation and produce plain SHA-256 where RFC 6962 is required\nfor Merkle proofs. Use envelope.* for anything Entry-shaped.",
+      "callsites": null,
+      "callsite_counts": {
+        "total": 0,
+        "internal": 0,
+        "external": 0,
+        "test": 0
+      }
+    }
+  ],
+  "packages_loaded": 33,
+  "stats": {
+    "exported_funcs": 1,
+    "unexported_funcs": 0,
+    "exported_with_zero_calls": 1,
+    "possible_dead_code": 0
+  }
+}

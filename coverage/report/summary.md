@@ -18,7 +18,7 @@ core/smt           296      452    65.5   16
 did                341      506    67.4   17
 core/envelope      394      579    68.0   4
 builder            441      617    71.5   6
-crypto/escrow      163      203    80.3   1
+crypto/escrow      160      203    78.8   1
 log                23       28     82.1   0
 crypto/signatures  172      204    84.3   0
 verifier           597      708    84.3   0
@@ -36,24 +36,24 @@ Priority = function LOC × (1 + production caller count)
 
 | Rank | Path | Function | LOC | Prod | Test | Priority |
 |-----:|------|----------|----:|-----:|-----:|---------:|
-| 1 | `github.com/clearcompass-ai/ortholog-sdk/core/smt/overlay.go` | `Get` | 1 | 49 | 19 | 50 |
-| 2 | `github.com/clearcompass-ai/ortholog-sdk/core/smt/tree.go` | `Get` | 1 | 49 | 19 | 50 |
-| 3 | `github.com/clearcompass-ai/ortholog-sdk/core/envelope/serialize.go` | `NewEntry` | 1 | 41 | 10 | 42 |
-| 4 | `github.com/clearcompass-ai/ortholog-sdk/did/key_resolver.go` | `Resolve` | 1 | 38 | 39 | 39 |
-| 5 | `github.com/clearcompass-ai/ortholog-sdk/did/method_router.go` | `Resolve` | 1 | 38 | 39 | 39 |
-| 6 | `github.com/clearcompass-ai/ortholog-sdk/did/pkh.go` | `Resolve` | 1 | 38 | 39 | 39 |
-| 7 | `github.com/clearcompass-ai/ortholog-sdk/did/resolver.go` | `Resolve` | 1 | 38 | 39 | 39 |
-| 8 | `github.com/clearcompass-ai/ortholog-sdk/schema/resolver.go` | `Resolve` | 1 | 38 | 39 | 39 |
-| 9 | `github.com/clearcompass-ai/ortholog-sdk/core/envelope/serialize.go` | `wrapField` | 1 | 22 | 0 | 23 |
-| 10 | `github.com/clearcompass-ai/ortholog-sdk/core/smt/overlay.go` | `Delete` | 1 | 22 | 6 | 23 |
-| 11 | `github.com/clearcompass-ai/ortholog-sdk/core/smt/tree.go` | `Delete` | 1 | 22 | 6 | 23 |
-| 12 | `github.com/clearcompass-ai/ortholog-sdk/core/smt/overlay.go` | `Set` | 1 | 17 | 16 | 18 |
-| 13 | `github.com/clearcompass-ai/ortholog-sdk/core/smt/overlay.go` | `Count` | 1 | 17 | 0 | 18 |
-| 14 | `github.com/clearcompass-ai/ortholog-sdk/core/smt/tree.go` | `Set` | 1 | 17 | 16 | 18 |
-| 15 | `github.com/clearcompass-ai/ortholog-sdk/core/smt/overlay.go` | `Mutations` | 1 | 16 | 8 | 17 |
-| 16 | `github.com/clearcompass-ai/ortholog-sdk/did/method_router.go` | `MustRegister` | 1 | 16 | 0 | 17 |
-| 17 | `github.com/clearcompass-ai/ortholog-sdk/did/method_router.go` | `Register` | 1 | 14 | 1 | 15 |
-| 18 | `github.com/clearcompass-ai/ortholog-sdk/core/smt/overlay.go` | `SetBatch` | 1 | 13 | 0 | 14 |
+| 1 | `core/envelope/serialize.go` | `NewEntry` | 43 | 41 | 10 | 1806 |
+| 2 | `did/resolver.go` | `Resolve` | 37 | 38 | 39 | 1443 |
+| 3 | `did/pkh.go` | `Resolve` | 26 | 38 | 39 | 1014 |
+| 4 | `core/smt/overlay.go` | `Get` | 19 | 49 | 19 | 950 |
+| 5 | `did/key_resolver.go` | `Resolve` | 22 | 38 | 39 | 858 |
+| 6 | `core/smt/overlay.go` | `Count` | 41 | 17 | 0 | 738 |
+| 7 | `exchange/auth/signed_request.go` | `VerifyRequest` | 89 | 7 | 15 | 712 |
+| 8 | `schema/resolver.go` | `Resolve` | 17 | 38 | 39 | 663 |
+| 9 | `did/method_router.go` | `Resolve` | 13 | 38 | 39 | 507 |
+| 10 | `core/smt/tree.go` | `Get` | 9 | 49 | 19 | 450 |
+| 11 | `did/method_router.go` | `Register` | 15 | 14 | 1 | 225 |
+| 12 | `core/smt/tree.go` | `SetLeaves` | 48 | 3 | 0 | 192 |
+| 13 | `core/smt/overlay.go` | `SetBatch` | 12 | 13 | 0 | 168 |
+| 14 | `core/smt/overlay.go` | `Delete` | 7 | 22 | 6 | 161 |
+| 15 | `lifecycle/scope_governance.go` | `ExecuteAmendment` | 32 | 4 | 1 | 160 |
+| 16 | `core/smt/tree.go` | `SetBatch` | 11 | 13 | 0 | 154 |
+| 17 | `schema/shard_genesis.go` | `BuildShardGenesisPayload` | 24 | 5 | 0 | 144 |
+| 18 | `core/smt/tree.go` | `Delete` | 6 | 22 | 6 | 138 |
 
 ## Reports
 
@@ -61,5 +61,5 @@ Priority = function LOC × (1 + production caller count)
 - `untested-functions.txt` — 0% list
 - `per-package.tsv` — package roll-up
 - `call-site-audit.txt` — references per 0% function
-- `gaps-by-priority.md` — ranked gaps
+- `gaps-by-priority.md` — ranked gaps (with real LOC)
 - `../coverage.html` — HTML coverage map

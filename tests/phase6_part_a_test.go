@@ -42,7 +42,7 @@ func p6setLeaf(t *testing.T, store *smt.InMemoryLeafStore, p types.LogPosition) 
 
 func p6storeDelegation(t *testing.T, fetcher *MockFetcher, store *smt.InMemoryLeafStore, p types.LogPosition, signerDID, delegateDID string) {
 	t.Helper()
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     signerDID,
 		AuthorityPath: sameSigner(),
@@ -525,7 +525,7 @@ func TestAssemblePathB_ThreeDeep_Valid(t *testing.T) {
 	store := p6leafStore()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
@@ -569,7 +569,7 @@ func TestAssemblePathB_SingleHop_Valid(t *testing.T) {
 	store := p6leafStore()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
@@ -599,7 +599,7 @@ func TestAssemblePathB_ExceedsMaxDepth_Error(t *testing.T) {
 	store := p6leafStore()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
@@ -630,7 +630,7 @@ func TestAssemblePathB_CycleDetected_Error(t *testing.T) {
 	store := p6leafStore()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
@@ -659,7 +659,7 @@ func TestAssemblePathB_DeadDelegation_MarkedNotLive(t *testing.T) {
 	store := p6leafStore()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
@@ -667,7 +667,7 @@ func TestAssemblePathB_DeadDelegation_MarkedNotLive(t *testing.T) {
 	fetcher.Store(rootPos, rootEntry)
 
 	d1 := pos(10)
-	delegEntry, _ := makeEntry(t, envelope.ControlHeader{
+	delegEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
@@ -741,7 +741,7 @@ func TestValidateChainLiveness_FirstDeadLink(t *testing.T) {
 // ═════════════════════════════════════════════════════════════════════
 
 func TestClassify_RootEntity_NewLeaf(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:alice",
 		AuthorityPath: sameSigner(),
@@ -769,7 +769,7 @@ func TestClassify_Amendment_PathA(t *testing.T) {
 	fetcher := NewMockFetcher()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:alice",
 		AuthorityPath: sameSigner(),
@@ -777,7 +777,7 @@ func TestClassify_Amendment_PathA(t *testing.T) {
 	fetcher.Store(rootPos, rootEntry)
 	p6setLeaf(t, store, rootPos)
 
-	amendment, _ := makeEntry(t, envelope.ControlHeader{
+	amendment := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:alice",
 		TargetRoot:    ptrTo(rootPos),
@@ -804,7 +804,7 @@ func TestClassify_DelegatedFiling_PathB(t *testing.T) {
 	fetcher := NewMockFetcher()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
@@ -815,7 +815,7 @@ func TestClassify_DelegatedFiling_PathB(t *testing.T) {
 	delegPos := pos(10)
 	p6storeDelegation(t, fetcher, store, delegPos, "did:example:owner", "did:example:delegate")
 
-	pathBEntry, _ := makeEntry(t, envelope.ControlHeader{
+	pathBEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:        testDestinationDID,
 		SignerDID:          "did:example:delegate",
 		TargetRoot:         ptrTo(rootPos),
@@ -846,7 +846,7 @@ func TestClassify_Enforcement_PathC(t *testing.T) {
 	fetcher := NewMockFetcher()
 
 	entityPos := pos(1)
-	entityEntry, _ := makeEntry(t, envelope.ControlHeader{
+	entityEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:entity",
 		AuthorityPath: sameSigner(),
@@ -855,7 +855,7 @@ func TestClassify_Enforcement_PathC(t *testing.T) {
 	p6setLeaf(t, store, entityPos)
 
 	scopePos := pos(2)
-	scopeEntry, _ := makeEntry(t, envelope.ControlHeader{
+	scopeEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:judge",
 		AuthorityPath: sameSigner(),
@@ -864,7 +864,7 @@ func TestClassify_Enforcement_PathC(t *testing.T) {
 	fetcher.Store(scopePos, scopeEntry)
 	p6setLeaf(t, store, scopePos)
 
-	enforcement, _ := makeEntry(t, envelope.ControlHeader{
+	enforcement := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:judge",
 		TargetRoot:    ptrTo(entityPos),
@@ -888,7 +888,7 @@ func TestClassify_Enforcement_PathC(t *testing.T) {
 }
 
 func TestClassify_Commentary_ZeroImpact(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:witness",
 	}, []byte("attestation"))
@@ -912,7 +912,7 @@ func TestClassify_Commentary_ZeroImpact(t *testing.T) {
 }
 
 func TestClassify_ForeignTarget_PathD(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:alice",
 		TargetRoot:    ptrTo(foreignPos(1)),
@@ -936,7 +936,7 @@ func TestClassify_RevokedDelegation_PathD(t *testing.T) {
 	fetcher := NewMockFetcher()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
@@ -945,7 +945,7 @@ func TestClassify_RevokedDelegation_PathD(t *testing.T) {
 	p6setLeaf(t, store, rootPos)
 
 	delegPos := pos(10)
-	delegEntry, _ := makeEntry(t, envelope.ControlHeader{
+	delegEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:owner",
 		AuthorityPath: sameSigner(),
@@ -955,7 +955,7 @@ func TestClassify_RevokedDelegation_PathD(t *testing.T) {
 	key := smt.DeriveKey(delegPos)
 	store.Set(key, types.SMTLeaf{Key: key, OriginTip: pos(99), AuthorityTip: delegPos})
 
-	pathBEntry, _ := makeEntry(t, envelope.ControlHeader{
+	pathBEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:        testDestinationDID,
 		SignerDID:          "did:example:delegate",
 		TargetRoot:         ptrTo(rootPos),
@@ -980,7 +980,7 @@ func TestClassify_EvidenceCapExceeded_Error(t *testing.T) {
 	fetcher := NewMockFetcher()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:alice",
 		AuthorityPath: sameSigner(),
@@ -1025,7 +1025,7 @@ func TestClassify_SnapshotExempt_PathC(t *testing.T) {
 	fetcher := NewMockFetcher()
 
 	entityPos := pos(1)
-	entityEntry, _ := makeEntry(t, envelope.ControlHeader{
+	entityEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:entity",
 		AuthorityPath: sameSigner(),
@@ -1036,7 +1036,7 @@ func TestClassify_SnapshotExempt_PathC(t *testing.T) {
 	store.Set(key, types.SMTLeaf{Key: key, OriginTip: entityPos, AuthorityTip: enfPos})
 
 	scopePos := pos(2)
-	scopeEntry, _ := makeEntry(t, envelope.ControlHeader{
+	scopeEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:judge",
 		AuthorityPath: sameSigner(),
@@ -1049,7 +1049,7 @@ func TestClassify_SnapshotExempt_PathC(t *testing.T) {
 	for i := range pointers {
 		pointers[i] = pos(uint64(100 + i))
 	}
-	snapshot, _ := makeEntry(t, envelope.ControlHeader{
+	snapshot := buildTestEntry(t, envelope.ControlHeader{
 		Destination:      testDestinationDID,
 		SignerDID:        "did:example:judge",
 		TargetRoot:       ptrTo(entityPos),
@@ -1076,7 +1076,7 @@ func TestClassifyBatch_MixedPaths(t *testing.T) {
 	fetcher := NewMockFetcher()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:alice",
 		AuthorityPath: sameSigner(),
@@ -1084,17 +1084,17 @@ func TestClassifyBatch_MixedPaths(t *testing.T) {
 	fetcher.Store(rootPos, rootEntry)
 	p6setLeaf(t, store, rootPos)
 
-	commentary, _ := makeEntry(t, envelope.ControlHeader{
+	commentary := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:witness",
 	}, nil)
-	amendment, _ := makeEntry(t, envelope.ControlHeader{
+	amendment := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:alice",
 		TargetRoot:    ptrTo(rootPos),
 		AuthorityPath: sameSigner(),
 	}, nil)
-	foreign, _ := makeEntry(t, envelope.ControlHeader{
+	foreign := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:bob",
 		TargetRoot:    ptrTo(foreignPos(99)),

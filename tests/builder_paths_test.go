@@ -1,17 +1,18 @@
 package tests
 
 import (
+	"testing"
+
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
-	"testing"
 )
 
 func TestBuilderPathA_Basic(t *testing.T) {
 	h := newHarness()
 	rootPos := pos(1)
 	h.addRootEntity(t, rootPos, "did:example:alice")
-	amendment, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", TargetRoot: ptrTo(rootPos), AuthorityPath: sameSigner()}, []byte("amended"))
+	amendment := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", TargetRoot: ptrTo(rootPos), AuthorityPath: sameSigner()}, []byte("amended"))
 	amendPos := pos(2)
 	result := h.process(t, amendment, amendPos)
 	if result.PathACounts != 1 {
@@ -28,7 +29,7 @@ func TestBuilderPathA_WithIntermediate(t *testing.T) {
 	h.addRootEntity(t, rootPos, "did:example:alice")
 	intPos := pos(2)
 	h.addRootEntity(t, intPos, "did:example:alice")
-	act, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", TargetRoot: ptrTo(rootPos), TargetIntermediate: ptrTo(intPos), AuthorityPath: sameSigner()}, nil)
+	act := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", TargetRoot: ptrTo(rootPos), TargetIntermediate: ptrTo(intPos), AuthorityPath: sameSigner()}, nil)
 	actPos := pos(3)
 	result := h.process(t, act, actPos)
 	if result.PathACounts != 1 {
@@ -48,7 +49,7 @@ func TestBuilderPathB_Depth1(t *testing.T) {
 	h.addRootEntity(t, rootPos, "did:example:owner")
 	delegPos := pos(2)
 	h.addDelegation(t, delegPos, "did:example:owner", "did:example:delegate")
-	action, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
+	action := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
 	result := h.process(t, action, pos(3))
 	if result.PathBCounts != 1 {
 		t.Fatalf("PathB: got %d", result.PathBCounts)
@@ -63,7 +64,7 @@ func TestBuilderPathB_Depth2(t *testing.T) {
 	h.addDelegation(t, d1, "did:example:owner", "did:example:mid")
 	d2 := pos(3)
 	h.addDelegation(t, d2, "did:example:mid", "did:example:leaf")
-	action, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:leaf", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{d2, d1}}, nil)
+	action := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:leaf", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{d2, d1}}, nil)
 	if result := h.process(t, action, pos(4)); result.PathBCounts != 1 {
 		t.Fatal("depth 2 should succeed")
 	}
@@ -79,7 +80,7 @@ func TestBuilderPathB_Depth3(t *testing.T) {
 	h.addDelegation(t, d2, "did:example:a", "did:example:b")
 	d3 := pos(4)
 	h.addDelegation(t, d3, "did:example:b", "did:example:c")
-	action, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{d3, d2, d1}}, nil)
+	action := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{d3, d2, d1}}, nil)
 	if result := h.process(t, action, pos(5)); result.PathBCounts != 1 {
 		t.Fatal("depth 3 should succeed")
 	}
@@ -95,7 +96,7 @@ func TestBuilderPathB_DoesNotConnect(t *testing.T) {
 	h.addDelegation(t, d2, "did:example:a", "did:example:b")
 	d3 := pos(4)
 	h.addDelegation(t, d3, "did:example:b", "did:example:c")
-	action, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{d3, d2, d1}}, nil)
+	action := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{d3, d2, d1}}, nil)
 	result := h.process(t, action, pos(5))
 	if result.PathBCounts != 0 && result.PathDCounts == 0 && result.RejectedCounts == 0 {
 		t.Fatal("chain that doesn't connect should be Path D or rejected")
@@ -113,7 +114,7 @@ func TestBuilderPathB_LivenessRevoked(t *testing.T) {
 	updated := *leaf
 	updated.OriginTip = pos(3)
 	h.tree.SetLeaf(delegKey, updated)
-	action, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
+	action := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
 	if result := h.process(t, action, pos(4)); result.PathDCounts != 1 {
 		t.Fatal("revoked delegation should fall to Path D")
 	}
@@ -130,7 +131,7 @@ func TestBuilderPathB_LivenessAmended(t *testing.T) {
 	updated := *leaf
 	updated.OriginTip = pos(3)
 	h.tree.SetLeaf(delegKey, updated)
-	action, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
+	action := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
 	if result := h.process(t, action, pos(4)); result.PathDCounts != 1 {
 		t.Fatal("amended delegation should fall to Path D")
 	}
@@ -142,7 +143,7 @@ func TestBuilderPathB_LivenessLive(t *testing.T) {
 	h.addRootEntity(t, rootPos, "did:example:owner")
 	delegPos := pos(2)
 	h.addDelegation(t, delegPos, "did:example:owner", "did:example:delegate")
-	action, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
+	action := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:delegate", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{delegPos}}, nil)
 	if result := h.process(t, action, pos(3)); result.PathBCounts != 1 {
 		t.Fatal("live delegation should succeed")
 	}
@@ -154,7 +155,7 @@ func TestBuilderPathC_BasicEnforcement(t *testing.T) {
 	h.addRootEntity(t, entityPos, "did:example:entity")
 	scopePos := pos(2)
 	h.addScopeEntity(t, scopePos, "did:example:judge", map[string]struct{}{"did:example:judge": {}})
-	enf, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, []byte("sealing"))
+	enf := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, []byte("sealing"))
 	enfPos := pos(3)
 	result := h.process(t, enf, enfPos)
 	if result.PathCCounts != 1 {
@@ -173,7 +174,7 @@ func TestBuilderPathC_AmendmentExecution(t *testing.T) {
 	scopePos := pos(1)
 	h.addScopeEntity(t, scopePos, "did:example:auth1", map[string]struct{}{"did:example:auth1": {}, "did:example:auth2": {}})
 	newSet := map[string]struct{}{"did:example:auth1": {}, "did:example:auth2": {}, "did:example:auth3": {}}
-	amend, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:auth1", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), AuthoritySet: newSet}, nil)
+	amend := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:auth1", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), AuthoritySet: newSet}, nil)
 	amendPos := pos(2)
 	result := h.process(t, amend, amendPos)
 	if result.PathCCounts != 1 {
@@ -188,7 +189,7 @@ func TestBuilderPathC_RemovalExecution(t *testing.T) {
 	h := newHarness()
 	scopePos := pos(1)
 	h.addScopeEntity(t, scopePos, "did:example:a", map[string]struct{}{"did:example:a": {}, "did:example:b": {}})
-	removal, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+	removal := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
 	removalPos := pos(2)
 	h.process(t, removal, removalPos)
 	if tip := h.leafAuthorityTip(t, scopePos); !tip.Equal(removalPos) {
@@ -203,7 +204,7 @@ func TestBuilderPathC_RemovalActivation(t *testing.T) {
 	h := newHarness()
 	scopePos := pos(1)
 	h.addScopeEntity(t, scopePos, "did:example:a", map[string]struct{}{"did:example:a": {}, "did:example:b": {}})
-	activation, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), AuthoritySet: map[string]struct{}{"did:example:a": {}}}, nil)
+	activation := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:a", TargetRoot: ptrTo(scopePos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), AuthoritySet: map[string]struct{}{"did:example:a": {}}}, nil)
 	actPos := pos(2)
 	h.process(t, activation, actPos)
 	if tip := h.leafOriginTip(t, scopePos); !tip.Equal(actPos) {
@@ -217,7 +218,7 @@ func TestBuilderPathC_Contest(t *testing.T) {
 	h.addRootEntity(t, entityPos, "did:example:entity")
 	scopePos := pos(2)
 	h.addScopeEntity(t, scopePos, "did:example:judge", map[string]struct{}{"did:example:judge": {}})
-	contest, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
+	contest := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
 	contestPos := pos(3)
 	h.process(t, contest, contestPos)
 	if tip := h.leafAuthorityTip(t, entityPos); !tip.Equal(contestPos) {
@@ -231,7 +232,7 @@ func TestBuilderPathC_AuthoritySnapshot(t *testing.T) {
 	h.addRootEntity(t, entityPos, "did:example:entity")
 	scopePos := pos(2)
 	h.addScopeEntity(t, scopePos, "did:example:judge", map[string]struct{}{"did:example:judge": {}})
-	snap, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), EvidencePointers: []types.LogPosition{pos(10), pos(11)}}, nil)
+	snap := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), EvidencePointers: []types.LogPosition{pos(10), pos(11)}}, nil)
 	snapPos := pos(3)
 	h.process(t, snap, snapPos)
 	if tip := h.leafAuthorityTip(t, entityPos); !tip.Equal(snapPos) {
@@ -246,7 +247,7 @@ func TestBuilderPathD_NoAuthority(t *testing.T) {
 	h := newHarness()
 	rootPos := pos(1)
 	h.addRootEntity(t, rootPos, "did:example:owner")
-	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:attacker", TargetRoot: ptrTo(rootPos), AuthorityPath: sameSigner()}, nil)
+	entry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:attacker", TargetRoot: ptrTo(rootPos), AuthorityPath: sameSigner()}, nil)
 	if result := h.process(t, entry, pos(2)); result.PathDCounts != 1 {
 		t.Fatal("wrong signer should be Path D")
 	}
@@ -254,7 +255,7 @@ func TestBuilderPathD_NoAuthority(t *testing.T) {
 
 func TestBuilderPathD_Commentary(t *testing.T) {
 	h := newHarness()
-	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:witness"}, []byte("attestation"))
+	entry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:witness"}, []byte("attestation"))
 	if result := h.process(t, entry, pos(1)); result.CommentaryCounts != 1 {
 		t.Fatal("expected commentary")
 	}

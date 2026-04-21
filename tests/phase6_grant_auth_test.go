@@ -80,7 +80,7 @@ func newGrantAuthFixture(t *testing.T) *grantAuthTestFixture {
 	// This scope controls who may grant artifact access under
 	// restricted and sealed modes.
 	scopePos := pos(50)
-	scopeEntry, _ := makeEntry(t, envelope.ControlHeader{
+	scopeEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:admin",
 		AuthorityPath: sameSigner(),

@@ -71,6 +71,7 @@ KEY DEPENDENCIES:
 package tests
 
 import (
+	"crypto/sha256"
 	"errors"
 	"strings"
 	"testing"
@@ -233,8 +234,16 @@ func TestEntry_Validate_AcceptsWellFormed(t *testing.T) {
 	}, []byte("payload"))
 
 	if err != nil {
-		t.Fatalf("NewEntry: %v", err)
+		t.Fatalf("NewUnsignedEntry: %v", err)
 	}
+	// v6 requires a well-formed entry to carry at least one signature
+	// with Signatures[0].SignerDID == Header.SignerDID. Attach a dummy
+	// signature so "well-formed" has its v6 meaning.
+	entry.Signatures = []envelope.Signature{{
+		SignerDID: "did:example:signer",
+		AlgoID:    envelope.SigAlgoECDSA,
+		Bytes:     make([]byte, 64),
+	}}
 	if err := entry.Validate(); err != nil {
 		t.Fatalf("Validate on well-formed entry: %v", err)
 	}
@@ -332,10 +341,12 @@ func TestVerifyEntry_CrossDestination_Rejected(t *testing.T) {
 		t.Fatalf("NewEntry(destA): %v", err)
 	}
 
-	// Sign the canonical hash — what a legitimate signer for destA would do.
-	// EntryIdentity computes SHA-256(Serialize(entry)), matching the hash
-	// VerifierRegistry.VerifyEntry will recompute internally.
-	hash := envelope.EntryIdentity(entry)
+	// Sign the v6 signing payload hash. Under v6 signers compute
+	// sha256(SigningPayload(entry)) — the pre-signature bytes — since
+	// EntryIdentity (= sha256(Serialize(entry))) requires the signatures
+	// to already be present. This is the hash the registry recomputes
+	// from the received entry before verification.
+	hash := sha256.Sum256(envelope.SigningPayload(entry))
 	sig, err := signatures.SignEntry(hash, kp.PrivateKey)
 	if err != nil {
 		t.Fatalf("SignEntry: %v", err)
@@ -392,7 +403,8 @@ func TestVerifyEntry_SameDestination_Accepted(t *testing.T) {
 		t.Fatalf("NewEntry: %v", err)
 	}
 
-	hash := envelope.EntryIdentity(entry)
+	// Sign the v6 signing payload hash. See test #13 rationale above.
+	hash := sha256.Sum256(envelope.SigningPayload(entry))
 	sig, err := signatures.SignEntry(hash, kp.PrivateKey)
 	if err != nil {
 		t.Fatalf("SignEntry: %v", err)

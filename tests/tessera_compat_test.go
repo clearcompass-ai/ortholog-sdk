@@ -34,7 +34,7 @@ import (
 // exactly SHA-256(Serialize(entry)). This is Tessera's identityHash
 // contract and the dedup key contract simultaneously.
 func TestEntryIdentity_MatchesSHA256(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:identity",
 	}, []byte("payload"))
@@ -56,8 +56,8 @@ func TestEntryIdentity_Deterministic(t *testing.T) {
 		SignerDID:   "did:example:determinism",
 		EventTime:   1_700_000_000,
 	}
-	e1, _ := makeEntry(t, header, []byte("same"))
-	e2, _ := makeEntry(t, header, []byte("same"))
+	e1 := buildTestEntry(t, header, []byte("same"))
+	e2 := buildTestEntry(t, header, []byte("same"))
 
 	if envelope.EntryIdentity(e1) != envelope.EntryIdentity(e2) {
 		t.Fatal("EntryIdentity must be deterministic for structurally equal entries")
@@ -69,11 +69,11 @@ func TestEntryIdentity_Deterministic(t *testing.T) {
 // makes this test especially meaningful: two entries that differ ONLY in
 // Destination must have different identities.
 func TestEntryIdentity_Distinguishes(t *testing.T) {
-	e1, _ := makeEntry(t, envelope.ControlHeader{
+	e1 := buildTestEntry(t, envelope.ControlHeader{
 		Destination: "did:web:exchange-A.example",
 		SignerDID:   "did:example:signer",
 	}, []byte("payload"))
-	e2, _ := makeEntry(t, envelope.ControlHeader{
+	e2 := buildTestEntry(t, envelope.ControlHeader{
 		Destination: "did:web:exchange-B.example",
 		SignerDID:   "did:example:signer",
 	}, []byte("payload"))
@@ -91,7 +91,7 @@ func TestEntryIdentity_Distinguishes(t *testing.T) {
 // exactly SHA-256(0x00 || Serialize(entry)). This is the RFC 6962 leaf
 // hash rule, frozen by the spec since 2013.
 func TestEntryLeafHash_MatchesRFC6962(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:leafhash",
 	}, []byte("payload"))
@@ -125,7 +125,7 @@ func TestEntryLeafHash_MatchesRFC6962(t *testing.T) {
 // Any of the three is a severe bug — merkle proofs against the tree
 // head would systematically fail in subtle ways.
 func TestEntryLeafHash_DistinctFromIdentity(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:domainsep",
 	}, []byte("payload"))
@@ -140,7 +140,7 @@ func TestEntryLeafHash_DistinctFromIdentity(t *testing.T) {
 // are common in the protocol; their leaf hashes must be computed
 // consistently.
 func TestEntryLeafHash_EmptyPayload(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:empty",
 	}, nil)
@@ -174,7 +174,7 @@ func TestEntryLeafHash_EmptyPayload(t *testing.T) {
 // marshalForBundle closure produces; the SDK must match it verbatim for
 // the operator to bridge without translation.
 func TestMarshalBundleEntry_TLogTilesFraming(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:bundle",
 	}, []byte("payload-bytes"))
@@ -202,7 +202,7 @@ func TestMarshalBundleEntry_TLogTilesFraming(t *testing.T) {
 // Tessera EntryBundle readers depend on: read 2 bytes, read len bytes,
 // repeat.
 func TestMarshalBundleEntry_RoundTrip(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:roundtrip",
 	}, []byte("roundtrip-data"))
@@ -240,16 +240,16 @@ func TestMarshalBundleEntry_RoundTrip(t *testing.T) {
 func TestBundleEntries_ConcatenationMatchesPerEntry(t *testing.T) {
 	nonNil := types.LogPosition{LogDID: "did:example:log", Sequence: 42}
 
-	e1, _ := makeEntry(t, envelope.ControlHeader{
+	e1 := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:s1",
 	}, []byte("first"))
-	e2, _ := makeEntry(t, envelope.ControlHeader{
+	e2 := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:s2",
 		TargetRoot:  &nonNil,
 	}, []byte("second"))
-	e3, _ := makeEntry(t, envelope.ControlHeader{
+	e3 := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:s3",
 	}, nil)
@@ -290,7 +290,7 @@ func TestBundleEntries_Empty(t *testing.T) {
 // any one of them that caused it to re-serialize with a different field
 // order would silently corrupt operator-level consistency.
 func TestTesseraPrimitives_ShareSameSerializedData(t *testing.T) {
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:consistency",
 	}, []byte("consistency-check"))

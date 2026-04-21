@@ -2,6 +2,7 @@ package tests
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -29,14 +30,51 @@ func sameSigner() *envelope.AuthorityPath { v := envelope.AuthoritySameSigner; r
 func delegation() *envelope.AuthorityPath { v := envelope.AuthorityDelegation; return &v }
 func scopeAuth() *envelope.AuthorityPath  { v := envelope.AuthorityScopeAuthority; return &v }
 
-func makeEntry(t *testing.T, h envelope.ControlHeader, payload []byte) (*envelope.Entry, []byte) {
+// buildTestEntry constructs a fully-valid v6 entry for test purposes.
+// This is the CANONICAL test-side entry constructor. Every test that
+// builds an entry for later Store/Serialize/EntryIdentity use MUST
+// go through this helper, not envelope.NewUnsignedEntry directly.
+//
+// Why: under v6, entries MUST carry at least one signature, and
+// Signatures[0].SignerDID must equal Header.SignerDID. Raw
+// NewUnsignedEntry produces an entry that cannot be safely passed to
+// Serialize or MockFetcher.Store — it will panic. buildTestEntry
+// attaches a deterministic 64-byte zero-ECDSA signature so tests that
+// don't care about signature cryptography get a valid entry without
+// having to re-implement the invariant dance.
+//
+// Tests that DO care about signature cryptography (e.g., verification
+// tests) should:
+//
+//	entry := buildTestEntry(t, header, payload)
+//	entry.Signatures = []envelope.Signature{{ ...real signature... }}
+//	// optional: entry.Validate() to re-check after replacement
+//
+// The Validate() call at the end of this helper is a safety check:
+// if the invariant ever changes (v7, v8...) the failure surfaces
+// HERE at construction time with a clear message, not deep inside
+// envelope.Serialize's panic.
+func buildTestEntry(t *testing.T, h envelope.ControlHeader, payload []byte) *envelope.Entry {
 	t.Helper()
 	entry, err := envelope.NewUnsignedEntry(h, payload)
 	if err != nil {
-		t.Fatalf("NewEntry: %v", err)
+		t.Fatalf("buildTestEntry: NewUnsignedEntry: %v", err)
 	}
-	return entry, envelope.Serialize(entry)
+	entry.Signatures = []envelope.Signature{{
+		SignerDID: h.SignerDID,
+		AlgoID:    envelope.SigAlgoECDSA,
+		Bytes:     make([]byte, 64),
+	}}
+	if err := entry.Validate(); err != nil {
+		t.Fatalf("buildTestEntry: Validate failed — helper needs update: %v", err)
+	}
+	return entry
 }
+
+// makeEntry is the historical constructor preserved for backward
+// compatibility with tests that consume the (entry, canonical) tuple.
+// New code should prefer buildTestEntry and call envelope.Serialize
+// directly when canonical bytes are needed.
 
 type MockFetcher struct {
 	entries map[types.LogPosition]*types.EntryWithMetadata
@@ -55,6 +93,18 @@ func (f *MockFetcher) Fetch(pos types.LogPosition) (*types.EntryWithMetadata, er
 }
 
 func (f *MockFetcher) Store(p types.LogPosition, entry *envelope.Entry) {
+	// Fail at the test-helper boundary with a clear message, not deep
+	// inside envelope.Serialize. Every entry stored in the mock fetcher
+	// MUST be a valid v6 entry; anything else is a test-construction bug.
+	if err := entry.Validate(); err != nil {
+		panic(fmt.Sprintf(
+			"MockFetcher.Store: invalid entry at position %s: %v\n"+
+				"This is a test bug — the entry was constructed without "+
+				"signatures or with other invariant violations. Route test-entry "+
+				"construction through buildTestEntry (helpers_test.go) instead of "+
+				"envelope.NewUnsignedEntry.",
+			p, err))
+	}
 	f.entries[p] = &types.EntryWithMetadata{
 		CanonicalBytes: envelope.Serialize(entry),
 		LogTime:        time.Now(),
@@ -79,7 +129,7 @@ func newHarness() *testHarness {
 
 func (h *testHarness) addRootEntity(t *testing.T, p types.LogPosition, signerDID string) *envelope.Entry {
 	t.Helper()
-	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signerDID, AuthorityPath: sameSigner()}, nil)
+	entry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signerDID, AuthorityPath: sameSigner()}, nil)
 	h.fetcher.Store(p, entry)
 	key := smt.DeriveKey(p)
 	leaf := types.SMTLeaf{Key: key, OriginTip: p, AuthorityTip: p}
@@ -91,7 +141,7 @@ func (h *testHarness) addRootEntity(t *testing.T, p types.LogPosition, signerDID
 
 func (h *testHarness) addDelegation(t *testing.T, delegPos types.LogPosition, signerDID, delegateDID string) *envelope.Entry {
 	t.Helper()
-	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signerDID, AuthorityPath: sameSigner(), DelegateDID: &delegateDID}, nil)
+	entry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signerDID, AuthorityPath: sameSigner(), DelegateDID: &delegateDID}, nil)
 	h.fetcher.Store(delegPos, entry)
 	key := smt.DeriveKey(delegPos)
 	_ = h.tree.SetLeaf(key, types.SMTLeaf{Key: key, OriginTip: delegPos, AuthorityTip: delegPos})
@@ -100,7 +150,7 @@ func (h *testHarness) addDelegation(t *testing.T, delegPos types.LogPosition, si
 
 func (h *testHarness) addScopeEntity(t *testing.T, p types.LogPosition, signerDID string, authoritySet map[string]struct{}) *envelope.Entry {
 	t.Helper()
-	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signerDID, AuthorityPath: sameSigner(), AuthoritySet: authoritySet}, nil)
+	entry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signerDID, AuthorityPath: sameSigner(), AuthoritySet: authoritySet}, nil)
 	h.fetcher.Store(p, entry)
 	key := smt.DeriveKey(p)
 	_ = h.tree.SetLeaf(key, types.SMTLeaf{Key: key, OriginTip: p, AuthorityTip: p})

@@ -69,7 +69,7 @@ func TestVerifyShareSet_DuplicateIndex(t *testing.T) {
 
 func TestRetry_SucceedsFirstAttempt(t *testing.T) {
 	h := newHarness()
-	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
+	entry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
 	h.fetcher.Store(pos(1), entry)
 
 	result, err := builder.ProcessWithRetry(builder.ProcessWithRetryParams{
@@ -119,7 +119,7 @@ func TestRetry_RespectsMaxAttempts(t *testing.T) {
 	h.addScopeEntity(t, scopePos, "did:example:judge", map[string]struct{}{"did:example:judge": {}})
 
 	// Entry with wrong PriorAuthority → will be rejected every attempt.
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:    testDestinationDID,
 		SignerDID:      "did:example:judge",
 		TargetRoot:     ptrTo(rootPos),
@@ -174,29 +174,19 @@ func TestRetry_BatchConfig(t *testing.T) {
 // 3. EvaluateConditions (6 tests)
 // ═════════════════════════════════════════════════════════════════════
 
-func p6bSchemaEntry(t *testing.T, payload []byte) *envelope.Entry {
-	t.Helper()
-	e, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
-		Destination:   testDestinationDID,
-		SignerDID:     "did:example:schema-author",
-		AuthorityPath: sameSigner(),
-	}, payload)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	return e
-}
+// p6bSchemaEntry builds a Phase 6 schema entry via the canonical
+// test entry constructor. Signature attachment and v6 invariant
+// enforcement happen inside buildTestEntry.
 
 func TestConditions_AllMet(t *testing.T) {
 	fetcher := NewMockFetcher()
 	schemaPos := pos(10)
-	fetcher.Store(schemaPos, p6bSchemaEntry(t, mustJSON(map[string]any{
+	fetcher.Store(schemaPos, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:schema-author", AuthorityPath: sameSigner()}, mustJSON(map[string]any{
 		"activation_delay":      1,
 		"cosignature_threshold": 1,
 	})))
 
-	pendingEntry, _ := makeEntry(t, envelope.ControlHeader{
+	pendingEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:judge",
 		SchemaRef:   ptrTo(schemaPos),
@@ -207,7 +197,7 @@ func TestConditions_AllMet(t *testing.T) {
 	fetcher.entries[pendingPos].LogTime = time.Now().Add(-1 * time.Hour)
 
 	// One cosignature.
-	cosigEntry, _ := makeEntry(t, envelope.ControlHeader{
+	cosigEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination:   testDestinationDID,
 		SignerDID:     "did:example:clerk",
 		CosignatureOf: ptrTo(pendingPos),
@@ -239,11 +229,11 @@ func TestConditions_AllMet(t *testing.T) {
 func TestConditions_ActivationDelayPending(t *testing.T) {
 	fetcher := NewMockFetcher()
 	schemaPos := pos(10)
-	fetcher.Store(schemaPos, p6bSchemaEntry(t, mustJSON(map[string]any{
+	fetcher.Store(schemaPos, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:schema-author", AuthorityPath: sameSigner()}, mustJSON(map[string]any{
 		"activation_delay": 999999,
 	})))
 
-	pendingEntry, _ := makeEntry(t, envelope.ControlHeader{
+	pendingEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:judge",
 		SchemaRef:   ptrTo(schemaPos),
@@ -271,11 +261,11 @@ func TestConditions_ActivationDelayPending(t *testing.T) {
 func TestConditions_CosignatureThresholdNotMet(t *testing.T) {
 	fetcher := NewMockFetcher()
 	schemaPos := pos(10)
-	fetcher.Store(schemaPos, p6bSchemaEntry(t, mustJSON(map[string]any{
+	fetcher.Store(schemaPos, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:schema-author", AuthorityPath: sameSigner()}, mustJSON(map[string]any{
 		"cosignature_threshold": 3,
 	})))
 
-	pendingEntry, _ := makeEntry(t, envelope.ControlHeader{
+	pendingEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:judge",
 		SchemaRef:   ptrTo(schemaPos),
@@ -298,11 +288,11 @@ func TestConditions_CosignatureThresholdNotMet(t *testing.T) {
 func TestConditions_CredentialExpired(t *testing.T) {
 	fetcher := NewMockFetcher()
 	schemaPos := pos(10)
-	fetcher.Store(schemaPos, p6bSchemaEntry(t, mustJSON(map[string]any{
+	fetcher.Store(schemaPos, buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:schema-author", AuthorityPath: sameSigner()}, mustJSON(map[string]any{
 		"credential_validity_period": 1,
 	})))
 
-	pendingEntry, _ := makeEntry(t, envelope.ControlHeader{
+	pendingEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:issuer",
 		SchemaRef:   ptrTo(schemaPos),
@@ -324,7 +314,7 @@ func TestConditions_CredentialExpired(t *testing.T) {
 
 func TestConditions_NoSchema(t *testing.T) {
 	fetcher := NewMockFetcher()
-	pendingEntry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:actor"}, nil)
+	pendingEntry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:actor"}, nil)
 	pendingPos := pos(1)
 	fetcher.Store(pendingPos, pendingEntry)
 
@@ -340,7 +330,7 @@ func TestConditions_NoSchema(t *testing.T) {
 
 func TestConditions_CheckActivationReady(t *testing.T) {
 	fetcher := NewMockFetcher()
-	pendingEntry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:actor"}, nil)
+	pendingEntry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:actor"}, nil)
 	pendingPos := pos(1)
 	fetcher.Store(pendingPos, pendingEntry)
 
@@ -374,7 +364,7 @@ func (q *mockDelegationQuerier) QueryBySignerDID(did string) ([]types.EntryWithM
 }
 func (q *mockDelegationQuerier) addDelegation(t *testing.T, p types.LogPosition, signerDID, delegateDID string) {
 	t.Helper()
-	entry, _ := makeEntry(t, envelope.ControlHeader{
+	entry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   signerDID, AuthorityPath: sameSigner(), DelegateDID: &delegateDID,
 	}, nil)
@@ -390,7 +380,7 @@ func TestDelegationTree_SingleLevel(t *testing.T) {
 	querier := newMockQuerier()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:court", AuthorityPath: sameSigner(),
 	}, nil)
@@ -421,7 +411,7 @@ func TestDelegationTree_ThreeDeep(t *testing.T) {
 	querier := newMockQuerier()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:court", AuthorityPath: sameSigner(),
 	}, nil)
@@ -453,7 +443,7 @@ func TestDelegationTree_RevokedMarked(t *testing.T) {
 	querier := newMockQuerier()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:court", AuthorityPath: sameSigner(),
 	}, nil)
@@ -482,7 +472,7 @@ func TestDelegationTree_FlattenAndLive(t *testing.T) {
 	querier := newMockQuerier()
 
 	rootPos := pos(1)
-	rootEntry, _ := makeEntry(t, envelope.ControlHeader{
+	rootEntry := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:court", AuthorityPath: sameSigner(),
 	}, nil)
@@ -921,11 +911,11 @@ func TestScope_CollectApprovals(t *testing.T) {
 		"did:example:a": {}, "did:example:b": {}, "did:example:c": {},
 	}
 
-	cosigA, _ := makeEntry(t, envelope.ControlHeader{
+	cosigA := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:b", CosignatureOf: ptrTo(proposalPos),
 	}, nil)
-	cosigB, _ := makeEntry(t, envelope.ControlHeader{
+	cosigB := buildTestEntry(t, envelope.ControlHeader{
 		Destination: testDestinationDID,
 		SignerDID:   "did:example:c", CosignatureOf: ptrTo(proposalPos),
 	}, nil)

@@ -1,17 +1,18 @@
 package tests
 
 import (
+	"testing"
+
 	"github.com/clearcompass-ai/ortholog-sdk/builder"
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
-	"testing"
 )
 
 func TestBuilderCommitment_MatchesMutations(t *testing.T) {
 	h := newHarness()
 	rootBefore, _ := h.tree.Root()
-	entry, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
+	entry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
 	entryPos := pos(1)
 	result := h.process(t, entry, entryPos)
 	commitment := builder.GenerateBatchCommitment(entryPos, entryPos, rootBefore, result)
@@ -29,7 +30,7 @@ func TestBuilderCommitment_ReplayConsistent(t *testing.T) {
 	entries := make([]*envelope.Entry, 5)
 	positions := make([]types.LogPosition, 5)
 	for i := 0; i < 5; i++ {
-		e, _ := makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
+		e := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:alice", AuthorityPath: sameSigner()}, nil)
 		entries[i] = e
 		positions[i] = pos(uint64(i + 1))
 		h.fetcher.Store(positions[i], e)
@@ -70,13 +71,13 @@ func TestBuilderDeterminism_1000Entries(t *testing.T) {
 		positions[i] = pos(seq)
 		switch {
 		case i%10 == 0:
-			entries[i], _ = makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: didForIndex(i), AuthorityPath: sameSigner(), EventTime: int64(i) * 1000000}, []byte{byte(i)})
+			entries[i] = buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: didForIndex(i), AuthorityPath: sameSigner(), EventTime: int64(i) * 1000000}, []byte{byte(i)})
 		case i%10 == 1 && i > 10:
 			rootSeq := uint64(i - i%10 + 1)
 			signer := didForIndex(i - i%10)
-			entries[i], _ = makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signer, TargetRoot: ptrTo(pos(rootSeq)), AuthorityPath: sameSigner(), EventTime: int64(i) * 1000000}, []byte{byte(i)})
+			entries[i] = buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: signer, TargetRoot: ptrTo(pos(rootSeq)), AuthorityPath: sameSigner(), EventTime: int64(i) * 1000000}, []byte{byte(i)})
 		default:
-			entries[i], _ = makeEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: didForIndex(i), EventTime: int64(i) * 1000000}, []byte{byte(i)})
+			entries[i] = buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: didForIndex(i), EventTime: int64(i) * 1000000}, []byte{byte(i)})
 		}
 	}
 	tree1 := smt.NewTree(smt.NewInMemoryLeafStore(), smt.NewInMemoryNodeCache())

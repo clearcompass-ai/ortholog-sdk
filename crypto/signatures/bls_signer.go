@@ -79,6 +79,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings" // ← add
 
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
@@ -389,52 +390,60 @@ func BLSPubKeyBytes(pub *bls12381.G2Affine) []byte {
 	return out[:]
 }
 
-// -------------------------------------------------------------------------------------------------
-// 7) ParseBLSPubKey — deserialize and validate public key
-// -------------------------------------------------------------------------------------------------
-
-// ParseBLSPubKey deserializes a 96-byte compressed G2 encoding to a
-// G2Affine point. Validation is exhaustive:
+// ParseBLSPubKey decompresses a 96-byte compressed G2 encoding to a
+// G2Affine point. Validation is exhaustive: length, on-curve, and
+// prime-order-subgroup membership.
 //
-//  1. Length check: must be exactly BLSG2CompressedLen (96) bytes.
-//     Any other length indicates a malformed encoding or an attempt to
-//     submit a key for a different curve.
-//  2. On-curve check: the decompressed point must satisfy the BLS12-381
-//     G2 curve equation. Gnark's SetBytes performs this automatically.
-//  3. Subgroup check: the point must be in the prime-order subgroup of
-//     G2. This is the critical check. BLS12-381's G2 has a large
-//     cofactor; points outside the subgroup can produce incorrect
-//     pairing results and must be rejected. Gnark's IsInSubGroup
-//     implements the Bowe/Scott subgroup check, the standard method.
+// # IMPLEMENTATION NOTE (gnark v0.20.1)
 //
-// All three checks are mandatory. Skipping any opens specific attacks:
-// length bypass allows buffer-overrun crafting; on-curve bypass allows
-// invalid-curve attacks; subgroup bypass allows small-subgroup attacks.
-// The SDK treats any of these rejections as equally serious — the
-// returned error type lets callers log specifically what failed.
+// In gnark v0.20.1, G2Affine.SetBytes performs the full validation
+// chain atomically — decompression, on-curve check, and subgroup
+// check. The lower-level setBytes(buf, subGroupCheck bool) variant
+// that would allow skipping the subgroup check is unexported and not
+// callable from external code. We therefore cannot separate the
+// failure paths by calling distinct validators.
 //
-// Thread-safety: stateless.
+// Instead we call SetBytes once and classify its error by inspecting
+// the error text. Gnark's error message contains the stable substring
+// "subgroup" when (and only when) the failure reason is subgroup
+// membership, so substring matching is a reliable classification key
+// within a pinned gnark version.
+//
+// # WHY NOT CALL SUBGROUP CHECKS SEPARATELY
+//
+// A previous version of this function called SetBytes and then an
+// explicit IsInSubGroup() check in a separate branch. That second
+// branch was dead code: SetBytes had already rejected non-subgroup
+// points with its own error. The separate branch never fired, and
+// all non-subgroup rejections were misclassified as "not on curve."
+// This was only caught by TestParseBLSPubKey_NotInSubgroup, which
+// explicitly constructs a non-subgroup on-curve point and asserts
+// the specific error type.
+//
+// # VERSION COUPLING
+//
+// Substring matching against "subgroup" is stable within gnark's
+// error taxonomy, but not guaranteed across all future major
+// versions. If gnark changes its error strings, TestParseBLSPubKey_
+// NotInSubgroup will fail with a clear diagnostic pointing at the
+// classification branch. That's the right failure mode — we get an
+// explicit signal, not silent misclassification.
 func ParseBLSPubKey(data []byte) (*bls12381.G2Affine, error) {
 	if len(data) != BLSG2CompressedLen {
 		return nil, fmt.Errorf("%w: got %d bytes, expected %d",
 			ErrBLSInvalidPubKeyLength, len(data), BLSG2CompressedLen)
 	}
 
-	// SetBytes performs length check (redundant given the above but
-	// cheap), decompresses the point, and validates on-curve.
 	var pk bls12381.G2Affine
 	if _, err := pk.SetBytes(data); err != nil {
-		// Gnark returns a single error type for on-curve failures and
-		// malformed encodings. We classify as "not on curve" since the
-		// length check above catches the pure length case.
+		// Classify gnark's rejection reason. Non-subgroup failures
+		// are the security-critical case and get their own error.
+		// All other deserialization failures (malformed encoding,
+		// off-curve) get the on-curve error.
+		if strings.Contains(err.Error(), "subgroup") {
+			return nil, fmt.Errorf("%w: %v", ErrBLSPubKeyNotInSubgroup, err)
+		}
 		return nil, fmt.Errorf("%w: %v", ErrBLSPubKeyNotOnCurve, err)
-	}
-
-	// Subgroup check. Non-optional: a curve point outside G2's prime-
-	// order subgroup can produce pairing values that satisfy the
-	// aggregate verification equation spuriously, enabling forgery.
-	if !pk.IsInSubGroup() {
-		return nil, ErrBLSPubKeyNotInSubgroup
 	}
 
 	return &pk, nil

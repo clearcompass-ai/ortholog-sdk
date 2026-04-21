@@ -275,12 +275,32 @@ func TestRogueKeyAttack_AggregateAcceptsWithoutPoP(t *testing.T) {
 	}
 
 	if !allTrue {
-		t.Logf("aggregate verification did not pass for forged signature; "+
-			"results = %v. This may indicate the identity-G1 attack "+
-			"formulation is not valid in this gnark version. The attack "+
-			"is still feasible with a different honest-slot construction.",
+		// Previous versions of this test used t.Skip here as an escape
+		// hatch for the case where gnark's identity-G1 handling broke
+		// the attack reconstruction. That was WRONG: a skipped test in
+		// CI looks green, and the security property this test locks —
+		// "raw aggregation accepts forged cosignatures without PoP" —
+		// would silently become unverified.
+		//
+		// Fail loudly instead. If this fires, rewrite the attack
+		// reconstruction to use non-identity honest contributions
+		// (e.g., actual witness signatures that cancel algebraically)
+		// rather than relying on the G1 identity element behavior.
+		// Do NOT restore the t.Skip.
+		t.Fatalf("attack reconstruction formulation broke in this gnark "+
+			"version; results=%v.\n\n"+
+			"The rogue-key attack demonstration test must always pass — "+
+			"it is the ground truth for why PoP at registration is required. "+
+			"A failing reconstruction means this property is no longer "+
+			"verified in CI.\n\n"+
+			"Required action: update constructRogueKey and/or the honest-"+
+			"witness slot construction in this test so the aggregate "+
+			"verifier accepts the forged signature. The attack is "+
+			"mathematically always possible — if the reconstruction stops "+
+			"demonstrating it, the reconstruction is the problem.\n\n"+
+			"Do NOT replace this Fatalf with a Skip. Doing so silently "+
+			"disables a critical security regression guard.",
 			results)
-		t.Skip("attack reconstruction formulation needs adjustment for this gnark version")
 	}
 
 	// If we reach here, the attack succeeded: the verifier accepted

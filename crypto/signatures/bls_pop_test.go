@@ -34,7 +34,6 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/clearcompass-ai/ortholog-sdk/types"
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 )
 
@@ -269,47 +268,159 @@ func TestDomainSeparation_CosignatureNotUsableAsPoP(t *testing.T) {
 }
 
 // TestDomainSeparation_PoPNotUsableAsCosignature is the symmetric
-// test: a PoP must not verify as a cosignature over some arbitrary
-// tree head. Confirms the separation is bidirectional.
+// check to TestDomainSeparation_CosignatureNotUsableAsPoP: a PoP must
+// not verify as a cosignature, even at the primitive pairing level.
 //
-// The test constructs a scenario where the tree head's
-// WitnessCosignMessage happens to equal the public key's compressed
-// bytes. In practice this cannot occur (WitnessCosignMessage is 40
-// bytes, compressed G2 pubkey is 96 bytes), so full byte collision is
-// impossible — but we demonstrate the DST separation by attempting
-// a cross-protocol verification at the pairing level.
+// # WHY THIS TEST AVOIDS VerifyAggregate
+//
+// A previous version of this test called VerifyAggregate with the
+// compressed-pubkey bytes as the "message" payload. That path had a
+// defect: VerifyAggregate could return an error (length validation,
+// parse failure, etc.) before reaching the pairing check, and the
+// test's early-return-on-any-error clause would accept any such
+// error as "success." The test could pass for reasons entirely
+// unrelated to DST separation.
+//
+// This version does the verification at the primitive level instead.
+// We compute the hash-to-curve outputs under BOTH DSTs, pair-check
+// the PoP against each, and assert that the PoP-DST check passes
+// (sanity) while the cosignature-DST check fails (the actual
+// assertion). This exercises the DST separation directly at the
+// pairing layer, independent of any length validation or parsing
+// behavior in VerifyAggregate.
+//
+// # WHAT THIS TEST LOCKS
+//
+// Given a valid PoP for some public key pk:
+//
+//	e(pop, G2_gen) == e(HashToG1(Compress(pk), BLSPoPDomainTag), pk)  [must pass]
+//	e(pop, G2_gen) == e(HashToG1(Compress(pk), BLSDomainTag),    pk)  [must fail]
+//
+// If the second equation passes, the two DSTs produce identical
+// hash targets for the same input bytes — domain separation has
+// collapsed, and a PoP could be replayed as a cosignature over
+// those same bytes. Catastrophic cryptographic failure; the SDK's
+// rogue-key defense falls apart.
+//
+// # ADDITIONAL GUARD
+//
+// We also assert the two HashToG1 outputs are themselves distinct.
+// If they happen to be equal, DST separation has collapsed one
+// layer earlier — at the hash-to-curve primitive rather than the
+// pairing check. That failure mode is caught explicitly so the
+// diagnostic is precise.
 func TestDomainSeparation_PoPNotUsableAsCosignature(t *testing.T) {
+	// ─────────────────────────────────────────────────────────────
+	// Setup: generate a key and produce a valid PoP.
+	// ─────────────────────────────────────────────────────────────
 	sk, pk, err := GenerateBLSKey()
 	if err != nil {
 		t.Fatalf("GenerateBLSKey: %v", err)
 	}
-	pop, err := SignBLSPoP(pk, sk)
+	popBytes, err := SignBLSPoP(pk, sk)
 	if err != nil {
 		t.Fatalf("SignBLSPoP: %v", err)
 	}
 
-	// Attempt to verify the PoP as a cosignature against the same
-	// public key. Use VerifyAggregate with the PoP's 96-byte message
-	// payload (the compressed pubkey) as the cosign message.
-	// The cosignature path hashes under BLSDomainTag; the PoP was
-	// signed under BLSPoPDomainTag. The pairing check must fail.
+	// Decompress the PoP into a G1 point for use in pairing checks.
+	// This also confirms SignBLSPoP produced well-formed bytes — if
+	// decompression fails, the bug is in SignBLSPoP, not domain
+	// separation, and we surface that clearly.
+	var pop bls12381.G1Affine
+	if _, err := pop.SetBytes(popBytes); err != nil {
+		t.Fatalf("decompress PoP bytes (SignBLSPoP output malformed?): %v", err)
+	}
+
+	// The compressed-pubkey bytes are the input to both hash targets.
+	// This is what SignBLSPoP hashed under BLSPoPDomainTag; we now
+	// also hash the same bytes under BLSDomainTag for the cross-
+	// protocol check.
 	pkBytes := BLSPubKeyBytes(pk)
-	// WitnessCosignMessage is fixed at 40 bytes. We can't put 96-byte
-	// pubkey bytes through it directly; instead we verify at the
-	// primitive level using the compressed-pubkey bytes as the "message"
-	// passed to VerifyAggregate's hash-to-curve.
-	verifier := NewGnarkBLSVerifier()
-	results, err := verifier.VerifyAggregate(
-		pkBytes,
-		[]types.WitnessSignature{{SigBytes: pop}},
-		[]types.WitnessPublicKey{{PublicKey: pkBytes}},
+
+	// ─────────────────────────────────────────────────────────────
+	// Hash under BOTH DSTs.
+	// ─────────────────────────────────────────────────────────────
+	hashUnderPoPDST, err := bls12381.HashToG1(pkBytes, []byte(BLSPoPDomainTag))
+	if err != nil {
+		t.Fatalf("HashToG1 (PoP DST): %v", err)
+	}
+	hashUnderCosigDST, err := bls12381.HashToG1(pkBytes, []byte(BLSDomainTag))
+	if err != nil {
+		t.Fatalf("HashToG1 (cosig DST): %v", err)
+	}
+
+	// Guard: the two hash outputs must be distinct. If they're equal,
+	// domain separation has collapsed at the hash-to-curve layer —
+	// every downstream check in this test would be meaningless.
+	if hashUnderPoPDST.Equal(&hashUnderCosigDST) {
+		t.Fatal("CRITICAL: HashToG1 produced identical outputs under " +
+			"BLSPoPDomainTag and BLSDomainTag for the same input bytes. " +
+			"Domain separation has collapsed at the hash-to-curve layer. " +
+			"This is a more severe failure than the pairing-level check " +
+			"below would catch. Investigate BLSDomainTag, BLSPoPDomainTag, " +
+			"and the gnark HashToG1 implementation immediately.")
+	}
+
+	// ─────────────────────────────────────────────────────────────
+	// Prepare pairing-check operands.
+	// ─────────────────────────────────────────────────────────────
+	// PairingCheck returns true iff the product of pairings equals
+	// the identity. For an equality check e(A, B) == e(C, D), we
+	// rearrange to e(A, -B) · e(C, D) == 1 and pass that form.
+	_, _, _, g2Gen := bls12381.Generators()
+	var negG2Gen bls12381.G2Affine
+	negG2Gen.Neg(&g2Gen)
+
+	// ─────────────────────────────────────────────────────────────
+	// Check 1: PoP against PoP-DST hash. MUST PASS.
+	// ─────────────────────────────────────────────────────────────
+	// This is the normal VerifyBLSPoP path, done at the primitive
+	// level. A failure here means SignBLSPoP/VerifyBLSPoP are
+	// themselves broken, and this test cannot assess DST separation
+	// until that's fixed. Surface that clearly.
+	popDSTCheckPasses, err := bls12381.PairingCheck(
+		[]bls12381.G1Affine{pop, hashUnderPoPDST},
+		[]bls12381.G2Affine{negG2Gen, *pk},
 	)
 	if err != nil {
-		// Error from length mismatch or similar is acceptable —
-		// the point is verification does not PASS.
-		return
+		t.Fatalf("PoP-DST pairing check errored: %v", err)
 	}
-	if len(results) > 0 && results[0] {
-		t.Fatal("CRITICAL: PoP accepted as cosignature — DST separation failed")
+	if !popDSTCheckPasses {
+		t.Fatal("PoP-DST pairing check FAILED for a freshly-generated " +
+			"PoP. This indicates a bug in SignBLSPoP or in the PoP " +
+			"verification equation, not in DST separation. Fix the " +
+			"PoP primitive before this test can validly assess DST " +
+			"behavior.")
+	}
+
+	// ─────────────────────────────────────────────────────────────
+	// Check 2: PoP against COSIG-DST hash. MUST FAIL.
+	// ─────────────────────────────────────────────────────────────
+	// This is the cross-protocol attack scenario. If this check
+	// passes, a valid PoP has successfully verified as a cosignature
+	// over the compressed-pubkey bytes. Domain separation has
+	// collapsed; the rogue-key defense fails.
+	cosigDSTCheckPasses, err := bls12381.PairingCheck(
+		[]bls12381.G1Affine{pop, hashUnderCosigDST},
+		[]bls12381.G2Affine{negG2Gen, *pk},
+	)
+	if err != nil {
+		// A library-level pairing-check error is NOT a
+		// domain-separation pass. It's infrastructure failure.
+		// Fail the test loudly so it isn't misread as a security
+		// success.
+		t.Fatalf("cosig-DST pairing check errored (this is an unexpected "+
+			"library failure, NOT a domain-separation pass): %v", err)
+	}
+	if cosigDSTCheckPasses {
+		t.Fatal("CRITICAL SECURITY FAILURE: a valid PoP verified as a " +
+			"cosignature over the compressed-pubkey bytes. Domain " +
+			"separation between BLSDomainTag and BLSPoPDomainTag has " +
+			"collapsed at the pairing check layer. PoPs can now be " +
+			"replayed as cosignatures, enabling the rogue-key attack " +
+			"class this DST separation was specifically designed to " +
+			"prevent.\n\n" +
+			"Investigate the DST constants and the HashToG1 " +
+			"implementation. Do NOT merge Wave 1 with this test failing.")
 	}
 }

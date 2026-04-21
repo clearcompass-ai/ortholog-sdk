@@ -1,45 +1,48 @@
 /*
 FILE PATH:
-    core/envelope/signature_algo.go
+
+	core/envelope/signature_algo.go
 
 DESCRIPTION:
-    Authoritative registry of signature algorithm identifiers and the single
-    validator that gates wire-format acceptance. Under v6 this file is the
-    only place that enumerates which cryptographic algorithms the protocol
-    recognizes on the wire.
+
+	Authoritative registry of signature algorithm identifiers and the single
+	validator that gates wire-format acceptance. Under v6 this file is the
+	only place that enumerates which cryptographic algorithms the protocol
+	recognizes on the wire.
 
 KEY ARCHITECTURAL DECISIONS:
-    - Algorithm IDs are uint16 with registered values. Allocation is
-      additive-only: removing or repurposing an ID is a breaking protocol
-      change and must go through the version lifecycle (version_policy.go).
-    - No length table. v5 carried a SignatureLengthForAlgorithm lookup
-      because the wire format inferred signature length from the algorithm
-      tag. v6 carries an explicit sigLen uint32 in the wire (see
-      signatures_section.go), which means variable-length signatures
-      (JWZ, future BLS aggregates, post-quantum schemes) are purely
-      additive — no length table, no disambiguation logic, no ambiguity
-      surface.
-    - ValidateAlgorithmID is called symmetrically on encode and decode by
-      signatures_section.go. Unknown IDs are rejected at both ends; there
-      is no path by which a bytes-level entry bearing an unregistered
-      algorithm ID can be produced by Serialize or accepted by Deserialize.
-    - SigAlgoJWZ (0x0005) is allocated for Polygon ID / Iden3 JWZ proofs
-      (ZK proofs over BabyJubJub, variable-length JSON-serialized).
-      Verifier implementation lives in a separate DID-method verifier
-      (e.g., did:polygonid) registered on VerifierRegistry; this file
-      allocates the ID only.
+  - Algorithm IDs are uint16 with registered values. Allocation is
+    additive-only: removing or repurposing an ID is a breaking protocol
+    change and must go through the version lifecycle (version_policy.go).
+  - No length table. v5 carried a SignatureLengthForAlgorithm lookup
+    because the wire format inferred signature length from the algorithm
+    tag. v6 carries an explicit sigLen uint32 in the wire (see
+    signatures_section.go), which means variable-length signatures
+    (JWZ, future BLS aggregates, post-quantum schemes) are purely
+    additive — no length table, no disambiguation logic, no ambiguity
+    surface.
+  - ValidateAlgorithmID is called symmetrically on encode and decode by
+    signatures_section.go. Unknown IDs are rejected at both ends; there
+    is no path by which a bytes-level entry bearing an unregistered
+    algorithm ID can be produced by Serialize or accepted by Deserialize.
+  - SigAlgoJWZ (0x0005) is allocated for Polygon ID / Iden3 JWZ proofs
+    (ZK proofs over BabyJubJub, variable-length JSON-serialized).
+    Verifier implementation lives in a separate DID-method verifier
+    (e.g., did:polygonid) registered on VerifierRegistry; this file
+    allocates the ID only.
 
 OVERVIEW:
-    Consumers call ValidateAlgorithmID(algoID) before encoding a signature
-    block or after decoding one. The function is a total map over uint16
-    with a fixed registered set. Callers that want to know whether a given
-    algorithm uses a fixed or variable signature length ask the algorithm's
-    verifier directly — this file does not encode that distinction because
-    the wire format no longer depends on it.
+
+	Consumers call ValidateAlgorithmID(algoID) before encoding a signature
+	block or after decoding one. The function is a total map over uint16
+	with a fixed registered set. Callers that want to know whether a given
+	algorithm uses a fixed or variable signature length ask the algorithm's
+	verifier directly — this file does not encode that distinction because
+	the wire format no longer depends on it.
 
 KEY DEPENDENCIES:
-    - errors (standard library): sentinel error construction
-    - fmt (standard library): wrapped error formatting
+  - errors (standard library): sentinel error construction
+  - fmt (standard library): wrapped error formatting
 */
 package envelope
 

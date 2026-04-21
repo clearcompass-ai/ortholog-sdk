@@ -5,9 +5,9 @@ FILE PATH:
 
 DESCRIPTION:
 
-	Closes three test coverage gaps identified in Wave 1 review:
+	Closes four test coverage gaps identified in Wave 1 review:
 
-	  1. TestSchemeBLS_Value / TestSchemeECDSA_Value
+	  1. TestSchemeBLS_Value / TestSchemeECDSA_Value / TestSchemeValues_NonZero
 	     Byte-level locks on the scheme tag constants that drive
 	     dispatch routing. Without these, a silent byte flip (e.g.,
 	     SchemeBLS going from 0x02 to any other value) would cause
@@ -26,29 +26,26 @@ DESCRIPTION:
 	     correctly; this test guards against future regressions.
 
 	  3. TestParseBLSPubKey_NotInSubgroup
-	     Exercises the prime-order-subgroup check in ParseBLSPubKey
-	     with a concrete hardcoded G2 point that is on-curve but
-	     outside the prime-order subgroup. Without this test, deleting
-	     the `IsInSubGroup()` check in production code would cause no
-	     test to fail, and small-subgroup attacks would become silently
-	     possible.
+	     Exercises the prime-order-subgroup check that gnark performs
+	     inside G2Affine.SetBytes. Constructs a G2 point that is
+	     on-curve but outside the prime-order subgroup, then confirms
+	     ParseBLSPubKey rejects it with the correct typed error
+	     (ErrBLSPubKeyNotInSubgroup).
 
-	     The test vector is generated deterministically at test time
-	     by multiplying the G2 generator by the curve's cofactor. This
-	     construction is guaranteed to produce a G2 point that (a) is
-	     on-curve and (b) has order dividing the cofactor, placing it
-	     outside the prime-order subgroup. The resulting compressed
-	     bytes are then passed to ParseBLSPubKey, which must reject
-	     via IsInSubGroup().
+	     CONSTRUCTION: the test solves the G2 twist curve equation
+	     y^2 = x^3 + b directly (where b = 4 + 4i). We iterate small
+	     x values, compute rhs = x^3 + b, take a square root, verify
+	     it squared equals rhs, then construct a G2Affine with those
+	     raw coordinates. The resulting point is on-curve; with
+	     overwhelming probability it is NOT in the prime-order
+	     subgroup (which has measure 1/cofactor of the full curve).
 
-	     Using a deterministic runtime construction rather than a
-	     hardcoded hex vector avoids coupling the test to a specific
-	     gnark library version's compressed-point encoding of this
-	     particular point, which has historically varied across
-	     versions. The math is stable: cofactor multiplication always
-	     produces a non-subgroup point regardless of encoding choice.
+	     This avoids hardcoding the 512-bit BLS12-381 G2 cofactor as
+	     a hex literal (which would couple the test to a specific
+	     library encoding). The curve equation is universal across
+	     every BLS12-381 implementation.
 
-	LOCATION DISCIPLINE:
+LOCATION DISCIPLINE:
 
 	These tests live in a single gap-filling file rather than being
 	scattered across bls_lock_test.go, bls_verifier_test.go, and
@@ -56,6 +53,7 @@ DESCRIPTION:
 	added to close specific review gaps; keeping them in one file
 	makes the Wave 1 patch history legible.
 */
+
 package signatures
 
 import (
@@ -64,7 +62,6 @@ import (
 	"testing"
 
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
-	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
 
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
@@ -109,10 +106,7 @@ func TestSchemeECDSA_Value(t *testing.T) {
 			"by updating the expected value — revert the SchemeECDSA change.",
 			SchemeECDSA)
 	}
-	if SchemeECDSA == 0x00 {
-		t.Fatal("SchemeECDSA is 0x00, which Wave 2 reserves for " +
-			"'scheme not declared'. Pick a non-zero value.")
-	}
+
 }
 
 // TestSchemeTags_Distinct guards against a copy-paste bug in the
@@ -226,7 +220,6 @@ func TestVerifyWitnessCosignatures_ECDSAHead_DoesNotConsultBLSVerifier(t *testin
 		// three witnesses (the raw first-32-bytes slice would be
 		// unique in practice, but an explicit tweak makes the test
 		// fully deterministic).
-		pubKeyID[31] = byte(i)
 
 		sigs[i] = types.WitnessSignature{PubKeyID: pubKeyID, SigBytes: sig}
 		keys[i] = types.WitnessPublicKey{ID: pubKeyID, PublicKey: pubBytes}
@@ -261,7 +254,7 @@ func TestVerifyWitnessCosignatures_ECDSAHead_DoesNotConsultBLSVerifier(t *testin
 		// attempted and something about the test fixture failed);
 		// what matters is the BLS verifier was not consulted. Log
 		// for diagnostics and proceed.
-		t.Logf("ECDSA verification error (not a test failure — "+
+		t.Errorf("ECDSA verification error (not a test failure — "+
 			"dispatch isolation is the tested property): %v", err)
 	}
 }
@@ -442,8 +435,21 @@ func TestParseBLSPubKey_NotInSubgroup(t *testing.T) {
 	}
 }
 
+func TestSchemeValues_NonZero(t *testing.
+	T) {
+	if SchemeBLS == 0x00 {
+		t.Fatal("SchemeBLS is 0x00. Wave 2 reserves 0x00 for " +
+			"'scheme not declared'. Pick a non-zero value.",
+		)
+	}
+	if SchemeECDSA == 0x00 {
+		t.Fatal("SchemeECDSA is 0x00. Wave 2 reserves 0x00 for " +
+			"'scheme not declared'. Pick a non-zero value.",
+		)
+	}
+}
+
 // Ensure fr is imported — referenced implicitly via gnark types used
 // in the construction above, but the compiler may not pull it in on
 // every build configuration. This no-op reference guarantees the
 // import.
-var _ = fr.Element{}

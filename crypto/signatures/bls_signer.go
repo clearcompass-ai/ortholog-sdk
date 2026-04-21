@@ -75,12 +75,12 @@ KEY DEPENDENCIES:
 package signatures
 
 import (
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"math/big"
-	"strings" // ← add
+	"strings"
 
+	// ← add
 	bls12381 "github.com/consensys/gnark-crypto/ecc/bls12-381"
 	"github.com/consensys/gnark-crypto/ecc/bls12-381/fr"
 
@@ -108,7 +108,7 @@ const BLSDomainTag = "ORTHOLOG_BLS_SIG_V1_"
 // replayed as a PoP and vice versa. This separation is security-critical:
 // see the rogue-key attack analysis on SignBLSPoP.
 //
-// The tag is 20 bytes: "ORTHOLOG_BLS_POP_V1_". Same length as
+// The tag is 20 bytes: "ORTHOLOG_BLS_PoP_V1_". Same length as
 // BLSDomainTag for uniform wire treatment.
 //
 // Locked by TestBLSPoPDomainTag_Bytes.
@@ -477,4 +477,3 @@ func deriveBLSKeyForTest(seed []byte) (*fr.Element, *bls12381.G2Affine) {
 // This is a no-op reference that prevents the import from being flagged
 // as unused if someone refactors GenerateBLSKey to not directly call
 // crypto/rand (it's used transitively via Fr.SetRandom).
-var _ = rand.Reader

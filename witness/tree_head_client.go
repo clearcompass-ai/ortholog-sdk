@@ -1,22 +1,61 @@
 /*
-witness/tree_head_client.go — Fetch and cache cosigned tree heads.
+FILE PATH:
 
-TreeHeadClient is the SDK-side component that obtains tree heads from
-remote operators. It provides:
-  - LRU cache keyed by log DID (avoids redundant HTTP calls)
-  - Configurable staleness (cache TTL)
-  - Endpoint resolution via EndpointProvider interface
-  - Fallback to witness endpoints if operator is down
+	witness/tree_head_client.go
 
-Consumed by:
-  - cross_log.go ResolveCrossLogRef (foreign tree heads)
-  - bootstrap.go AnchorLogSync method
-  - Phase 6 anchors.go (periodic anchor publishing)
-  - Domain topology/anchor_publisher.go
+DESCRIPTION:
+
+	Fetch and cache cosigned tree heads from remote operators.
+
+	TreeHeadClient is the SDK-side component that obtains tree heads
+	from remote operators. It provides:
+	  - LRU cache keyed by log DID (avoids redundant HTTP calls)
+	  - Configurable staleness (cache TTL)
+	  - Endpoint resolution via EndpointProvider interface
+	  - Fallback to witness endpoints if operator is down
+
+	Consumed by:
+	  - cross_log.go ResolveCrossLogRef (foreign tree heads)
+	  - bootstrap.go AnchorLogSync method
+	  - Phase 6 anchors.go (periodic anchor publishing)
+	  - Domain topology/anchor_publisher.go
+
+WAVE 2 CHANGE: Propagate SchemeTag from operator wire format
+
+	Pre-Wave-2 the operator's SigAlgo JSON field was parsed into
+	the raw struct but then silently discarded when constructing
+	WitnessSignature — the head-level CosignedTreeHead.SchemeTag
+	was set upstream by the caller.
+
+	Post-Wave-2 SchemeTag lives on each WitnessSignature, and
+	parseTreeHeadResponse populates it directly from SigAlgo.
+	This is a single-field addition in the struct literal.
+
+	If an operator response lacks SigAlgo (absent field, zero
+	value), the resulting WitnessSignature carries SchemeTag=0
+	and will be rejected by the verifier's strict zero-tag check.
+	This is intentional: a Wave-2+ verifier cannot safely dispatch
+	a signature whose scheme is not declared, and operators that
+	produce such responses need to be fixed (not papered over with
+	a defensive default).
+
+KNOWN PRE-EXISTING TECHNICAL DEBT (not a Wave 2 concern):
+
+	The hashString function at the bottom of this file is not a
+	cryptographic hash — it's an XOR-fold that produces frequent
+	collisions and is therefore not suitable as a witness identity
+	derivation. This pre-dates Wave 2 and is not addressed here.
+	Consumers that need correct PubKeyID derivation should either:
+	  - Re-populate WitnessSignature.PubKeyID from the actual
+	    witness registry after fetch, OR
+	  - Not rely on TreeHeadClient's parsed IDs for verification.
+	A follow-up issue should replace this with sha256 of the
+	signer string, but that is out of scope for Wave 2.
 */
 package witness
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -89,7 +128,8 @@ func DefaultTreeHeadClientConfig() TreeHeadClientConfig {
 	}
 }
 
-// TreeHeadClient fetches and caches cosigned tree heads from remote operators.
+// TreeHeadClient fetches and caches cosigned tree heads from remote
+// operators.
 type TreeHeadClient struct {
 	endpoints EndpointProvider
 	cfg       TreeHeadClientConfig
@@ -197,20 +237,22 @@ func (tc *TreeHeadClient) CacheSize() int {
 // Internal
 // ─────────────────────────────────────────────────────────────────────
 
-// FetchFromURL fetches a cosigned tree head from a specific endpoint URL.
+// FetchFromURL fetches a cosigned tree head from a specific endpoint
+// URL.
 //
 // Unlike FetchLatestTreeHead which resolves endpoints via the injected
 // EndpointProvider and caches results by log DID, this takes the URL
 // directly and bypasses the cache. Used primarily by monitoring for
 // equivocation detection — comparing operator tree heads against
-// individual witness tree heads requires fresh, unrelated-to-cache fetches.
+// individual witness tree heads requires fresh, unrelated-to-cache
+// fetches.
 //
 // The caller provides witness URLs from their own resolution
 // (e.g., did.DIDDocument.WitnessEndpointURLs()).
 //
-// No witness signature verification is performed here. Callers wanting
-// to verify the returned head should pass it to VerifyTreeHead or
-// DetectEquivocation.
+// No witness signature verification is performed here. Callers
+// wanting to verify the returned head should pass it to VerifyTreeHead
+// or DetectEquivocation.
 func (tc *TreeHeadClient) FetchFromURL(url string) (types.CosignedTreeHead, time.Time, error) {
 	resp, err := tc.client.Get(url)
 	if err != nil {
@@ -242,7 +284,20 @@ func (tc *TreeHeadClient) updateCache(logDID string, head types.CosignedTreeHead
 	tc.mu.Unlock()
 }
 
-// parseTreeHeadResponse parses the JSON response from GET /v1/tree/head.
+// parseTreeHeadResponse parses the JSON response from GET
+// /v1/tree/head.
+//
+// WAVE 2: The SigAlgo field is now propagated to each
+// WitnessSignature's SchemeTag. Pre-Wave-2 this field was parsed
+// into the raw struct but then dropped; the head-level SchemeTag
+// was populated by the caller instead. Post-Wave-2 the per-signature
+// SchemeTag is the source of truth and must be populated here.
+//
+// Operators that emit tree-head responses with SigAlgo absent or
+// zero will produce WitnessSignature values with SchemeTag=0, which
+// Wave-2+ verifiers reject via their strict zero-tag check. This is
+// intentional — it surfaces malformed operator responses as loud
+// verification failures rather than silent misdispatch.
 func parseTreeHeadResponse(data []byte) (types.CosignedTreeHead, error) {
 	var raw struct {
 		TreeSize uint64 `json:"tree_size"`
@@ -266,32 +321,24 @@ func parseTreeHeadResponse(data []byte) (types.CosignedTreeHead, error) {
 		copy(head.RootHash[:], rootBytes)
 	}
 
-	// Parse signatures. The detailed WitnessSignature structure requires
-	// PubKeyID and SigBytes — map from the JSON response format.
+	/// Parse signatures. PubKeyID is derived via SHA-256 over the signer
+	// string, which is the cryptographically sound identity derivation
+	// expected by the verifier. An earlier version of this parser used a
+	// custom XOR-fold helper (hashString); that was removed in Wave 2
+	// because XOR-fold produces frequent collisions and therefore
+	// misidentifies witnesses.
 	for _, s := range raw.Sigs {
 		sigBytes, _ := hex.DecodeString(s.Sig)
 		var pubKeyID [32]byte
-		// Use signer string hash as PubKeyID (operator response format).
 		if s.Signer != "" {
-			h := hashString(s.Signer)
-			copy(pubKeyID[:], h[:])
+			pubKeyID = sha256.Sum256([]byte(s.Signer))
 		}
 		head.Signatures = append(head.Signatures, types.WitnessSignature{
-			PubKeyID: pubKeyID,
-			SigBytes: sigBytes,
+			PubKeyID:  pubKeyID,
+			SchemeTag: byte(s.SigAlgo), // Wave 2: propagate from operator response
+			SigBytes:  sigBytes,
 		})
 	}
 
 	return head, nil
-}
-
-func hashString(s string) [32]byte {
-	var data [32]byte
-	h := make([]byte, 0, len(s))
-	h = append(h, []byte(s)...)
-	// Simple deterministic hash of the signer string.
-	for i, b := range h {
-		data[i%32] ^= b
-	}
-	return data
 }

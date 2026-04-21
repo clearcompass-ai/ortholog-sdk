@@ -1,3 +1,21 @@
+/*
+FILE PATH:
+
+	crypto/signatures/witness_verify_test.go
+
+DESCRIPTION:
+
+	Test suite for the witness cosignature primitives — ECDSA signing
+	round-trip and verification dispatch.
+
+WAVE 2 CHANGE:
+
+	CosignedTreeHead literals no longer carry a head-level SchemeTag.
+	Every WitnessSignature literal now declares its own SchemeTag.
+	The signed message and signing primitives are unchanged —
+	these tests verify the same cryptographic round-trip under the
+	new struct shape.
+*/
 package signatures
 
 import (
@@ -15,7 +33,7 @@ import (
 //
 // If this test fails, either:
 //   - SignWitnessCosignature's digest construction has drifted from
-//     verifyECDSACosignatures', OR
+//     the dispatcher's ECDSA path, OR
 //   - SignEntry / VerifyEntry are no longer round-trip compatible
 //     (a deeper SDK bug).
 func TestSignWitnessCosignature_RoundTrip(t *testing.T) {
@@ -43,14 +61,19 @@ func TestSignWitnessCosignature_RoundTrip(t *testing.T) {
 
 	// Construct a CosignedTreeHead carrying the signature and verify
 	// via the full VerifyWitnessCosignatures path.
+	//
+	// Wave 2: SchemeTag lives on the WitnessSignature, not the head.
 	var pubKeyID [32]byte
 	copy(pubKeyID[:], pubBytes[:32]) // arbitrary deterministic ID for this test
 
 	cosigned := types.CosignedTreeHead{
-		TreeHead:  head,
-		SchemeTag: SchemeECDSA,
+		TreeHead: head,
 		Signatures: []types.WitnessSignature{
-			{PubKeyID: pubKeyID, SigBytes: sig},
+			{
+				PubKeyID:  pubKeyID,
+				SchemeTag: SchemeECDSA,
+				SigBytes:  sig,
+			},
 		},
 	}
 	witnessKeys := []types.WitnessPublicKey{
@@ -78,11 +101,11 @@ func TestSignWitnessCosignature_NilKey(t *testing.T) {
 	}
 }
 
-// TestSignWitnessCosignature_Determinism confirms the function is
-// deterministic in its preimage construction. Note: ECDSA signatures
-// themselves contain randomness (nonce k), so we can't assert
-// byte-identical outputs. We assert that two signatures over the
-// same head BOTH verify against the same public key.
+// TestSignWitnessCosignature_TwoSignaturesBothVerify confirms the
+// function is deterministic in its preimage construction. Note: ECDSA
+// signatures themselves contain randomness (nonce k), so we can't
+// assert byte-identical outputs. We assert that two signatures over
+// the same head BOTH verify against the same public key.
 func TestSignWitnessCosignature_TwoSignaturesBothVerify(t *testing.T) {
 	priv, err := GenerateKey()
 	if err != nil {
@@ -103,15 +126,19 @@ func TestSignWitnessCosignature_TwoSignaturesBothVerify(t *testing.T) {
 	}
 
 	// Both signatures should verify individually via the full path.
+	// Wave 2: each WitnessSignature declares its own SchemeTag.
 	for i, sig := range [][]byte{sig1, sig2} {
 		var pubKeyID [32]byte
 		copy(pubKeyID[:], pubBytes[:32])
 
 		cosigned := types.CosignedTreeHead{
-			TreeHead:  head,
-			SchemeTag: SchemeECDSA,
+			TreeHead: head,
 			Signatures: []types.WitnessSignature{
-				{PubKeyID: pubKeyID, SigBytes: sig},
+				{
+					PubKeyID:  pubKeyID,
+					SchemeTag: SchemeECDSA,
+					SigBytes:  sig,
+				},
 			},
 		}
 		witnessKeys := []types.WitnessPublicKey{

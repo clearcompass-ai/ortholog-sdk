@@ -46,19 +46,6 @@ const (
 	AuthorityScopeAuthority AuthorityPath = 3
 )
 
-// KeyGenMode declares how signing keys for a new entity are produced.
-// Carried on root entity entries; read by verifier for Tier 2/3 classification.
-type KeyGenMode uint8
-
-const (
-	// KeyGenExchangeManaged: the exchange generates and holds the signing key.
-	KeyGenExchangeManaged KeyGenMode = 1
-
-	// KeyGenClientSideBlind: the client generates the key in a secure enclave;
-	// the exchange routes ciphertext only.
-	KeyGenClientSideBlind KeyGenMode = 2
-)
-
 // ControlHeader carries the protocol-level metadata for a single entry.
 // All fields are read by the builder or verifier as part of path classification
 // and state evaluation. Domain Payload is opaque to both.
@@ -126,10 +113,6 @@ type ControlHeader struct {
 	// creation and scope amendment entries. Empty on other entries.
 	AuthoritySet map[string]struct{}
 
-	// AuthorityDID optionally identifies the specific authority being
-	// added or removed in a scope amendment. Nil for parameter changes.
-	AuthorityDID *string
-
 	// PriorAuthority references the Authority_Tip the writer observed
 	// when constructing this Path C entry. Used for OCC verification.
 	PriorAuthority *types.LogPosition
@@ -148,16 +131,6 @@ type ControlHeader struct {
 	// and other schema-declared parameters.
 	SchemaRef *types.LogPosition
 
-	// KeyGenerationMode declares the key generation path for root entity
-	// entries. Nil on non-root entries.
-	KeyGenerationMode *KeyGenMode
-
-	// CommutativeOperations, if non-empty, marks the governing schema as
-	// permitting commutative OCC (Δ-window CRDT resolution). The specific
-	// operation tags are domain-interpreted; the builder checks only
-	// emptiness for OCC mode selection (SDK-D7).
-	CommutativeOperations []uint32
-
 	// SubjectIdentifier carries the credential subject's identifier on
 	// credential entries. Domain-interpreted structure; the builder
 	// treats it as opaque bytes.
@@ -174,13 +147,9 @@ type ControlHeader struct {
 	EventTime int64
 
 	// AdmissionProof carries Mode B proof-of-work payload. Nil for Mode A
-	// entries. Wire-serialized as a length-prefixed body region to isolate
-	// it from Authority_Skip (protects against cross-field corruption).
+	// entries. Wire-serialized as a length-prefixed body region so its
+	// internal structure cannot bleed into adjacent fields on parse.
 	AdmissionProof *AdmissionProofBody
-
-	// AuthoritySkip is the verifier hint (v3+) for fast authority chain
-	// traversal. Recorded by builder; read by verifier; opaque to SMT.
-	AuthoritySkip *types.LogPosition
 }
 
 // AuthoritySetContains reports whether a DID is a member of this header's
@@ -213,8 +182,9 @@ func (h *ControlHeader) SortedDIDs() []string {
 }
 
 // AdmissionProofBody is the length-prefixed admission proof region.
-// Length-prefixing on the wire isolates this field from Authority_Skip
-// corruption (SDK-3).
+// Length-prefixing on the wire isolates the proof's internal
+// structure so a malformed proof cannot bleed into adjacent fields
+// on parse (SDK-3).
 type AdmissionProofBody struct {
 	// Mode declares the admission mode (B = stamp).
 	Mode uint8

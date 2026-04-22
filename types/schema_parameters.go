@@ -275,4 +275,24 @@ type SchemaParameters struct {
 	// responsible for submitting the entry to the log. The SDK builds
 	// the entry; the exchange submits it.
 	GrantRequiresAuditEntry bool
+
+	// ── Concurrency (schema-level OCC mode) ──────────────────────────
+	//
+	// CommutativeOperations declares the domain-interpreted operation
+	// tags that commute under Δ-window CRDT resolution. Non-empty
+	// enables commutative OCC for every Path C enforcement against
+	// this schema; empty selects strict OCC (Decision 37 default).
+	//
+	// Moved from ControlHeader to SchemaParameters in v7.5 to restore
+	// the protocol/domain separation boundary: commutativity is a
+	// schema property, not per-entry wire metadata. Callers set the
+	// field on the schema entry's SchemaParameters before building;
+	// builder.BuildSchemaEntry marshals it into Domain Payload;
+	// schema.JSONParameterExtractor reads it on the verifier side.
+	//
+	// Invariant after Extract: always a non-nil slice. Absent JSON
+	// field, explicit JSON null, and explicit empty JSON array all
+	// normalize to an empty []uint32. Callers can test `len(v) == 0`
+	// without nil-checking.
+	CommutativeOperations []uint32
 }

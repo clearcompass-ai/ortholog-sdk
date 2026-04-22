@@ -150,7 +150,7 @@ var (
 	ErrMalformedSignaturesSection = errors.New("envelope: malformed signatures section")
 
 	// ErrEmptySignatureList is returned when a decoded section carries
-	// zero signatures. v6 entries must have at least one signature;
+	// zero signatures. v7 entries must have at least one signature;
 	// a zero-count section is rejected at the wire level.
 	ErrEmptySignatureList = errors.New("envelope: signatures section has zero signatures")
 
@@ -274,7 +274,7 @@ func AppendSignaturesSection(buf []byte, sigs []Signature) ([]byte, error) {
 // ErrTrailingBytes.
 //
 // Returns a non-nil []Signature on success (never returns a nil slice
-// with nil error; v6 entries always have at least one signature).
+// with nil error; v7 entries always have at least one signature).
 //
 // Callers: core/envelope/serialize.go Deserialize.
 func ReadSignaturesSection(region []byte) ([]Signature, error) {

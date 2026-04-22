@@ -9,8 +9,8 @@ EvaluateAuthority(leafKey, fetcher, extractor):
 	Walks the Prior_Authority chain backward from AuthorityTip. Each entry
 	is classified as active, pending (within activation delay per
 	SchemaParameterExtractor), or overridden. Handles authority snapshots
-	(O(active constraints) shortcut via Evidence_Pointers) and skip pointers
-	(O(log A) traversal via Authority_Skip).
+	(O(active constraints) shortcut via Evidence_Pointers). v7.5 removed
+	the Authority_Skip reader — every walk now follows Prior_Authority.
 	Returns AuthorityEvaluation{ActiveConstraints, PendingCount}.
 
 VerifyDelegationProvenance(delegationPointers, fetcher, leafReader):
@@ -122,8 +122,7 @@ const maxAuthorityChainDepth = 1000
 //  1. An entry has no PriorAuthority (end of chain).
 //  2. PriorAuthority equals the entity position (base case).
 //  3. An authority snapshot is encountered (shortcut via Evidence_Pointers).
-//  4. A skip pointer (Authority_Skip) shortcuts the traversal.
-//  5. Maximum chain depth is reached (safety guard).
+//  4. Maximum chain depth is reached (safety guard).
 //
 // Each entry is classified using the activation delay from the
 // SchemaParameterExtractor (if available). Entries within the delay
@@ -212,13 +211,11 @@ func EvaluateAuthority(
 		allEntries = append(allEntries, ce)
 		eval.ChainLength++
 
-		// Check for skip pointer (O(log A) traversal).
-		if entry.Header.AuthoritySkip != nil {
-			current = *entry.Header.AuthoritySkip
-			continue
-		}
-
-		// Follow Prior_Authority chain.
+		// Follow Prior_Authority chain. v7.5 Phase B1 removed the
+		// AuthoritySkip reader — skip pointers were a "trust me, I
+		// validated the skipped range" claim from an untrusted party
+		// and were never validatable at this layer. Every walk now
+		// follows the single Prior_Authority edge.
 		if entry.Header.PriorAuthority == nil {
 			break // End of chain.
 		}

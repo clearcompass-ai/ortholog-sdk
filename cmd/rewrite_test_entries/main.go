@@ -65,7 +65,7 @@ const buildTestEntrySource = `// buildTestEntry constructs a fully-valid v6 entr
 // builds an entry for later Store/Serialize/EntryIdentity use MUST
 // go through this helper, not envelope.NewUnsignedEntry directly.
 //
-// Why: under v6, entries MUST carry at least one signature, and
+// Why: under v7, entries MUST carry at least one signature, and
 // Signatures[0].SignerDID must equal Header.SignerDID. Raw
 // NewUnsignedEntry produces an entry that cannot be safely passed to
 // Serialize or MockFetcher.Store. buildTestEntry attaches a

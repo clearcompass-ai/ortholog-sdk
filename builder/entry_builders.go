@@ -26,6 +26,7 @@ import (
 	"fmt"
 
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
+	"github.com/clearcompass-ai/ortholog-sdk/schema"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
@@ -63,12 +64,18 @@ func validateCommon(signerDID, destination string) error {
 // ── 1. BuildRootEntity ──────────────────────────────────────────────
 
 // RootEntityParams configures a new root entity entry.
+//
+// v7.5 removed KeyGenMode: a self-declared security claim with no
+// cryptographic binding to the key's actual provenance is an anti-
+// pattern (an attacker who steals or forges the key can claim any
+// generation mode). Domains that need to attest custody posture
+// should publish a separate attestation entry signed by the
+// exchange's institutional key — see docs/attestation-entries.md.
 type RootEntityParams struct {
 	Destination       string // DID of target exchange. Required.
 	SignerDID         string
 	Payload           []byte
 	SchemaRef         *types.LogPosition
-	KeyGenMode        *envelope.KeyGenMode
 	SubjectIdentifier []byte
 	EventTime         int64
 }
@@ -85,11 +92,9 @@ func BuildRootEntity(p RootEntityParams) (*envelope.Entry, error) {
 		Destination:       p.Destination,
 		AuthorityPath:     &ap,
 		SchemaRef:         p.SchemaRef,
-		KeyGenerationMode: p.KeyGenMode,
 		SubjectIdentifier: p.SubjectIdentifier,
 		EventTime:         p.EventTime,
 	}, p.Payload)
-
 }
 
 // ── 2. BuildAmendment ───────────────────────────────────────────────
@@ -609,33 +614,50 @@ func BuildKeyPrecommit(p KeyPrecommitParams) (*envelope.Entry, error) {
 
 // ── 16. BuildSchemaEntry ────────────────────────────────────────────
 
-// SchemaEntryParams configures a schema definition entry.
-// PredecessorSchema lives in Domain Payload JSON — SchemaParameterExtractor
-// reads it. This builder does not parse payload.
+// SchemaEntryParams configures a schema definition entry. v7.5
+// reshaped this from the old Payload-bytes + CommutativeOperations
+// split into a single structured Parameters field. The builder
+// marshals the parameters to canonical JSON via
+// schema.MarshalParameters, which is the inverse of the extractor
+// every verifier uses — the round-trip invariant is a permanent
+// regression gate (parameters_json_roundtrip_test.go).
+//
+// Pre-v7.5 callers that constructed JSON by hand must switch to
+// populating SchemaParameters. The structured form catches field
+// typos at compile time, guarantees canonical byte output across
+// callers, and eliminates the silent "my schema entry extracts as
+// defaults because I misspelled a JSON key" failure mode.
 type SchemaEntryParams struct {
-	Destination           string // DID of target exchange. Required.
-	SignerDID             string
-	Payload               []byte   // JSON with 10 well-known fields (incl predecessor_schema).
-	CommutativeOperations []uint32 // Non-empty → commutative OCC mode.
-	EventTime             int64
+	Destination string // DID of target exchange. Required.
+	SignerDID   string
+	// Parameters is the structured schema configuration. Marshaled
+	// internally by BuildSchemaEntry to canonical JSON for the entry's
+	// Domain Payload. Every field of types.SchemaParameters is
+	// emitted unconditionally (Option A) so the wire output is
+	// byte-stable across callers.
+	Parameters types.SchemaParameters
+	EventTime  int64
 }
 
-// BuildSchemaEntry creates a schema definition. Becomes an SMT leaf.
-// Referenced by other entries via Schema_Ref. Payload is not parsed here —
-// that's SchemaParameterExtractor's job.
+// BuildSchemaEntry creates a schema definition entry. Marshals
+// Parameters to canonical JSON and places the result in the entry's
+// Domain Payload. Downstream JSONParameterExtractor.Extract reads it
+// back losslessly.
 func BuildSchemaEntry(p SchemaEntryParams) (*envelope.Entry, error) {
 	if err := validateCommon(p.SignerDID, p.Destination); err != nil {
 		return nil, err
 	}
+	payload, err := schema.MarshalParameters(&p.Parameters)
+	if err != nil {
+		return nil, fmt.Errorf("builder/BuildSchemaEntry: marshal parameters: %w", err)
+	}
 	ap := envelope.AuthoritySameSigner
 	return envelope.NewUnsignedEntry(envelope.ControlHeader{
-		SignerDID:             p.SignerDID,
-		Destination:           p.Destination,
-		AuthorityPath:         &ap,
-		CommutativeOperations: p.CommutativeOperations,
-		EventTime:             p.EventTime,
-	}, p.Payload)
-
+		SignerDID:     p.SignerDID,
+		Destination:   p.Destination,
+		AuthorityPath: &ap,
+		EventTime:     p.EventTime,
+	}, payload)
 }
 
 // ═════════════════════════════════════════════════════════════════════

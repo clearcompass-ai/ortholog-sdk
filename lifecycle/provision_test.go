@@ -6,6 +6,8 @@ package lifecycle
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
 // -------------------------------------------------------------------------------------------------
@@ -99,8 +101,8 @@ func TestProvisionSingleLog_ProducesAllEntries(t *testing.T) {
 			{DelegateDID: "did:web:bob.test", ScopeLimit: []byte(`{"role":"clerk"}`)},
 		},
 		Schemas: []SchemaSpec{
-			{Payload: []byte(`{"schema":"a"}`)},
-			{Payload: []byte(`{"schema":"b"}`), CommutativeOperations: []uint32{1, 2}},
+			{Parameters: types.SchemaParameters{}},
+			{Parameters: types.SchemaParameters{CommutativeOperations: []uint32{1, 2}}},
 		},
 	})
 	if err != nil {
@@ -213,7 +215,7 @@ func TestLogProvision_AllEntriesOrderScope_Delegations_Schemas(t *testing.T) {
 			{DelegateDID: "did:web:b.test", ScopeLimit: []byte(`{}`)},
 		},
 		Schemas: []SchemaSpec{
-			{Payload: []byte(`{"s":1}`)},
+			{Parameters: types.SchemaParameters{}},
 		},
 	})
 	if err != nil {

@@ -34,6 +34,7 @@ import (
 
 	"github.com/clearcompass-ai/ortholog-sdk/builder"
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
+	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -54,13 +55,14 @@ type DelegationSpec struct {
 }
 
 // SchemaSpec describes one schema to publish at provisioning.
+// v7.5: structured parameters replace the raw Payload []byte + side
+// field for CommutativeOperations. BuildSchemaEntry marshals these
+// into the entry's Domain Payload via schema.MarshalParameters.
 type SchemaSpec struct {
-	// Payload is the schema's Domain Payload (JSON with well-known fields).
-	Payload []byte
-
-	// CommutativeOperations is non-empty for commutative schemas
-	// (SDK-D7: non-empty → delta-window OCC mode).
-	CommutativeOperations []uint32
+	// Parameters is the structured schema configuration. Includes
+	// CommutativeOperations — non-empty selects Δ-window OCC for
+	// this schema (Decision 37 / SDK-D7).
+	Parameters types.SchemaParameters
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -222,11 +224,10 @@ func ProvisionSingleLog(cfg SingleLogConfig) (*LogProvision, error) {
 	// 3. Schemas.
 	for _, s := range cfg.Schemas {
 		schemaEntry, err := builder.BuildSchemaEntry(builder.SchemaEntryParams{
-			Destination:           cfg.Destination,
-			SignerDID:             cfg.SignerDID,
-			Payload:               s.Payload,
-			CommutativeOperations: s.CommutativeOperations,
-			EventTime:             eventTime,
+			Destination: cfg.Destination,
+			SignerDID:   cfg.SignerDID,
+			Parameters:  s.Parameters,
+			EventTime:   eventTime,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("lifecycle/provision: schema: %w", err)

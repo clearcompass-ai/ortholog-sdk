@@ -22,7 +22,7 @@ KEY ARCHITECTURAL DECISIONS:
       is tight, callers should Deserialize once and cache the Entry.
     - The HTTP operator API (log/http_entry_fetcher.go) may still return
       sig_algo_id and signature_hex as JSON sidecar fields for
-      human-readable diagnostics. The fetcher ignores them under v6 —
+      human-readable diagnostics. The fetcher ignores them under v7 —
       CanonicalBytes is authoritative.
 
 OVERVIEW:

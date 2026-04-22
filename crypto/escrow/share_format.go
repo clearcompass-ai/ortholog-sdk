@@ -98,7 +98,19 @@ type Share struct {
 	// belongs to. Reconstruct rejects share sets whose SplitIDs do not
 	// all match. Prevents cross-split share mixing.
 	SplitID [32]byte
+
+	// FieldTag discriminates which secret-sharing scheme produced this
+	// share. 0x01 = GF(256) Shamir (V1). Future values reserved for
+	// Pedersen / VSS variants. Zero is accepted for backward
+	// compatibility with shares constructed before the tag existed;
+	// any explicit non-zero value MUST match SchemeGF256Tag.
+	FieldTag byte
 }
+
+// SchemeGF256Tag marks a share as produced by GF(256) Shamir (V1).
+// Populated by Split / SplitGF256; verified by Reconstruct and
+// ReconstructGF256.
+const SchemeGF256Tag byte = 0x01
 
 // SerializeShare encodes a Share into its 131-byte wire form.
 //
@@ -172,4 +184,22 @@ var (
 	ErrSplitIDMismatch    = errors.New("escrow: shares belong to different splits")
 	ErrDuplicateIndex     = errors.New("escrow: duplicate share index")
 	ErrEmptyShareSet      = errors.New("escrow: empty share set")
+
+	// ErrInsufficientShares is returned by ReconstructGF256 when the
+	// caller supplies fewer shares than the threshold recorded on
+	// those shares. Wraps ErrBelowThreshold so existing callers that
+	// match on the older sentinel keep working.
+	ErrInsufficientShares = errors.New("escrow: insufficient shares for reconstruction")
+
+	// ErrMixedThresholds is returned when shares from different
+	// splits (differing Threshold values) are mixed. Distinct from
+	// ErrThresholdMismatch (which flags the same condition under an
+	// earlier name) — tests may match on either.
+	ErrMixedThresholds = errors.New("escrow: mixed thresholds across shares")
+
+	// ErrUnknownFieldTag is returned when a share's FieldTag is set
+	// to a value the current code does not recognise. Guards against
+	// confused-deputy attacks where a caller submits a share from a
+	// future scheme (V2 Pedersen) into a V1-only reconstructor.
+	ErrUnknownFieldTag = errors.New("escrow: unknown share field tag")
 )

@@ -115,6 +115,7 @@ var (
 	ErrMalformedPayload          = errors.New("envelope: malformed payload")
 	ErrEmptySignerDID            = errors.New("envelope: Signer_DID must not be empty")
 	ErrNonASCIIDID               = errors.New("envelope: Signer_DID must be ASCII")
+	ErrHeaderSignerDIDTooLong    = errors.New("envelope: header SignerDID exceeds MaxSignerDIDLen")
 	ErrNonASCIIDestination       = errors.New("envelope: Destination must be ASCII")
 	ErrTooManyDelegationPointers = errors.New("envelope: DelegationPointers exceeds MaxDelegationPointers")
 	ErrTooManyEvidencePointers   = errors.New("envelope: EvidencePointers exceeds MaxEvidencePointers (non-snapshot)")
@@ -258,6 +259,16 @@ func validateHeaderForWrite(h *ControlHeader) error {
 	}
 	if !isASCII(h.SignerDID) {
 		return ErrNonASCIIDID
+	}
+	// BUG-008 fix: enforce SignerDID length cap at write time.
+	// Previously, oversize SignerDIDs passed validation and were
+	// silently truncated by appendLenPrefixedString at encode time
+	// (cap 65535), producing an entry whose serialized identity did
+	// not match what the caller sent. The MaxSignerDIDLen constant
+	// was defined in signatures_section.go but unenforced here.
+	if len(h.SignerDID) > MaxSignerDIDLen {
+		return fmt.Errorf("%w: length %d exceeds cap %d",
+			ErrHeaderSignerDIDTooLong, len(h.SignerDID), MaxSignerDIDLen)
 	}
 	// Destination binding: required field, validated for non-empty,
 	// non-whitespace, bounded length by ValidateDestination, plus ASCII

@@ -1,73 +1,76 @@
 /*
 FILE PATH:
-    core/envelope/signatures_section.go
+
+	core/envelope/signatures_section.go
 
 DESCRIPTION:
-    Wire-format codec for the signatures section that Serialize appends
-    to every v6 canonical entry. Defines the Signature struct and the
-    encode/decode helpers that Serialize and Deserialize invoke.
+
+	Wire-format codec for the signatures section that Serialize appends
+	to every v6 canonical entry. Defines the Signature struct and the
+	encode/decode helpers that Serialize and Deserialize invoke.
 
 KEY ARCHITECTURAL DECISIONS:
-    - The signatures section is length-prefixed at every level. uint16
-      signature count, uint16 DID length, uint16 algoID, uint32 sig
-      length. No length inference from content — v5's length-by-tag
-      design created an ambiguity surface that v6 eliminates by
-      construction.
-    - Explicit per-sig length field (uint32) admits variable-length
-      algorithms without any wire format change. SigAlgoJWZ (Polygon ID,
-      1-4KB typical) fits natively. Future algorithms are purely
-      additive: allocate an algoID in signature_algo.go, register a
-      verifier on VerifierRegistry, done.
-    - MaxSignatureBytes caps per-signature byte length at 48 KiB. Rationale:
-      Tessera bundle ceiling is 65535 bytes for the whole entry
-      (c2sp.org/tlog-tiles uint16 prefix). A realistic entry uses 1-2 KB
-      for header + payload, leaving ~63 KiB for signatures. A single sig
-      capped at 48 KiB admits the largest realistic JWZ proof (4 KB) with
-      room for cosignatures, while preventing pathological one-sig entries
-      from exhausting the bundle budget.
-    - MaxSignaturesPerEntry caps the signature list at 64. Entry-level
-      multi-sig (user + court cosign + witness attestation) fits
-      comfortably; the cap prevents DoS via unbounded sig-list expansion
-      and aligns with the 64-signer limit on witness cosignature tree
-      heads (witness_verify.go scheme).
-    - DID field validation: non-empty, ASCII, length-bounded. Consistent
-      with validateHeaderForWrite's SignerDID checks in serialize.go.
-      DIDs are ASCII per W3C spec; non-ASCII is a malformed input.
-    - Decode is strict. Unknown algoIDs reject. Length mismatches reject.
-      Zero-sig sections reject (entries without signatures are invalid;
-      see serialize.go Validate invariant). Overlong sections reject.
-      There is no forward-compatibility skip-unknown semantics at v6 —
-      the section parser is a total parser over its input, and any byte
-      it cannot interpret is a bug it surfaces immediately.
-    - Insertion order preservation. Signatures are serialized in slice
-      order and round-trip preserving that order. The protocol semantics
-      treat Signatures[0] as the primary signer (equal to Header.SignerDID
-      by invariant); subsequent entries are cosigners in submitter-declared
-      order. No canonicalizing sort — reordering would defeat the
-      "primary signer first" invariant.
+  - The signatures section is length-prefixed at every level. uint16
+    signature count, uint16 DID length, uint16 algoID, uint32 sig
+    length. No length inference from content — v5's length-by-tag
+    design created an ambiguity surface that v6 eliminates by
+    construction.
+  - Explicit per-sig length field (uint32) admits variable-length
+    algorithms without any wire format change. SigAlgoJWZ (Polygon ID,
+    1-4KB typical) fits natively. Future algorithms are purely
+    additive: allocate an algoID in signature_algo.go, register a
+    verifier on VerifierRegistry, done.
+  - MaxSignatureBytes caps per-signature byte length at 48 KiB. Rationale:
+    Tessera bundle ceiling is 65535 bytes for the whole entry
+    (c2sp.org/tlog-tiles uint16 prefix). A realistic entry uses 1-2 KB
+    for header + payload, leaving ~63 KiB for signatures. A single sig
+    capped at 48 KiB admits the largest realistic JWZ proof (4 KB) with
+    room for cosignatures, while preventing pathological one-sig entries
+    from exhausting the bundle budget.
+  - MaxSignaturesPerEntry caps the signature list at 64. Entry-level
+    multi-sig (user + court cosign + witness attestation) fits
+    comfortably; the cap prevents DoS via unbounded sig-list expansion
+    and aligns with the 64-signer limit on witness cosignature tree
+    heads (witness_verify.go scheme).
+  - DID field validation: non-empty, ASCII, length-bounded. Consistent
+    with validateHeaderForWrite's SignerDID checks in serialize.go.
+    DIDs are ASCII per W3C spec; non-ASCII is a malformed input.
+  - Decode is strict. Unknown algoIDs reject. Length mismatches reject.
+    Zero-sig sections reject (entries without signatures are invalid;
+    see serialize.go Validate invariant). Overlong sections reject.
+    There is no forward-compatibility skip-unknown semantics at v6 —
+    the section parser is a total parser over its input, and any byte
+    it cannot interpret is a bug it surfaces immediately.
+  - Insertion order preservation. Signatures are serialized in slice
+    order and round-trip preserving that order. The protocol semantics
+    treat Signatures[0] as the primary signer (equal to Header.SignerDID
+    by invariant); subsequent entries are cosigners in submitter-declared
+    order. No canonicalizing sort — reordering would defeat the
+    "primary signer first" invariant.
 
 OVERVIEW:
-    On encode: Serialize calls AppendSignaturesSection(buf, sigs) after
-    the payload. Each Signature contributes [uint16 didLen || did ||
-    uint16 algoID || uint32 sigLen || sig]. The section is prefixed with
-    a uint16 signature count.
 
-    On decode: Deserialize calls ReadSignaturesSection(region) on the
-    bytes after the payload. Returns []Signature or a wrapped error.
-    The section MUST consume the region exactly — trailing bytes are
-    a framing error, not a forward-compat signal.
+	On encode: Serialize calls AppendSignaturesSection(buf, sigs) after
+	the payload. Each Signature contributes [uint16 didLen || did ||
+	uint16 algoID || uint32 sigLen || sig]. The section is prefixed with
+	a uint16 signature count.
 
-    The SigningPayload of an entry (preamble + header + payload) is what
-    each signer signs. Serialize(entry) returns SigningPayload(entry) ||
-    signaturesSection(entry.Signatures). The Merkle leaf hash
-    (tessera_compat.EntryLeafHash) therefore commits to both the signing
-    payload and the signatures present at submission — the transparency
-    property v5 silently lacked.
+	On decode: Deserialize calls ReadSignaturesSection(region) on the
+	bytes after the payload. Returns []Signature or a wrapped error.
+	The section MUST consume the region exactly — trailing bytes are
+	a framing error, not a forward-compat signal.
+
+	The SigningPayload of an entry (preamble + header + payload) is what
+	each signer signs. Serialize(entry) returns SigningPayload(entry) ||
+	signaturesSection(entry.Signatures). The Merkle leaf hash
+	(tessera_compat.EntryLeafHash) therefore commits to both the signing
+	payload and the signatures present at submission — the transparency
+	property v5 silently lacked.
 
 KEY DEPENDENCIES:
-    - signature_algo.go: ValidateAlgorithmID gates every algoID on both
-      encode and decode.
-    - bytes, encoding/binary, errors, fmt, io (standard library).
+  - signature_algo.go: ValidateAlgorithmID gates every algoID on both
+    encode and decode.
+  - bytes, encoding/binary, errors, fmt, io (standard library).
 */
 package envelope
 
@@ -163,10 +166,11 @@ var (
 	// empty SignerDID.
 	ErrSignerDIDEmpty = errors.New("envelope: signature SignerDID is empty")
 
-	// ErrSignerDIDTooLong is returned when a decoded signature's SignerDID
-	// exceeds MaxSignerDIDLen.
-	ErrSignerDIDTooLong = errors.New("envelope: signature SignerDID exceeds MaxSignerDIDLen")
-
+	// ErrSignatureSignerDIDTooLong is returned when a Signature's
+	// SignerDID exceeds MaxSignerDIDLen. Distinct from
+	// ErrHeaderSignerDIDTooLong (serialize.go), which fires for the
+	// ControlHeader.SignerDID at write-time validation.
+	ErrSignatureSignerDIDTooLong = errors.New("envelope: signature SignerDID exceeds MaxSignerDIDLen")
 	// ErrSignerDIDNonASCII is returned when a decoded signature's SignerDID
 	// contains non-ASCII bytes.
 	ErrSignerDIDNonASCII = errors.New("envelope: signature SignerDID contains non-ASCII bytes")
@@ -193,7 +197,7 @@ func validateSignatureForEncode(s Signature) error {
 		return ErrSignerDIDEmpty
 	}
 	if len(s.SignerDID) > MaxSignerDIDLen {
-		return fmt.Errorf("%w: %d > %d", ErrSignerDIDTooLong, len(s.SignerDID), MaxSignerDIDLen)
+		return fmt.Errorf("%w: %d > %d", ErrSignatureSignerDIDTooLong, len(s.SignerDID), MaxSignerDIDLen)
 	}
 	if !isASCII(s.SignerDID) {
 		return ErrSignerDIDNonASCII
@@ -315,7 +319,7 @@ func readSignature(r *bytes.Reader) (Signature, error) {
 		return Signature{}, ErrSignerDIDEmpty
 	}
 	if int(didLen) > MaxSignerDIDLen {
-		return Signature{}, fmt.Errorf("%w: %d > %d", ErrSignerDIDTooLong, didLen, MaxSignerDIDLen)
+		return Signature{}, fmt.Errorf("%w: %d > %d", ErrSignatureSignerDIDTooLong, didLen, MaxSignerDIDLen)
 	}
 
 	didBytes := make([]byte, didLen)

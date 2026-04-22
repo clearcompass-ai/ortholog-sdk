@@ -1,4 +1,5 @@
 /*
+File: lifecycle/artifact_access.go
 Package lifecycle — artifact_access.go composes artifact access control.
 
 Four responsibilities:
@@ -62,9 +63,14 @@ import (
 // ═════════════════════════════════════════════════════════════════════
 
 // ArtifactKeyStore maps artifact CID to AES-GCM key material.
-// Used by GrantArtifactAccess (AES-GCM path), ReEncryptWithGrant,
-// and ExecuteRecovery. Not used by the PRE path — PRE owner keys
-// arrive via OwnerSecretKey on the grant params.
+// Used by GrantArtifactAccess (AES-GCM path) and ReEncryptWithGrant.
+// Not used by ExecuteRecovery — identity recovery reconstructs the
+// holder's Master Identity Key only; any per-artifact re-encryption
+// is orchestrated by the domain layer AFTER recovery, by calling
+// ReEncryptWithGrant per artifact CID.
+// Not used by the PRE path either — PRE owner keys have a different
+// lifecycle (per-identity, HSM-held) and arrive via OwnerSecretKey on
+// the grant params, not the key store.
 type ArtifactKeyStore interface {
 	Get(cid storage.CID) (*artifact.ArtifactKey, error)
 	Store(cid storage.CID, key artifact.ArtifactKey) error
@@ -520,7 +526,7 @@ func VerifyAndDecryptArtifact(params VerifyAndDecryptArtifactParams) ([]byte, er
 }
 
 // ═════════════════════════════════════════════════════════════════════
-// ReEncryptWithGrant — artifact key rotation for recovery
+// ReEncryptWithGrant — artifact key rotation
 // ═════════════════════════════════════════════════════════════════════
 
 // ReEncryptWithGrantParams configures artifact re-encryption.
@@ -541,7 +547,13 @@ type ReEncryptWithGrantResult struct {
 // key, re-encrypts with a fresh key, pushes the new ciphertext, and
 // deletes the old key from the store (cryptographic erasure).
 //
-// Used by ExecuteRecovery in recovery.go during M-of-N escrow recovery.
+// Called by the domain layer during identity recovery and artifact
+// migration. After lifecycle.ExecuteRecovery returns the holder's
+// Master Identity Key, the domain iterates its own artifact CIDs and
+// calls this function per artifact. The SDK identity-recovery pathway
+// does NOT call this function — it has no awareness of artifacts,
+// content stores, or artifact key stores. The architectural boundary
+// is: SDK recovers identity; domain orchestrates artifacts.
 func ReEncryptWithGrant(params ReEncryptWithGrantParams) (*ReEncryptWithGrantResult, error) {
 	oldKey, err := params.KeyStore.Get(params.OldCID)
 	if err != nil || oldKey == nil {

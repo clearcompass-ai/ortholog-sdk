@@ -1,122 +1,84 @@
 /*
-Package lifecycle — recovery.go implements three-phase key escrow recovery
-for the Ortholog protocol. Used when an exchange fails, a holder's keys
-are lost or compromised, or an identity migrates to a new credentialing
+Package lifecycle — recovery.go implements identity-key recovery for the
+Ortholog protocol. Used when a holder loses their hardware token,
+discovers key compromise, or needs to migrate to a new credentialing
 authority.
 
-# Overview
+# Scope: what escrow recovers
 
-There are three identity-recovery TYPES, determined by DID method:
+Escrow recovers the 32-byte MASTER IDENTITY KEY. Not an artifact-
+encryption key, not a delegation key. The master identity key is the
+private key behind the holder's DID — the key they use to sign entries,
+authorize successions, and unwrap any identity-scoped secrets stored
+for them elsewhere.
 
-	did:web   → in-place succession. The institution updates its hosted
-	            did.json and publishes a Succession Entry. The identifier
-	            is stable; only the authorized key changes.
-	did:pkh   → new-wallet succession via escrow-proof. The holder proves
-	            they owned the old wallet by decrypting the mapping_escrow,
-	            then a Succession Entry links the new wallet to the old
-	            wallet's history.
-	did:key   → no recovery. Self-certifying ephemeral identifiers do not
-	            survive key loss. A new did:key is generated and the
-	            holder starts over.
+The M-of-N escrow pathway exists because losing a hardware token means
+losing the ability to authenticate to the network. Without authority
+to authenticate, the holder cannot sign a Succession Entry; without a
+Succession Entry, no other party can bind their authority to a new key.
+Cryptographic escrow is the mechanism that gets the holder back into
+the system.
 
-There are two execution MECHANISMS:
+# Scope: what escrow does NOT recover
 
-	cooperative → M-of-N cryptographic escrow. The holder's AES key was
-	              previously split via Shamir-style secret sharing and
-	              each share was ECIES-wrapped for an independent escrow
-	              node. Recovery collects and reconstructs the shares.
-	              InitiateRecovery → CollectShares → ExecuteRecovery
-	              implements this pathway.
-	arbitrated  → consensus override. When escrow nodes refuse to
-	              cooperate or the holder's keys are stolen, the
-	              AuthoritySet votes. A supermajority of administrators
-	              plus an independent witness can authorize the override
-	              without escrow cooperation. EvaluateArbitration
-	              implements this pathway.
+Escrow does not touch artifacts. Three consequences flow from this:
+
+ 1. ExecuteRecovery takes no ContentStore, no ArtifactKeyStore, no
+    ArtifactCIDs. Those belong to the domain application's access-
+    control plane, not to identity recovery.
+
+ 2. ExecuteRecovery takes no AES-GCM nonce. Nonces live domain-side
+    in the ArtifactKeyStore alongside the artifact-encryption keys
+    they apply to. After identity recovery, the holder uses their
+    recovered master key to authenticate to the domain and retrieve
+    artifact keys and nonces through normal domain channels.
+
+ 3. Re-encrypting artifacts (if required) is a SEPARATE operation the
+    domain orchestrates after identity recovery, by looping over its
+    own artifact CIDs and calling lifecycle.ReEncryptWithGrant per
+    artifact. ExecuteRecovery does not know or care about this loop.
+
+# Three phases
+
+	InitiateRecovery → builds the recovery-request commentary entry
+	CollectShares    → validates M-of-N shares as they arrive
+	ExecuteRecovery  → reconstructs the 32-byte master identity key,
+	                   optionally builds a Succession Entry
+
+# Arbitration pathway
+
+EvaluateArbitration handles the case where escrow nodes refuse to
+cooperate or the holder's key is stolen. A schema-declared supermajority
+of escrow-node cosignatures on the recovery request (typically ⌈2N/3⌉)
+plus an optional independent-identity-witness cosignature authorizes
+the override without escrow cooperation. All three BUG-009 validation
+fixes are preserved in this file; see EvaluateArbitration for details.
 
 # Scheme-agnosticism (V1/V2 escrow)
 
 This file calls only scheme-agnostic escrow API:
 
-	escrow.ValidateShareFormat  — per-share structural check
-	escrow.Reconstruct          — threshold reconstruction
-	escrow.ZeroBytes            — elision-proof byte-slice zeroization
-	escrow.ZeroArray32          — elision-proof [32]byte zeroization
+	escrow.ValidateShareFormat — per-share structural check
+	escrow.Reconstruct         — threshold reconstruction
+	escrow.ZeroBytes           — elision-proof slice zeroization
+	escrow.ZeroArray32         — elision-proof [32]byte zeroization
 
-V1 (current) implements GF(256) Shamir. V2 (reserved) will implement
-Pedersen VSS over secp256k1. Both emit 32-byte secrets (AES-256 keys),
-and both route through the named functions above. When V2 ships, the
-escrow package gains version dispatch internally and this file requires
-zero changes.
-
-# Architectural boundary: nonce placement
-
-V1 escrow splits ONLY the 32-byte AES key — the secret portion of
-ArtifactKey. The 12-byte AES-GCM nonce is non-secret metadata and lives
-domain-side alongside the Key in the ArtifactKeyStore. The nonce does
-NOT appear in EscrowPackage and is NOT reconstructed from shares.
-
-The recovery orchestrator (the caller of ExecuteRecovery) is responsible
-for retrieving the nonce from the pre-recovery ArtifactKeyStore (or its
-backup) and supplying it via ExecuteRecoveryParams.Nonce. This function
-combines the reconstructed 32-byte Key with the caller-supplied 12-byte
-Nonce to re-form the full ArtifactKey for re-encryption under the new
-authority.
-
-# BUG-009 preservation
-
-EvaluateArbitration contains three validation fixes that close a
-specific attack where a compromised escrow operator could fabricate
-override authorization:
-
-	Fix 1: Witness-cosignature deserialize errors block authorization
-	       (do not silently tolerate malformed bytes).
-	Fix 2: Witness cosignature is bound to the recovery request position
-	       via verifier.IsCosignatureOf (any other cosignature target
-	       does not satisfy).
-	Fix 3: Witness signer must not be in p.EscrowNodeSet (independence
-	       requirement).
-
-A configuration guard requires EscrowNodeSet to be non-empty whenever
-the schema declares OverrideRequiresIndependentWitness=true — silently
-skipping the independence check when the set is missing was the
-pre-fix behavior.
+V1 (current) uses GF(256) Shamir. V2 (reserved) will use Pedersen VSS
+over secp256k1. Both return a 32-byte secret and route through the
+named functions above. When V2 ships, the escrow package gains version
+dispatch internally and this file requires zero changes.
 
 # Destination binding
 
-Every public Params struct that produces an entry carries a Destination
-field (the DID of the target exchange). lifecycle validates it via
-envelope.ValidateDestination and threads it into every builder.*Params
-literal so the canonical hash commits to the destination.
-
-# Error model
-
-ExecuteRecovery returns a hard error only for fail-fast conditions
-(invalid destination, no shares, missing nonce, reconstruction failure).
-Partial-success states — some artifacts re-encrypted, others failed; or
-succession-entry construction failed after successful re-encryption —
-are surfaced via RecoveryResult.ArtifactErrors and .SuccessionError
-rather than discarding the partial result.
-
-# Five-layer architecture
-
-Recovery ripples through every layer of the Ortholog trust stack:
-
-	Layer 1 (Origin)     — new key signs the Succession Entry (ECDSA/Ed25519)
-	Layer 2 (Structural) — log operator appends, SMT AuthorityTip shifts
-	Layer 3 (Consensus)  — witnesses cosign the new state (BLS/ECDSA)
-	Layer 4 (Federated)  — cross-log proofs bundle SMT + witness cosigs
-	Layer 5 (Semantic)   — domain rules (e.g. did:pkh mapping escrow)
-	                        validate the real-world identity claim
-
-This file sits at Layers 1-2 of the recovery pathway. Layer 3 is
-handled by the witness subsystem; Layers 4-5 are handled by federation
-and domain code respectively.
+InitiateRecovery and ExecuteRecovery both produce entries (a recovery
+request and an optional Succession Entry). Both validate Destination
+via envelope.ValidateDestination and thread it into every builder.*
+Params literal, so the canonical hash commits to the destination and
+cross-exchange replay is cryptographically impossible.
 
 # Consumed by
 
-  - judicial-network/migration/ungraceful.go
-    InitiateRecovery → CollectShares → ExecuteRecovery
+  - judicial-network/migration/ungraceful.go — orchestrates full recovery
   - Exchange migration tooling
   - Governance body recovery coordination
 */
@@ -128,7 +90,6 @@ import (
 
 	"github.com/clearcompass-ai/ortholog-sdk/builder"
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
-	"github.com/clearcompass-ai/ortholog-sdk/crypto/artifact"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
@@ -149,8 +110,9 @@ var (
 	ErrRecoveryNotInitiated = fmt.Errorf("lifecycle/recovery: recovery not initiated")
 
 	// ErrInsufficientShares is returned when ExecuteRecovery is called
-	// with fewer shares than needed. The escrow package enforces the
-	// actual threshold; this sentinel guards the empty-input case.
+	// with an empty share set. The escrow package enforces the actual
+	// threshold; this sentinel guards the empty-input case that
+	// escrow.Reconstruct would otherwise surface as a threshold error.
 	ErrInsufficientShares = fmt.Errorf("lifecycle/recovery: insufficient valid shares")
 
 	// ErrShareValidationFailed wraps per-share validation errors
@@ -168,33 +130,32 @@ var (
 	ErrArbitrationRequired = fmt.Errorf("lifecycle/recovery: custody dispute requires arbitration")
 
 	// ErrInsufficientOverride is returned when an arbitration override
-	// falls below the schema-declared supermajority threshold.
+	// falls below the schema-declared supermajority threshold. Defined
+	// for typed errors.Is dispatching by arbitration callers.
 	ErrInsufficientOverride = fmt.Errorf("lifecycle/recovery: override requires schema-declared supermajority")
 
 	// ErrMissingWitnessCosig is returned when the schema requires an
 	// independent identity witness and no witness cosignature was
-	// supplied.
+	// supplied. Defined for typed errors.Is dispatching.
 	ErrMissingWitnessCosig = fmt.Errorf("lifecycle/recovery: schema requires independent identity witness cosignature")
 
 	// ErrMissingEscrowNodeSet is returned when
 	// OverrideRequiresIndependentWitness=true and EscrowNodeSet is
 	// empty. The independence check (BUG-009 fix 3) requires the set
-	// to be populated; silently skipping the check was the pre-fix
-	// behavior.
+	// to be populated; silently skipping it was the pre-fix behavior.
 	ErrMissingEscrowNodeSet = fmt.Errorf("lifecycle/recovery: OverrideRequiresIndependentWitness requires EscrowNodeSet")
 
-	// ErrMissingNonce is returned when ExecuteRecovery is called with a
-	// zero-valued Nonce. Escrow reconstructs only the 32-byte AES key;
-	// the AES-GCM nonce lives domain-side in the ArtifactKeyStore and
-	// is the caller's responsibility to supply. A zero nonce is almost
-	// certainly a caller bug (uninitialized field), not an intentional
-	// choice.
-	ErrMissingNonce = fmt.Errorf("lifecycle/recovery: ExecuteRecovery requires non-zero Nonce (supplied by caller from ArtifactKeyStore)")
-
 	// ErrInvalidEscrowNodeCount is returned when TotalEscrowNodes is
-	// not a positive integer. A zero or negative N makes the threshold
+	// zero or negative. A non-positive N makes the threshold
 	// undefined.
 	ErrInvalidEscrowNodeCount = fmt.Errorf("lifecycle/recovery: TotalEscrowNodes must be positive")
+
+	// ErrReconstructedSizeMismatch is returned when escrow.Reconstruct
+	// returns a secret whose size is not escrow.SecretSize. Defensive
+	// invariant — escrow.Reconstruct is contracted to return exactly
+	// 32 bytes, but asserting surfaces any future contract violation
+	// at the lifecycle boundary rather than far downstream.
+	ErrReconstructedSizeMismatch = fmt.Errorf("lifecycle/recovery: reconstructed secret size mismatch")
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -207,7 +168,9 @@ var (
 
 // InitiateRecoveryParams configures a recovery request.
 type InitiateRecoveryParams struct {
-	// Destination is the DID of the target exchange. Required.
+	// Destination is the DID of the target exchange (the log the
+	// recovery request is being published to). Required. Validated by
+	// envelope.ValidateDestination.
 	Destination string
 
 	// NewExchangeDID is the DID authorized to execute the recovery —
@@ -219,13 +182,14 @@ type InitiateRecoveryParams struct {
 	// in the institutional-succession case.
 	HolderDID string
 
-	// Reason is a free-text human-readable description (e.g.
-	// "lost YubiKey", "compromised wallet", "staff transition").
+	// Reason is free-text, human-readable, e.g. "lost YubiKey",
+	// "compromised wallet", "staff transition". Recorded in the
+	// request payload for audit.
 	Reason string
 
 	// EscrowPackageCID locates the holder's escrow package in the
 	// content-addressed store. The package carries the M-of-N
-	// configuration and the per-node ECIES-wrapped shares.
+	// configuration and per-node ECIES-wrapped shares.
 	EscrowPackageCID storage.CID
 
 	// EventTime is the microsecond-precision timestamp. Zero means
@@ -240,16 +204,16 @@ type InitiateRecoveryResult struct {
 	RequestEntry *envelope.Entry
 
 	// RequestPayload is the decoded payload carried inside
-	// RequestEntry. Provided so callers can log or audit without
+	// RequestEntry, provided so callers can log or audit without
 	// re-parsing the entry.
 	RequestPayload map[string]any
 }
 
-// InitiateRecovery builds the recovery request commentary entry.
+// InitiateRecovery builds the recovery-request commentary entry.
 //
-// The caller is responsible for signing and submitting the returned
-// entry. This function does not sign — the signer DID may not be
-// reachable at construction time (e.g. air-gapped recovery).
+// The caller signs and submits the returned entry. This function does
+// not sign — the signer key may not be reachable at construction time
+// (e.g. air-gapped recovery, HSM coordination delay).
 func InitiateRecovery(p InitiateRecoveryParams) (*InitiateRecoveryResult, error) {
 	if err := envelope.ValidateDestination(p.Destination); err != nil {
 		return nil, fmt.Errorf("lifecycle/recovery: %w", err)
@@ -294,8 +258,8 @@ func InitiateRecovery(p InitiateRecoveryParams) (*InitiateRecoveryResult, error)
 //
 // Validates individual shares as they arrive from escrow nodes. This is
 // the pre-reconstruction gate — shares that fail here are surfaced to
-// the caller with a specific reason, and valid shares are accumulated
-// toward the reconstruction threshold.
+// the caller with a specific reason; valid shares accumulate toward the
+// reconstruction threshold.
 // ─────────────────────────────────────────────────────────────────────
 
 // CollectSharesParams configures share collection.
@@ -310,8 +274,8 @@ type CollectSharesParams struct {
 	ContentStore storage.ContentStore
 
 	// DecryptedShares are the plaintext shares, already unwrapped from
-	// their per-node ECIES envelopes by the caller. The caller holds
-	// the node-private-keys; this function does not.
+	// their per-node ECIES envelopes by the caller (who holds the
+	// node-private-keys). This function does not decrypt.
 	DecryptedShares []escrow.Share
 
 	// RequiredThreshold is M — the minimum valid shares needed to
@@ -328,7 +292,7 @@ type CollectedShares struct {
 	// duplicate-index detection. Ordered by arrival (stable).
 	ValidShares []escrow.Share
 
-	// InvalidCount is len(DecryptedShares) - len(ValidShares).
+	// InvalidCount is len(DecryptedShares) − len(ValidShares).
 	InvalidCount int
 
 	// InvalidReasons maps the input index of each rejected share to a
@@ -337,8 +301,8 @@ type CollectedShares struct {
 	InvalidReasons map[int]string
 
 	// SufficientForRecovery is true when len(ValidShares) >= Threshold.
-	// This is an early-warning signal, not a substitute for the
-	// threshold enforcement inside escrow.Reconstruct.
+	// Early-warning signal, not a substitute for the threshold check
+	// inside escrow.Reconstruct.
 	SufficientForRecovery bool
 
 	// Threshold mirrors CollectSharesParams.RequiredThreshold for
@@ -347,7 +311,7 @@ type CollectedShares struct {
 }
 
 // CollectShares validates individual shares as they arrive from escrow
-// nodes and reports which ones are eligible for reconstruction.
+// nodes and reports which are eligible for reconstruction.
 //
 // Per-share validation delegates to escrow.ValidateShareFormat, which
 // is scheme-agnostic: under V1 it enforces GF(256) Shamir invariants;
@@ -361,10 +325,9 @@ type CollectedShares struct {
 // gives a clearer error surface.
 //
 // This function never returns a hard error — invalid shares are
-// surfaced via InvalidReasons. A caller that receives
-// SufficientForRecovery=false from this function should continue
-// collecting; a caller that receives SufficientForRecovery=true may
-// proceed to ExecuteRecovery.
+// surfaced via InvalidReasons. A caller receiving
+// SufficientForRecovery=false should continue collecting; a caller
+// receiving SufficientForRecovery=true may proceed to ExecuteRecovery.
 func CollectShares(p CollectSharesParams) (*CollectedShares, error) {
 	result := &CollectedShares{
 		InvalidReasons: make(map[int]string),
@@ -395,61 +358,39 @@ func CollectShares(p CollectSharesParams) (*CollectedShares, error) {
 // ─────────────────────────────────────────────────────────────────────
 // Phase 3: ExecuteRecovery
 //
-// Reconstructs the holder's AES-256 key from the collected shares,
-// combines it with the caller-supplied AES-GCM nonce, and re-encrypts
-// the holder's artifacts under fresh per-artifact keys. Optionally
-// publishes a Succession Entry binding the recovery to the new
-// authority.
+// Reconstructs the holder's 32-byte Master Identity Key from the
+// collected escrow shares. Optionally builds a Succession Entry binding
+// the recovery to a new authority. Does NOT touch artifacts — artifact
+// re-encryption, if needed, is the domain layer's responsibility via
+// ReEncryptWithGrant (see artifact_access.go).
 // ─────────────────────────────────────────────────────────────────────
 
-// ExecuteRecoveryParams configures key reconstruction and re-encryption.
+// ExecuteRecoveryParams configures key reconstruction.
+//
+// The parameter set is deliberately minimal: this function is the
+// identity-key reconstruction primitive, not an artifact orchestrator.
+// Artifact-layer concerns (ContentStore, ArtifactKeyStore, nonces,
+// artifact CIDs) are domain-layer responsibilities that live OUTSIDE
+// the SDK identity boundary.
 type ExecuteRecoveryParams struct {
-	// Destination is the DID of the target exchange. Required.
+	// Destination is the DID of the target exchange — the log the
+	// Succession Entry will be published to, if one is built.
+	// Required. Validated by envelope.ValidateDestination even when
+	// no succession is requested (catches misconfiguration early).
 	Destination string
 
 	// Shares are the M-of-N escrow shares, already decrypted from
 	// their per-node ECIES envelopes. Must meet the threshold declared
 	// in Shares[0].Threshold; escrow.Reconstruct enforces this and
-	// returns ErrBelowThreshold otherwise.
+	// returns a wrapped ErrReconstructionFailed otherwise.
 	Shares []escrow.Share
 
-	// Nonce is the AES-GCM nonce for the artifacts being recovered.
-	//
-	// Escrow splits ONLY the 32-byte AES key. The 12-byte AES-GCM
-	// nonce is non-secret metadata and lives domain-side in the
-	// ArtifactKeyStore. The caller retrieves the nonce from the
-	// pre-recovery ArtifactKeyStore (or its backup) and passes it
-	// here. ExecuteRecovery combines the reconstructed Key with
-	// this Nonce to re-form the full ArtifactKey.
-	//
-	// A zero-valued Nonce is rejected with ErrMissingNonce — a zero
-	// IV is almost certainly an uninitialized caller field rather
-	// than an intentional choice.
-	Nonce [12]byte
-
-	// ArtifactCIDs are the content-addressed IDs of the artifacts to
-	// re-encrypt. Each is re-encrypted under a fresh key derived by
-	// ReEncryptWithGrant; the mapping from old CID to new CID is
-	// returned in RecoveryResult.ReEncryptedArtifacts.
-	ArtifactCIDs []storage.CID
-
-	// ContentStore provides read/write access to artifact ciphertext.
-	ContentStore storage.ContentStore
-
-	// KeyStore is the destination for re-encrypted artifact keys. May
-	// be nil if the caller does not want ExecuteRecovery to persist
-	// new keys (e.g. in a dry-run). When non-nil, each successfully
-	// re-encrypted artifact's new key is stored before the CID
-	// mapping is added to the result.
-	KeyStore ArtifactKeyStore
-
-	// NewExchangeDID is the signer of the Succession Entry. When
-	// empty, no Succession Entry is built and SuccessionEntry in the
-	// result is nil.
+	// NewExchangeDID is the signer of the Succession Entry. Empty
+	// means "do not build a Succession Entry".
 	NewExchangeDID string
 
-	// TargetRoot is the log position anchoring the succession. When
-	// nil, no Succession Entry is built.
+	// TargetRoot is the log position anchoring the succession. Nil
+	// means "do not build a Succession Entry".
 	TargetRoot *types.LogPosition
 
 	// EventTime is the microsecond-precision timestamp for the
@@ -458,76 +399,98 @@ type ExecuteRecoveryParams struct {
 	EventTime int64
 }
 
-// RecoveryResult holds the outcome of key reconstruction and
-// re-encryption.
+// RecoveryResult holds the reconstructed Master Identity Key and any
+// optional Succession Entry.
 //
-// Partial-success semantics: if some artifacts fail to re-encrypt, the
-// successful ones appear in ReEncryptedArtifacts and the failures
-// appear in ArtifactErrors. If succession-entry construction fails
-// after successful re-encryption, SuccessionEntry is nil and
-// SuccessionError is non-nil.
+// # Secret handling
 //
-// The reconstructed key material is NOT exposed on this struct — it is
-// zeroized before ExecuteRecovery returns. Callers with a legitimate
-// need for the raw material should derive it themselves from their
-// own share management code.
+// MasterKey holds raw private-key material. Callers MUST zeroize the
+// field when done — either by calling Zeroize() or by passing &MasterKey
+// to escrow.ZeroArray32. Any copy of RecoveryResult (value assignment,
+// JSON marshaling, logging) propagates the secret. Treat this type as
+// ephemeral and short-lived.
+//
+// The idiomatic usage is:
+//
+//	result, err := lifecycle.ExecuteRecovery(params)
+//	if err != nil {
+//	    return err
+//	}
+//	defer result.Zeroize()
+//	// use result.MasterKey to sign the Succession Entry, unwrap
+//	// delegation-key wrappers, authenticate to the domain, etc.
+//
+// # Partial-success semantics
+//
+// Reconstruction itself is all-or-nothing. Succession-entry construction
+// is separate: if it was requested (NewExchangeDID and TargetRoot both
+// set) and failed, SuccessionEntry is nil and SuccessionError is
+// non-nil. In that case, MasterKey is still valid — the caller can
+// retry succession without re-running escrow.
 type RecoveryResult struct {
-	// ReEncryptedArtifacts maps original CID → new CID for artifacts
-	// that were successfully re-encrypted under the recovered key.
-	ReEncryptedArtifacts map[string]storage.CID
+	// MasterKey is the reconstructed 32-byte Master Identity Key.
+	// Callers MUST zeroize via Zeroize() after use. See the struct
+	// doc comment for the idiomatic pattern.
+	MasterKey [32]byte
 
-	// ArtifactErrors maps original CID → error for artifacts that
-	// failed to re-encrypt. A non-empty ArtifactErrors alongside a
-	// non-empty ReEncryptedArtifacts indicates partial success.
-	ArtifactErrors map[string]error
-
-	// SuccessionEntry is the built, unsigned Succession Entry. Nil
-	// when no succession was requested (TargetRoot==nil or
-	// NewExchangeDID=="") or when succession construction failed
-	// (in which case SuccessionError is non-nil).
+	// SuccessionEntry is the built, unsigned Succession Entry when
+	// succession was requested and succeeded. Nil in every other case
+	// (not requested, or construction failed — check SuccessionError).
 	SuccessionEntry *envelope.Entry
 
-	// SuccessionError records the error, if any, from attempting to
-	// build the Succession Entry. Non-nil SuccessionError with
-	// non-empty ReEncryptedArtifacts indicates a re-encryption
-	// success followed by a succession-construction failure.
+	// SuccessionError records the error from attempting to build the
+	// Succession Entry, when one was requested. Nil when succession
+	// was not requested or when it succeeded.
 	SuccessionError error
 }
 
-// ExecuteRecovery reconstructs the holder's AES-256 key from the
-// collected escrow shares, combines it with the caller-supplied
-// AES-GCM nonce, re-encrypts the listed artifacts under fresh keys,
-// and (optionally) builds a Succession Entry.
+// Zeroize clears MasterKey using the elision-proof escrow primitive.
+// Safe to call on a nil *RecoveryResult (no-op) and safe to call
+// multiple times (idempotent). Callers should defer Zeroize immediately
+// after a successful ExecuteRecovery return.
+func (r *RecoveryResult) Zeroize() {
+	if r == nil {
+		return
+	}
+	escrow.ZeroArray32(&r.MasterKey)
+}
+
+// ExecuteRecovery reconstructs the holder's 32-byte Master Identity Key
+// from the collected escrow shares, and (optionally) builds a
+// Succession Entry binding the new authority.
 //
 // # Scheme-agnosticism
 //
 // escrow.Reconstruct dispatches internally on the share Version byte.
 // Under V1 it performs GF(256) Lagrange interpolation; under V2 (when
-// reserved) it will perform Pedersen VSS reconstruction. Both schemes
-// return a 32-byte secret (AES-256 key), so this function's contract
-// is identical across schemes.
+// reserved) it will perform Pedersen VSS reconstruction. Both return
+// a 32-byte secret, so this function's contract is identical across
+// schemes.
 //
-// # Nonce architecture
+// # Scope boundary
 //
-// The caller supplies the AES-GCM nonce via p.Nonce. See the doc
-// comment on ExecuteRecoveryParams.Nonce for the full boundary
-// argument. A zero-valued Nonce is rejected with ErrMissingNonce.
-//
-// # Zeroization
-//
-// The reconstructed key bytes and the assembled ArtifactKey fields are
-// zeroized via escrow.ZeroBytes and escrow.ZeroArray32 before return.
-// These primitives are elision-proof: they use //go:noinline and
-// runtime.KeepAlive to prevent the Go compiler from optimizing away
-// zero-writes to memory that appears unused.
+// This function recovers the Master Identity Key — the private key
+// behind the holder's DID. It does NOT recover artifact-encryption
+// keys, does NOT take a ContentStore or ArtifactKeyStore, and does
+// NOT re-encrypt artifacts. Artifact re-encryption (if required) is
+// orchestrated by the domain layer AFTER this function returns, by
+// looping over its own artifact CIDs and calling ReEncryptWithGrant
+// per artifact.
 //
 // # Error model
 //
 // Returns a hard error (and nil result) only for fail-fast conditions:
-// invalid destination, empty share set, missing nonce, reconstruction
-// failure, or reconstructed-size mismatch. Partial-success states
-// (some artifacts failed to re-encrypt; succession failed after
-// re-encryption) are reported inside the returned RecoveryResult.
+// invalid destination, empty share set, or reconstruction failure
+// (including size-mismatch defensive check). Succession-entry failures
+// after successful reconstruction are surfaced inside the returned
+// RecoveryResult via SuccessionError — the caller keeps the MasterKey
+// and can retry succession without re-running the M-of-N math.
+//
+// # Zeroization contract
+//
+// On success, the caller owns the returned MasterKey and MUST zeroize
+// it after use (see RecoveryResult.Zeroize). This function zeroizes
+// all intermediate buffers internally.
 func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 	if err := envelope.ValidateDestination(p.Destination); err != nil {
 		return nil, fmt.Errorf("lifecycle/recovery: %w", err)
@@ -535,99 +498,54 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 	if len(p.Shares) == 0 {
 		return nil, ErrInsufficientShares
 	}
-	if p.Nonce == ([12]byte{}) {
-		return nil, ErrMissingNonce
-	}
 
-	// Reconstruct the AES key from shares. escrow.Reconstruct enforces
-	// threshold, SplitID binding, version consistency, and per-share
-	// structural validity internally. Under V1 this is GF(256) Shamir;
-	// under V2 it will be Pedersen VSS — same contract, same return
-	// size.
+	// Reconstruct the master identity key from shares.
+	// escrow.Reconstruct enforces threshold, SplitID binding, version
+	// consistency, and per-share structural validity internally.
 	keyBytes, err := escrow.Reconstruct(p.Shares)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrReconstructionFailed, err)
 	}
 
-	// Defensive: Reconstruct is contracted to return exactly
-	// artifact.KeySize (32) bytes. Assert the invariant rather than
-	// trust it silently — a future bug here would flow a wrong-sized
-	// key into AES-GCM and surface as a confusing encryption error
-	// far from the root cause.
-	if len(keyBytes) != artifact.KeySize {
-		escrow.ZeroBytes(keyBytes)
-		return nil, fmt.Errorf("%w: reconstructed %d bytes, expected %d",
-			ErrReconstructionFailed, len(keyBytes), artifact.KeySize)
-	}
-
-	// Zeroize the reconstructed key bytes when we return. Registered
-	// before any other work so we can't leak through an early return.
+	// Zeroize the intermediate slice no matter how we return. Must be
+	// registered before any code path that can return with keyBytes
+	// still populated.
 	defer escrow.ZeroBytes(keyBytes)
 
-	// Assemble the ArtifactKey from reconstructed key + caller-supplied
-	// nonce. Zeroize both fields on return.
-	var oldKey artifact.ArtifactKey
-	copy(oldKey.Key[:], keyBytes)
-	oldKey.Nonce = p.Nonce
-	defer escrow.ZeroArray32(&oldKey.Key)
-	defer escrow.ZeroBytes(oldKey.Nonce[:])
-
-	result := &RecoveryResult{
-		ReEncryptedArtifacts: make(map[string]storage.CID, len(p.ArtifactCIDs)),
-		ArtifactErrors:       make(map[string]error),
+	// Defensive invariant: escrow.Reconstruct is contracted to return
+	// exactly escrow.SecretSize (32) bytes. Asserting surfaces any
+	// future contract violation at the lifecycle boundary rather than
+	// far downstream as a confusing cryptographic failure.
+	if len(keyBytes) != escrow.SecretSize {
+		return nil, fmt.Errorf("%w: got %d bytes, expected %d",
+			ErrReconstructedSizeMismatch, len(keyBytes), escrow.SecretSize)
 	}
 
-	// Re-encrypt each artifact. Per-artifact failures are recorded
-	// in result.ArtifactErrors rather than aborting the whole loop —
-	// a caller retrying against a large set wants to know which
-	// artifacts succeeded so they can focus retries on failures.
-	for _, oldCID := range p.ArtifactCIDs {
-		cidStr := oldCID.String()
+	result := &RecoveryResult{}
+	copy(result.MasterKey[:], keyBytes)
 
-		reResult, err := ReEncryptWithGrant(ReEncryptWithGrantParams{
-			OldCID:              oldCID,
-			KeyStore:            &recoveryKeyAdapter{key: oldKey, targetCID: oldCID},
-			ContentStore:        p.ContentStore,
-			DeleteOldCiphertext: false,
-		})
-		if err != nil {
-			result.ArtifactErrors[cidStr] = fmt.Errorf("re-encrypt: %w", err)
-			continue
-		}
-
-		if p.KeyStore != nil {
-			if err := p.KeyStore.Store(reResult.NewCID, reResult.NewKey); err != nil {
-				result.ArtifactErrors[cidStr] = fmt.Errorf("store new key: %w", err)
-				continue
-			}
-		}
-
-		result.ReEncryptedArtifacts[cidStr] = reResult.NewCID
-	}
-
-	// Optional Succession Entry. Built only when both TargetRoot and
-	// NewExchangeDID are provided — either alone is insufficient.
-	// Failures here do not invalidate the re-encryption results.
+	// Optional Succession Entry. Built only when both NewExchangeDID
+	// and TargetRoot are provided — either alone is insufficient.
+	// Failure here does NOT invalidate result.MasterKey; the caller
+	// can retry succession without re-running the M-of-N math.
 	if p.TargetRoot != nil && p.NewExchangeDID != "" {
 		eventTime := p.EventTime
 		if eventTime == 0 {
 			eventTime = time.Now().UTC().UnixMicro()
 		}
 
-		succEntry, err := builder.BuildSuccession(builder.SuccessionParams{
+		succEntry, sErr := builder.BuildSuccession(builder.SuccessionParams{
 			Destination:  p.Destination,
 			SignerDID:    p.NewExchangeDID,
 			TargetRoot:   *p.TargetRoot,
 			NewSignerDID: p.NewExchangeDID,
 			Payload: mustMarshalJSON(map[string]any{
-				"succession_type":       "escrow_recovery",
-				"artifacts_reencrypted": len(result.ReEncryptedArtifacts),
-				"artifacts_failed":      len(result.ArtifactErrors),
+				"succession_type": "escrow_recovery",
 			}),
 			EventTime: eventTime,
 		})
-		if err != nil {
-			result.SuccessionError = fmt.Errorf("lifecycle/recovery: build succession: %w", err)
+		if sErr != nil {
+			result.SuccessionError = fmt.Errorf("lifecycle/recovery: build succession: %w", sErr)
 		} else {
 			result.SuccessionEntry = succEntry
 		}
@@ -651,7 +569,7 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 //      RecoveryRequest position.
 //
 // EvaluateArbitration validates both conditions and reports whether
-// OverrideAuthorized can proceed.
+// the override can proceed.
 // ─────────────────────────────────────────────────────────────────────
 
 // ArbitrationParams configures an escrow arbitration override.
@@ -685,9 +603,10 @@ type ArbitrationParams struct {
 	EscrowNodeSet map[string]bool
 
 	// WitnessCosignature is the independent-identity-witness
-	// cosignature, required when SchemaParams.OverrideRequiresIndependentWitness
-	// is true. Must reference RecoveryRequestPos (BUG-009 fix 2) and
-	// must be signed by a DID outside EscrowNodeSet (fix 3).
+	// cosignature, required when
+	// SchemaParams.OverrideRequiresIndependentWitness is true. Must
+	// reference RecoveryRequestPos (BUG-009 fix 2) and must be signed
+	// by a DID outside EscrowNodeSet (fix 3).
 	WitnessCosignature *types.EntryWithMetadata
 
 	// SchemaParams provides the override policy. Nil means defaults:
@@ -729,7 +648,7 @@ type ArbitrationResult struct {
 //
 //	Gate 1: Witness-cosignature deserialize errors are fatal. A
 //	        malformed witness does not silently pass as "no witness
-//	        available, fall through" (which was the pre-fix behavior).
+//	        available, fall through" (the pre-fix behavior).
 //	Gate 2: Witness cosignature must reference p.RecoveryRequestPos
 //	        via verifier.IsCosignatureOf. Any other cosignature
 //	        target fails this gate.
@@ -754,9 +673,9 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidEscrowNodeCount, p.TotalEscrowNodes)
 	}
 
-	// Resolve schema-declared override policy. A nil SchemaParams
-	// means "defaults" — zero-value OverrideThresholdRule (two-thirds)
-	// and no witness requirement.
+	// Resolve schema-declared override policy. A nil SchemaParams means
+	// "defaults" — zero-value OverrideThresholdRule (two-thirds) and no
+	// witness requirement.
 	var threshold types.OverrideThresholdRule
 	requiresWitness := false
 	if p.SchemaParams != nil {
@@ -847,46 +766,4 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 		result.Reason += " + independent witness cosignature"
 	}
 	return result, nil
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Internal: recoveryKeyAdapter
-//
-// Adapts a single ArtifactKey to the ArtifactKeyStore interface so
-// ReEncryptWithGrant can read it via its normal KeyStore.Get path.
-// Only the Get method is functional; Store and Delete are no-ops
-// because ReEncryptWithGrant does not write to the adapter.
-//
-// The caller's real KeyStore (p.KeyStore in ExecuteRecoveryParams) is
-// the actual write destination for re-encrypted keys.
-// ─────────────────────────────────────────────────────────────────────
-
-type recoveryKeyAdapter struct {
-	key       artifact.ArtifactKey
-	targetCID storage.CID
-}
-
-// Get returns the wrapped key when the requested CID matches
-// targetCID; otherwise returns (nil, nil). ReEncryptWithGrant treats
-// the nil-key case as "key not found" and surfaces an error to the
-// caller, which is the behavior we want if anything ever asks for a
-// CID other than the one this adapter was instantiated with.
-func (a *recoveryKeyAdapter) Get(cid storage.CID) (*artifact.ArtifactKey, error) {
-	if cid.Equal(a.targetCID) {
-		k := a.key
-		return &k, nil
-	}
-	return nil, nil
-}
-
-// Store is a no-op. ReEncryptWithGrant does not write to the adapter;
-// the caller's KeyStore receives new keys via
-// ExecuteRecovery's own Store call.
-func (a *recoveryKeyAdapter) Store(_ storage.CID, _ artifact.ArtifactKey) error {
-	return nil
-}
-
-// Delete is a no-op for the same reason Store is.
-func (a *recoveryKeyAdapter) Delete(_ storage.CID) error {
-	return nil
 }

@@ -283,7 +283,7 @@ func Verify(share Share, commitments Commitments) error {
 	lhsHx, lhsHy := curve.ScalarMult(hX, hY, padScalar(blind))
 	lhsX, lhsY := curve.Add(lhsGx, lhsGy, lhsHx, lhsHy)
 
-	rhsX, rhsY, err := commitmentCombine(curve, n, share.Index, commitments)
+	rhsX, rhsY, err := commitmentCombine(curve, share.Index, commitments)
 	if err != nil {
 		return err
 	}
@@ -301,26 +301,66 @@ func Verify(share Share, commitments Commitments) error {
 // but never sees the scalars rk_i and b_i (the scalars are the
 // proxy's secret).
 //
-// Checks (index in 1..MaxShares, non-empty commitments, hash match
-// with pre-computed commitment hash is caller's concern):
+// Checks (index in 1..MaxShares, non-empty commitments, non-nil
+// point inputs, on-curve for vk and bk):
 //
 //	VK_i + BK_i  ==  sum_{j=0}^{M-1} (i^j mod n) · C_j
 //
 // where all points are on secp256k1. Returns nil on match, one of
 // the ErrInvalid*/ErrCommitment* sentinels otherwise.
 //
-// The function does NOT check CommitmentHash — the caller is
-// responsible for gating on that (in the share path, Verify does
-// it; in the CFrag path, the caller threads the commitment vector
-// through from the on-log commentary entry directly, so the hash
-// check is structural rather than included in the point
-// verification).
+// # Caller contract
 //
-// The inputs vkX, vkY, bkX, bkY must be non-nil and describe points
-// already known to be on secp256k1. A caller with wire bytes should
-// Unmarshal and IsOnCurve-check before calling this — the same
-// discipline the Umbral CFrag parser applies to every point on
-// ingress.
+// The commitments argument MUST be the commitment vector published
+// on-log under the SplitID corresponding to this CFrag's grant
+// context. VerifyPoints does NOT validate that binding: it does not
+// check CommitmentHash (there is no hash on the CFrag; the binding
+// is enforced by the SplitID lookup, not by a hash field). Passing
+// a commitment vector from a different SplitID will surface as
+// ErrCommitmentMismatch — the polynomial equation will not balance —
+// but the specific error will not distinguish "wrong commitments"
+// from "CFrag tampered with". That discrimination happens upstream
+// at the log-lookup step.
+//
+// Point inputs vkX, vkY, bkX, bkY must be non-nil. On-curve is
+// validated here (cofactor = 1 on secp256k1, so on-curve implies
+// prime-order-subgroup; no separate subgroup check is needed). A
+// caller parsing points from wire bytes should still Unmarshal +
+// IsOnCurve-check at ingress, so a bad wire format surfaces as a
+// parse error rather than reaching this function.
+//
+// # Example CFrag verification flow (Phase C, crypto/artifact/pre.go)
+//
+//	// 1. Derive SplitID from the public grant context. ADR-005 §6.2
+//	//    makes this deterministic from (grantor, recipient, artifact).
+//	splitID := computePREGrantSplitID(grantorDID, recipientDID, artifactCID)
+//
+//	// 2. Fetch the pre-grant-commitment-v1 entry from the log.
+//	entry, err := fetcher.FetchBySplitID(splitID)
+//	if err != nil { return err }
+//	commitments, err := extractCommitmentsFromPayload(entry.Payload)
+//	if err != nil { return err }
+//
+//	// 3. Parse the CFrag points and on-curve-check at ingress
+//	//    (not this function's concern; done by the CFrag parser).
+//
+//	// 4. Verify polynomial consistency — this function.
+//	if err := vss.VerifyPoints(
+//	    cfrag.Index, cfrag.VKX, cfrag.VKY, cfrag.BKX, cfrag.BKY,
+//	    commitments,
+//	); err != nil {
+//	    return fmt.Errorf("CFrag polynomial check: %w", err)
+//	}
+//
+//	// 5. Verify the DLEQ proof separately. Not this function's
+//	//    concern; lives in crypto/artifact/pre.go.
+//	if err := verifyDLEQ(cfrag, commitments); err != nil {
+//	    return fmt.Errorf("CFrag DLEQ check: %w", err)
+//	}
+//
+// Both step 4 and step 5 MUST pass independently. Either failing is
+// a rejection: Pedersen soundness does not imply DLEQ soundness and
+// vice versa.
 func VerifyPoints(index byte, vkX, vkY, bkX, bkY *big.Int, commitments Commitments) error {
 	if index == 0 || index > MaxShares {
 		return fmt.Errorf("%w: %d", ErrShareIndexOutOfRange, index)
@@ -333,10 +373,16 @@ func VerifyPoints(index byte, vkX, vkY, bkX, bkY *big.Int, commitments Commitmen
 	}
 
 	curve := secp256k1.S256()
-	n := curve.Params().N
 
 	// Belt-and-braces on-curve check. A caller that passes an
 	// off-curve point would cause undefined behaviour in curve.Add.
+	//
+	// On-curve alone is sufficient on secp256k1: the curve has
+	// cofactor 1, so every on-curve point is in the prime-order
+	// subgroup. No separate subgroup-membership check is needed —
+	// a distinct concern from BLS12-381's G2, where cofactor > 1
+	// and subgroup membership is non-trivial (see the BLS signer's
+	// public-key validation for the contrasting case).
 	if !curve.IsOnCurve(vkX, vkY) {
 		return fmt.Errorf("%w: vk", ErrInvalidCommitmentPoint)
 	}
@@ -347,7 +393,7 @@ func VerifyPoints(index byte, vkX, vkY, bkX, bkY *big.Int, commitments Commitmen
 	// LHS = VK + BK.
 	lhsX, lhsY := curve.Add(vkX, vkY, bkX, bkY)
 
-	rhsX, rhsY, err := commitmentCombine(curve, n, index, commitments)
+	rhsX, rhsY, err := commitmentCombine(curve, index, commitments)
 	if err != nil {
 		return err
 	}
@@ -362,11 +408,17 @@ func VerifyPoints(index byte, vkX, vkY, bkX, bkY *big.Int, commitments Commitmen
 // the curve. Shared between Verify (scalar-side) and VerifyPoints
 // (point-side). Returns the combined point or one of the
 // ErrInvalidCommitmentPoint / ErrCommitmentVectorEmpty sentinels.
-func commitmentCombine(curve *secp256k1.KoblitzCurve, n *big.Int, index byte, commitments Commitments) (*big.Int, *big.Int, error) {
+//
+// Every commitment point is Unmarshal'd and on-curve-checked before
+// use. On-curve alone suffices on secp256k1: cofactor is 1, so every
+// on-curve point is in the prime-order subgroup. No separate
+// subgroup-membership check is necessary.
+func commitmentCombine(curve *secp256k1.KoblitzCurve, index byte, commitments Commitments) (*big.Int, *big.Int, error) {
 	if len(commitments.Points) == 0 {
 		return nil, nil, ErrCommitmentVectorEmpty
 	}
 	// Compute i^j incrementally mod n.
+	n := curve.Params().N
 	power := big.NewInt(1)
 	idx := big.NewInt(int64(index))
 	var rhsX, rhsY *big.Int

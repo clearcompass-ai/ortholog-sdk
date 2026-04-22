@@ -1,6 +1,34 @@
 // Package vss implements Pedersen Verifiable Secret Sharing over
 // secp256k1.
 //
+// # Consumers
+//
+// core/vss is a primitive-only package, consumed by two SDK
+// subsystems. Each consumer wraps the primitive with its own
+// wire-format and binding metadata; the primitive takes no opinion
+// on either.
+//
+//   - crypto/escrow/vss_v2.go: Pedersen-VSS-backed escrow split.
+//     Wraps vss.Share with Version, Threshold, FieldTag, and a
+//     domain-separated SplitID. Distributes wire-formatted shares
+//     to escrow nodes.
+//
+//   - crypto/artifact/pre.go: Umbral proxy re-encryption. Uses
+//     vss.Split internally for KFrag construction, and exposes
+//     VK_i = G^{rk_i} and BK_i = H^{b_i} as points on the CFrag
+//     wire format. CFrag verifiers use vss.VerifyPoints to check
+//     polynomial consistency without seeing the underlying scalars.
+//
+// Every Pedersen event — every escrow split, every PRE grant —
+// generates its own fresh polynomial pair. Split samples new
+// polynomials on every call; no public function accepts a
+// polynomial as input. Blinding-polynomial isolation between events
+// is structural, not merely documented.
+//
+// The full cryptographic specification lives in the v7.75 Pedersen
+// VSS ADR (ADR-005, forthcoming; docs/adr/). The ADR is the
+// auditor-facing companion to this package's godoc.
+//
 // # What this package provides
 //
 // One scheme: Pedersen VSS, M-of-N, with cryptographic share

@@ -57,6 +57,7 @@ package envelope
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -157,10 +158,16 @@ func EntryLeafHash(entry *Entry) [32]byte {
 func MarshalBundleEntry(entry *Entry) []byte {
 	data := Serialize(entry)
 	if len(data) > MaxBundleEntrySize {
-		// Fail loud: silent truncation would corrupt every tile the
-		// entry appears in. The validation layer should have rejected
-		// this entry before it reached MarshalBundleEntry.
-		panic("envelope: entry exceeds c2sp.org/tlog-tiles bundle size limit (65535 bytes)")
+		// Fail loud: NewEntry/Validate should have rejected with
+		// ErrBundleEntryTooLarge. If this panics, a caller is either
+		// skipping validation or hand-constructing an Entry bypassing
+		// NewEntry. Silent truncation would corrupt every tile the
+		// entry appears in; the panic is the invariant's last line
+		// of defense.
+		panic(fmt.Sprintf(
+			"envelope: MarshalBundleEntry on invalid entry "+
+				"(call Validate or NewEntry first): %d > %d",
+			len(data), MaxBundleEntrySize))
 	}
 	out := make([]byte, 0, 2+len(data))
 	out = binary.BigEndian.AppendUint16(out, uint16(len(data)))

@@ -345,3 +345,172 @@ func TestContentStore_PushFetchDelete(t *testing.T) {
 		t.Fatalf("expected ErrContentNotFound, got: %v", err)
 	}
 }
+/*
+Append these tests to tests/crypto_test.go after the existing
+TestEscrow_TagValidation test.
+
+Tests added in this patch:
+
+  TestEscrow_BUG010_RejectsBelowThreshold
+    BUG-010 headline regression guard. Attempting to reconstruct
+    from (M-1) shares of an M-of-N split must be rejected with
+    ErrInsufficientShares.
+
+  TestEscrow_BUG010_ExactlyAtThreshold
+    Boundary test. Exactly M shares succeed.
+
+  TestEscrow_BUG010_AboveThresholdSucceeds
+    Positive control. More than M shares also succeed (Lagrange
+    interpolation is consistent when over-determined).
+
+  TestEscrow_BUG010_RejectsMixedThresholds
+    Consistency check. Shares from different splits (differing
+    Threshold declarations) must be rejected.
+
+  TestEscrow_BUG010_ShareCarriesThreshold
+    Wire-level check. Every share emitted by SplitGF256 has
+    Threshold populated to the M parameter.
+
+MUTATION PROBE
+--------------
+After tests pass, in crypto/escrow/api.go ReconstructGF256, comment
+out the threshold-enforcement block:
+
+    // if len(shares) < int(threshold) {
+    //     return nil, fmt.Errorf("%w: got %d shares, threshold %d",
+    //         ErrInsufficientShares, len(shares), threshold)
+    // }
+
+Run: go test -count=1 -v -run TestEscrow_BUG010_RejectsBelowThreshold ./tests/
+Expected: FAIL with "BUG-010 REGRESSION: ReconstructGF256 accepted..."
+
+Restore the block. Re-run. Test passes.
+*/
+
+package tests
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
+)
+
+// ─────────────────────────────────────────────────────────────────────
+// BUG-010 regression guards
+// ─────────────────────────────────────────────────────────────────────
+
+// TestEscrow_BUG010_RejectsBelowThreshold is the BUG-010 headline
+// regression guard. Attempting to reconstruct from fewer than M shares
+// of an M-of-N split must error with ErrInsufficientShares.
+//
+// Before the fix: ReconstructGF256 silently produced a wrong-but-
+// deterministic byte sequence. No error.
+// After the fix: hard error, ErrInsufficientShares.
+func TestEscrow_BUG010_RejectsBelowThreshold(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	// 3-of-5 split.
+	shares, err := escrow.SplitGF256(secret, 3, 5)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	// Attempt reconstruction with only 2 shares (below threshold).
+	_, err = escrow.ReconstructGF256(shares[:2])
+
+	if err == nil {
+		t.Fatal("BUG-010 REGRESSION: ReconstructGF256 accepted 2 shares " +
+			"of a 3-of-5 split. Threshold secrecy is broken — the function " +
+			"would silently produce a wrong secret from below-threshold input.")
+	}
+	if !errors.Is(err, escrow.ErrInsufficientShares) {
+		t.Fatalf("expected ErrInsufficientShares, got: %v", err)
+	}
+}
+
+// TestEscrow_BUG010_ExactlyAtThreshold confirms that exactly M shares
+// succeed. Boundary against off-by-one in the threshold check.
+func TestEscrow_BUG010_ExactlyAtThreshold(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	shares, err := escrow.SplitGF256(secret, 3, 5)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	// Exactly 3 shares (at threshold).
+	recovered, err := escrow.ReconstructGF256(shares[:3])
+	if err != nil {
+		t.Fatalf("at-threshold reconstruction failed: %v", err)
+	}
+	if string(recovered) != string(secret) {
+		t.Fatalf("at-threshold reconstruction returned wrong secret")
+	}
+}
+
+// TestEscrow_BUG010_AboveThresholdSucceeds confirms over-determined
+// reconstruction works. 4 shares of a 3-of-5 split should succeed —
+// Lagrange interpolation over-determined with consistent points still
+// yields the correct polynomial.
+func TestEscrow_BUG010_AboveThresholdSucceeds(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	shares, err := escrow.SplitGF256(secret, 3, 5)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	// 4 shares (above threshold).
+	recovered, err := escrow.ReconstructGF256(shares[:4])
+	if err != nil {
+		t.Fatalf("above-threshold reconstruction failed: %v", err)
+	}
+	if string(recovered) != string(secret) {
+		t.Fatalf("above-threshold reconstruction returned wrong secret")
+	}
+}
+
+// TestEscrow_BUG010_RejectsMixedThresholds confirms the consistency
+// check: a caller cannot stitch shares from different splits together
+// to reduce the effective threshold.
+func TestEscrow_BUG010_RejectsMixedThresholds(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+
+	// Two independent splits with different thresholds.
+	sharesA, err := escrow.SplitGF256(secret, 3, 5) // 3-of-5
+	if err != nil {
+		t.Fatalf("split A: %v", err)
+	}
+	sharesB, err := escrow.SplitGF256(secret, 2, 5) // 2-of-5
+	if err != nil {
+		t.Fatalf("split B: %v", err)
+	}
+
+	// Stitched set: 2 shares from each split.
+	mixed := []escrow.Share{sharesA[0], sharesB[1]}
+
+	_, err = escrow.ReconstructGF256(mixed)
+	if err == nil {
+		t.Fatal("BUG-010 REGRESSION: ReconstructGF256 accepted shares " +
+			"from different splits with inconsistent thresholds.")
+	}
+	if !errors.Is(err, escrow.ErrMixedThresholds) {
+		t.Fatalf("expected ErrMixedThresholds, got: %v", err)
+	}
+}
+
+// TestEscrow_BUG010_ShareCarriesThreshold is a wire-level invariant
+// check. Every share emitted by SplitGF256 must carry the threshold
+// in its Threshold field, otherwise reconstruction-time enforcement
+// cannot work.
+func TestEscrow_BUG010_ShareCarriesThreshold(t *testing.T) {
+	secret := []byte("0123456789abcdef0123456789abcdef")
+	shares, err := escrow.SplitGF256(secret, 3, 5)
+	if err != nil {
+		t.Fatalf("split: %v", err)
+	}
+
+	for i, s := range shares {
+		if s.Threshold != 3 {
+			t.Errorf("share[%d].Threshold = %d, want 3", i, s.Threshold)
+		}
+	}
+}

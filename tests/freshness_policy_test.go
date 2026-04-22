@@ -60,7 +60,7 @@ func entryWithEventTime(t *testing.T, ts time.Time) *envelope.Entry {
 	t.Helper()
 	return &envelope.Entry{
 		Header: envelope.ControlHeader{
-			EventTime: ts.Unix(),
+			EventTime: ts.UnixMicro(),
 			SignerDID: "did:web:test.example.com",
 		},
 	}

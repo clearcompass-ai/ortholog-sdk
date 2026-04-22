@@ -86,12 +86,6 @@ type MerkleProver interface {
 	InclusionProof(position, treeSize uint64) (*types.MerkleProof, error)
 }
 
-// EntryFetcher fetches log entries by position.
-// Structurally identical to builder.EntryFetcher — no import needed.
-type EntryFetcher interface {
-	Fetch(pos types.LogPosition) (*types.EntryWithMetadata, error)
-}
-
 // AnchorPayloadExtractor parses the opaque DomainPayload of an anchor entry
 // and returns the 32-byte tree head reference it claims to anchor.
 // Provided by the domain application to keep the SDK payload-agnostic.
@@ -213,7 +207,7 @@ func VerifyCrossLogProof(
 func BuildCrossLogProof(
 	sourceRef types.LogPosition,
 	anchorRef types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	sourceProver MerkleProver,
 	localProver MerkleProver,
 	sourceHead types.CosignedTreeHead,

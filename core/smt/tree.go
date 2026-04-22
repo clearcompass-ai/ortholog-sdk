@@ -93,6 +93,13 @@ func (t *Tree) StopTracking() []types.LeafMutation {
 
 func (t *Tree) GetLeaf(key [32]byte) (*types.SMTLeaf, error) { return t.leaves.Get(key) }
 
+// Get implements LeafReader. Aliases GetLeaf so *Tree satisfies the
+// read-only LeafReader interface used by core/scope and other readers
+// that need only leaf lookup. The two methods are identical; callers
+// inside the builder tend to spell it GetLeaf, callers passing *Tree
+// as a LeafReader satisfy the interface via this method.
+func (t *Tree) Get(key [32]byte) (*types.SMTLeaf, error) { return t.leaves.Get(key) }
+
 // SetLeaf writes a single leaf and, if tracking is active, records a
 // mutation describing the before/after state.
 //

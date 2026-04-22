@@ -11,7 +11,7 @@ import (
 
 type mockSchemaResolver struct{ commutative bool }
 
-func (r *mockSchemaResolver) Resolve(ref types.LogPosition, fetcher builder.EntryFetcher) (*builder.SchemaResolution, error) {
+func (r *mockSchemaResolver) Resolve(ref types.LogPosition, fetcher types.EntryFetcher) (*builder.SchemaResolution, error) {
 	return &builder.SchemaResolution{IsCommutative: r.commutative, DeltaWindowSize: 10}, nil
 }
 
@@ -50,7 +50,12 @@ func TestOCC_CommutativeWithinWindow(t *testing.T) {
 	h, entityPos, scopePos := setupOCCHarness(t)
 	h.schema = &mockSchemaResolver{commutative: true}
 	schemaPos := pos(10)
-	schemaEntry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:schema-author", AuthorityPath: sameSigner(), CommutativeOperations: []uint32{1, 2}}, nil)
+	// v7.5: CommutativeOperations moved from ControlHeader to Domain
+	// Payload. Test uses a mockSchemaResolver that returns
+	// IsCommutative=true (set above), so the payload content isn't
+	// what drives the OCC mode here — the mock does. Empty payload is
+	// sufficient fixture-wise.
+	schemaEntry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:schema-author", AuthorityPath: sameSigner()}, nil)
 	h.fetcher.Store(schemaPos, schemaEntry)
 	e1 := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), SchemaRef: ptrTo(schemaPos)}, nil)
 	e1Pos := pos(3)

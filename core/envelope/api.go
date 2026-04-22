@@ -50,9 +50,9 @@ package envelope
 
 const (
 	// currentProtocolVersion is the version that NewEntry emits for new
-	// entries. At SDK v6.0 (this release): 6. Internal; callers use
+	// entries. At SDK v7 (v7.5 bundle): 7. Internal; callers use
 	// CurrentProtocolVersion() or ActiveVersion().
-	currentProtocolVersion uint16 = 6
+	currentProtocolVersion uint16 = 7
 )
 
 // CurrentProtocolVersion returns the protocol version that new entries
@@ -89,8 +89,8 @@ const (
 	// cosignature references.
 	MaxEvidencePointers = 32
 
-	// MaxAdmissionProofBody caps the length-prefixed admission proof body.
-	// Prevents Authority_Skip corruption by bounding the sub-reader
-	// region during deserialization.
+	// MaxAdmissionProofBody caps the length-prefixed admission proof
+	// body. Bounds the sub-reader region during deserialization so
+	// a malformed proof cannot bleed into adjacent fields.
 	MaxAdmissionProofBody = 4096
 )

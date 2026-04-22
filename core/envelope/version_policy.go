@@ -103,7 +103,7 @@ func (s VersionState) String() string {
 // via the explicit migration path (Deserialize-v5-SDK → transform →
 // NewEntry-v6-SDK) before this release is deployed.
 var versionPolicy = map[uint16]VersionState{
-	6: VersionActive,
+	7: VersionActive,
 }
 
 // -------------------------------------------------------------------------------------------------

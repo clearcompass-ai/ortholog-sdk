@@ -97,7 +97,7 @@ type ProcessWithRetryParams struct {
 	Tree        *smt.Tree
 	Entries     []*envelope.Entry
 	Positions   []types.LogPosition
-	Fetcher     EntryFetcher
+	Fetcher     types.EntryFetcher
 	SchemaRes   SchemaResolver
 	LocalLogDID string
 	DeltaBuffer *DeltaWindowBuffer

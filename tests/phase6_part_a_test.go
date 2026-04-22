@@ -16,6 +16,7 @@ import (
 	"crypto/elliptic"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/clearcompass-ai/ortholog-sdk/builder"
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
@@ -23,6 +24,7 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/artifact"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/signatures"
 	"github.com/clearcompass-ai/ortholog-sdk/lifecycle"
+	"github.com/clearcompass-ai/ortholog-sdk/schema"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
@@ -499,11 +501,13 @@ func TestBuild_MirrorEntry_MissingSourceLogDID_Error(t *testing.T) {
 
 func TestBuild_SchemaEntry_Valid(t *testing.T) {
 	entry, err := builder.BuildSchemaEntry(builder.SchemaEntryParams{
-		Destination:           testDestinationDID,
-		SignerDID:             "did:example:schema-author",
-		Payload:               []byte(`{"activation_delay":100}`),
-		CommutativeOperations: []uint32{1, 2},
-		EventTime:             1700000015,
+		Destination: testDestinationDID,
+		SignerDID:   "did:example:schema-author",
+		Parameters: types.SchemaParameters{
+			ActivationDelay:       100 * time.Second,
+			CommutativeOperations: []uint32{1, 2},
+		},
+		EventTime: 1700000015,
 	})
 	if err != nil {
 		t.Fatalf("BuildSchemaEntry: %v", err)
@@ -511,8 +515,15 @@ func TestBuild_SchemaEntry_Valid(t *testing.T) {
 	if *entry.Header.AuthorityPath != envelope.AuthoritySameSigner {
 		t.Fatal("AuthorityPath should be SameSigner")
 	}
-	if len(entry.Header.CommutativeOperations) != 2 {
-		t.Fatalf("CommutativeOperations: %d", len(entry.Header.CommutativeOperations))
+	// v7.5: CommutativeOperations moved from ControlHeader to Domain
+	// Payload. Round-trip the schema entry through the extractor to
+	// verify the parameter survived the marshal/unmarshal.
+	extracted, err := schema.NewJSONParameterExtractor().Extract(entry)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(extracted.CommutativeOperations) != 2 {
+		t.Fatalf("CommutativeOperations: %d, want 2", len(extracted.CommutativeOperations))
 	}
 }
 

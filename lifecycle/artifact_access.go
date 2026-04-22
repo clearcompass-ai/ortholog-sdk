@@ -54,7 +54,7 @@ Narrow interfaces declared in this file:
 
 	artifactContentStore — Fetch/Push/Delete subset of storage.ContentStore
 	retrievalResolver    — Resolve subset of storage.RetrievalProvider
-	entryFetcher         — Fetch subset of builder.EntryFetcher
+	entryFetcher         — Fetch subset of types.EntryFetcher
 	leafReader           — Get subset of smt.LeafReader
 
 Compile-time drift detection lives in artifact_access_test.go: every
@@ -130,7 +130,7 @@ type retrievalResolver interface {
 }
 
 // entryFetcher is the entry-by-position surface lifecycle/ consumes
-// from builder.EntryFetcher. Used to dereference scope-entity pointers
+// from types.EntryFetcher. Used to dereference scope-entity pointers
 // during grant authorization.
 type entryFetcher interface {
 	Fetch(pos types.LogPosition) (*types.EntryWithMetadata, error)
@@ -225,7 +225,7 @@ type GrantAuthCheckParams struct {
 	AuthorizedRecipients []string
 
 	// Fetcher retrieves entries by position (scope entry lookup).
-	// builder.EntryFetcher satisfies this interface via structural
+	// types.EntryFetcher satisfies this interface via structural
 	// typing; test mocks implement only Fetch.
 	Fetcher entryFetcher
 
@@ -364,7 +364,7 @@ type GrantArtifactAccessParams struct {
 
 	// Grant authorization (Phase 6). Required when
 	// SchemaParams.GrantAuthorizationMode != GrantAuthOpen. Any
-	// builder.EntryFetcher / smt.LeafReader satisfies these interfaces
+	// types.EntryFetcher / smt.LeafReader satisfies these interfaces
 	// via structural typing.
 	ScopePointer         *types.LogPosition
 	AuthorizedRecipients []string

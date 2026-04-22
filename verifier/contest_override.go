@@ -96,7 +96,7 @@ const defaultAuthoritySetSize = 3
 //   - OperationBlocked=false, both set: contested but overridden
 func EvaluateContest(
 	pendingPos types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	leafReader smt.LeafReader,
 	extractor schema.SchemaParameterExtractor,
 ) (*ContestResult, error) {
@@ -184,7 +184,7 @@ func EvaluateContest(
 // Returns nil if any step of the resolution fails.
 func fetchSchemaParams(
 	ref types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	extractor schema.SchemaParameterExtractor,
 ) *types.SchemaParameters {
 	schemaMeta, err := fetcher.Fetch(ref)
@@ -212,7 +212,7 @@ func fetchSchemaParams(
 func findContest(
 	tip types.LogPosition,
 	pendingPos types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 ) (*types.LogPosition, *envelope.Entry) {
 	current := tip
 	visited := make(map[types.LogPosition]bool)
@@ -259,7 +259,7 @@ func findOverride(
 	tip types.LogPosition,
 	contestPos types.LogPosition,
 	pendingPos types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	requiredOverride int,
 	requiresWitness bool,
 	contestEntry *envelope.Entry,
@@ -341,7 +341,7 @@ func referencesPosition(pointers []types.LogPosition, target types.LogPosition) 
 // not here.
 func collectEvidenceSigners(
 	pointers []types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	contestPos types.LogPosition,
 ) map[string]bool {
 	signers := make(map[string]bool)
@@ -383,7 +383,7 @@ func collectEvidenceSigners(
 // preserved.
 func hasWitnessCosig(
 	pointers []types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	authorityMembers map[string]bool,
 	contestPos types.LogPosition,
 ) bool {
@@ -412,7 +412,7 @@ func hasWitnessCosig(
 
 // getAuthoritySetSize reads the AuthoritySet size from the scope entity
 // referenced by the pending entry.
-func getAuthoritySetSize(pendingEntry *envelope.Entry, fetcher EntryFetcher) int {
+func getAuthoritySetSize(pendingEntry *envelope.Entry, fetcher types.EntryFetcher) int {
 	sp := pendingEntry.Header.ScopePointer
 	if sp == nil {
 		return 0
@@ -430,7 +430,7 @@ func getAuthoritySetSize(pendingEntry *envelope.Entry, fetcher EntryFetcher) int
 
 // getAuthoritySetMembers reads the AuthoritySet members from the scope
 // entity referenced by the pending entry. Returns a set of DID strings.
-func getAuthoritySetMembers(pendingEntry *envelope.Entry, fetcher EntryFetcher) map[string]bool {
+func getAuthoritySetMembers(pendingEntry *envelope.Entry, fetcher types.EntryFetcher) map[string]bool {
 	members := make(map[string]bool)
 	sp := pendingEntry.Header.ScopePointer
 	if sp == nil {

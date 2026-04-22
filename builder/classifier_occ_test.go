@@ -56,7 +56,7 @@ type fakeSchemaResolver struct {
 	err    error
 }
 
-func (r *fakeSchemaResolver) Resolve(_ types.LogPosition, _ EntryFetcher) (*SchemaResolution, error) {
+func (r *fakeSchemaResolver) Resolve(_ types.LogPosition, _ types.EntryFetcher) (*SchemaResolution, error) {
 	return r.result, r.err
 }
 

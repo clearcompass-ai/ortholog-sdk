@@ -453,18 +453,14 @@ func serializeHeaderBody(h *ControlHeader) []byte {
 	b = appendOptionalString(b, h.DelegateDID)
 	b = appendOptionalLogPosition(b, h.ScopePointer)
 	b = appendDIDSet(b, h.SortedDIDs())
-	b = appendOptionalString(b, h.AuthorityDID)
 	b = appendOptionalLogPosition(b, h.PriorAuthority)
 	b = appendLogPositionList(b, h.ApprovalPointers)
 	b = appendLogPositionList(b, h.EvidencePointers)
 	b = appendOptionalLogPosition(b, h.SchemaRef)
-	b = appendOptionalKeyGenMode(b, h.KeyGenerationMode)
-	b = appendUint32List(b, h.CommutativeOperations)
 	b = appendLenPrefixedBytes(b, h.SubjectIdentifier)
 	b = appendOptionalLogPosition(b, h.CosignatureOf)
 	b = binary.BigEndian.AppendUint64(b, uint64(h.EventTime))
 	b = appendAdmissionProof(b, h.AdmissionProof)
-	b = appendOptionalLogPosition(b, h.AuthoritySkip)
 	return b
 }
 
@@ -591,9 +587,6 @@ func deserializeHeaderBody(body []byte) (*ControlHeader, error) {
 			h.AuthoritySet[d] = struct{}{}
 		}
 	}
-	if h.AuthorityDID, err = readOptionalString(r); err != nil {
-		return nil, wrapField("AuthorityDID", err)
-	}
 	if h.PriorAuthority, err = readOptionalLogPosition(r); err != nil {
 		return nil, wrapField("PriorAuthority", err)
 	}
@@ -605,12 +598,6 @@ func deserializeHeaderBody(body []byte) (*ControlHeader, error) {
 	}
 	if h.SchemaRef, err = readOptionalLogPosition(r); err != nil {
 		return nil, wrapField("SchemaRef", err)
-	}
-	if h.KeyGenerationMode, err = readOptionalKeyGenMode(r); err != nil {
-		return nil, wrapField("KeyGenerationMode", err)
-	}
-	if h.CommutativeOperations, err = readUint32List(r); err != nil {
-		return nil, wrapField("CommutativeOperations", err)
 	}
 	if h.SubjectIdentifier, err = readLenPrefixedBytes(r); err != nil {
 		return nil, wrapField("SubjectIdentifier", err)
@@ -625,9 +612,6 @@ func deserializeHeaderBody(body []byte) (*ControlHeader, error) {
 	h.EventTime = int64(eventTime)
 	if h.AdmissionProof, err = readAdmissionProof(r); err != nil {
 		return nil, wrapField("AdmissionProof", err)
-	}
-	if h.AuthoritySkip, err = readOptionalLogPosition(r); err != nil {
-		return nil, wrapField("AuthoritySkip", err)
 	}
 
 	// Forward compatibility: tolerate any trailing bytes beyond the
@@ -729,13 +713,6 @@ func appendOptionalAuthorityPath(b []byte, ap *AuthorityPath) []byte {
 	return append(b, 1, byte(*ap))
 }
 
-func appendOptionalKeyGenMode(b []byte, m *KeyGenMode) []byte {
-	if m == nil {
-		return append(b, 0)
-	}
-	return append(b, 1, byte(*m))
-}
-
 func appendDIDSet(b []byte, dids []string) []byte {
 	n := len(dids)
 	if n > int(^uint16(0)) {
@@ -819,7 +796,9 @@ func readAdmissionProof(r *bytes.Reader) (*AdmissionProofBody, error) {
 			bodyLen, r.Len())
 	}
 
-	// Bounded sub-reader — isolates admission proof from Authority_Skip.
+	// Bounded sub-reader isolates the admission-proof body from any
+	// adjacent field so a malformed proof cannot bleed into the
+	// parser's remaining stream.
 	bodyBytes := make([]byte, bodyLen)
 	if _, err := io.ReadFull(r, bodyBytes); err != nil {
 		return nil, err
@@ -988,26 +967,6 @@ func readOptionalAuthorityPath(r *bytes.Reader) (*AuthorityPath, error) {
 		}
 		ap := AuthorityPath(v)
 		return &ap, nil
-	default:
-		return nil, ErrInvalidPresenceByte
-	}
-}
-
-func readOptionalKeyGenMode(r *bytes.Reader) (*KeyGenMode, error) {
-	presence, err := r.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-	switch presence {
-	case 0:
-		return nil, nil
-	case 1:
-		v, err := r.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		m := KeyGenMode(v)
-		return &m, nil
 	default:
 		return nil, ErrInvalidPresenceByte
 	}

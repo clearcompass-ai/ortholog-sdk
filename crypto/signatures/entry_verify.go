@@ -58,7 +58,7 @@ KEY ARCHITECTURAL DECISIONS:
 
 OVERVIEW:
 
-	V6 entry signing flow (SDK-native ECDSA signer):
+	v7 entry signing flow (SDK-native ECDSA signer):
 
 	  entry, _ := envelope.NewUnsignedEntry(header, payload)
 	  hash := sha256.Sum256(envelope.SigningPayload(entry))
@@ -71,7 +71,7 @@ OVERVIEW:
 	  _ = entry.Validate()
 	  canonical := envelope.Serialize(entry)
 
-	V6 entry verification flow:
+	v7 entry verification flow:
 
 	  entry, _ := envelope.Deserialize(canonical)
 	  err := registry.VerifyEntry(entry)  // did/verifier_registry.go
@@ -280,7 +280,7 @@ func VerifyEntry(hash [32]byte, sig []byte, pub *ecdsa.PublicKey) error {
 // the given 32-byte hash using the provided secp256k1 private key.
 //
 // The hash input is expected to be sha256(envelope.SigningPayload(entry))
-// for v6 entry signing. Callers can also use SignEntry for other 32-byte
+// for v7 entry signing. Callers can also use SignEntry for other 32-byte
 // digests (e.g., signed-request envelope hashes in
 // exchange/auth/signed_request.go).
 //

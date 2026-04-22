@@ -73,6 +73,14 @@ type jsonSchemaPayload struct {
 	// Missing or absent value means the SDK default (two-thirds), preserving
 	// pre-Wave-2 behavior for every schema that predates this field.
 	OverrideThreshold *string `json:"override_threshold"`
+
+	// v7.5: CommutativeOperations moves here from ControlHeader.
+	// Absent, null, and empty array all mean "strict OCC" (no
+	// commutative operations); non-empty enables Δ-window OCC. Pointer
+	// type lets MarshalParameters distinguish "omit the field" from
+	// "emit explicit []" if that ever matters for bytewise round-trip
+	// — currently both decode to the same empty slice in Extract.
+	CommutativeOperations *[]uint32 `json:"commutative_operations"`
 }
 
 // jsonLogPosition is the JSON representation of types.LogPosition.
@@ -134,6 +142,9 @@ func (e *JSONParameterExtractor) Extract(schemaEntry *envelope.Entry) (*types.Sc
 		// documents the intent — a reader shouldn't need to know which
 		// enum constant happens to be zero.
 		OverrideThreshold: types.ThresholdTwoThirdsMajority,
+		// v7.5 invariant: CommutativeOperations is never nil after
+		// Extract. Callers test len(v) == 0 without nil-checking.
+		CommutativeOperations: []uint32{},
 	}
 
 	// ── Protocol-mechanical fields ───────────────────────────────────
@@ -151,8 +162,18 @@ func (e *JSONParameterExtractor) Extract(schemaEntry *envelope.Entry) (*types.Sc
 	}
 
 	if raw.CredentialValidityPeriod != nil {
-		d := time.Duration(*raw.CredentialValidityPeriod) * time.Second
-		params.CredentialValidityPeriod = &d
+		// -1 is the Marshal-side sentinel for "no expiry" (nil
+		// *time.Duration). Preserves the round-trip invariant when
+		// MarshalParameters emits every field unconditionally. A
+		// real schema MUST NOT set negative validity; production
+		// inputs either omit the field or specify a positive
+		// duration, and this branch is invisible to them.
+		if *raw.CredentialValidityPeriod == credentialValidityPeriodNilSentinel {
+			params.CredentialValidityPeriod = nil
+		} else {
+			d := time.Duration(*raw.CredentialValidityPeriod) * time.Second
+			params.CredentialValidityPeriod = &d
+		}
 	}
 
 	if raw.OverrideRequiresWitness != nil {
@@ -161,6 +182,12 @@ func (e *JSONParameterExtractor) Extract(schemaEntry *envelope.Entry) (*types.Sc
 
 	if raw.MigrationPolicy != nil {
 		switch *raw.MigrationPolicy {
+		case "":
+			// Marshal-side sentinel for "unset MigrationPolicy."
+			// Preserves the round-trip when a caller constructs
+			// SchemaParameters without setting the field. Leaves
+			// the struct's zero value intact (params already
+			// zero-initialised).
 		case "strict":
 			params.MigrationPolicy = types.MigrationStrict
 		case "forward":
@@ -245,5 +272,160 @@ func (e *JSONParameterExtractor) Extract(schemaEntry *envelope.Entry) (*types.Sc
 		}
 	}
 
+	// ── v7.5: Commutative operations ────────────────────────────────
+	//
+	// Absent and null both preserve the "strict OCC" default set
+	// above (empty slice). An explicit non-empty array is copied
+	// verbatim; an explicit empty array also collapses to the shared
+	// empty default (no difference on the verifier side).
+	if raw.CommutativeOperations != nil && len(*raw.CommutativeOperations) > 0 {
+		params.CommutativeOperations = append(params.CommutativeOperations, (*raw.CommutativeOperations)...)
+	}
+
 	return params, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// MarshalParameters — canonical inverse of Extract
+// ─────────────────────────────────────────────────────────────────────
+
+// marshalShape is the on-wire JSON struct MarshalParameters writes.
+// Every scalar field is emitted unconditionally (Option A, D1 in the
+// v7.5 plan). This eliminates "field absent" vs "field set to default"
+// ambiguity — the round-trip invariant (Extract(Marshal(p)) == p)
+// becomes trivially true for every valid p.
+//
+// CredentialValidityPeriod uses a -1 sentinel for nil because the
+// field decodes through *int64 in jsonSchemaPayload: a JSON null
+// yields nil, but Option A requires unconditional emission, and
+// emitting 0 would collide with "zero duration." -1 is documented
+// here and at the pointer's load point in Extract.
+//
+// PredecessorSchema and ReEncryptionThreshold keep their pointer-to-
+// struct shape; JSON null is their natural empty encoding.
+type marshalShape struct {
+	ActivationDelay                int64                `json:"activation_delay"`
+	CosignatureThreshold           int                  `json:"cosignature_threshold"`
+	MaturationEpoch                int64                `json:"maturation_epoch"`
+	CredentialValidityPeriod       int64                `json:"credential_validity_period"`
+	OverrideRequiresWitness        bool                 `json:"override_requires_witness"`
+	MigrationPolicy                string               `json:"migration_policy"`
+	PredecessorSchema              *jsonLogPosition     `json:"predecessor_schema"`
+	ArtifactEncryption             string               `json:"artifact_encryption"`
+	GrantEntryRequired             bool                 `json:"grant_entry_required"`
+	ReEncryptionThreshold          *jsonThresholdConfig `json:"re_encryption_threshold"`
+	GrantAuthorizationMode         string               `json:"grant_authorization_mode"`
+	GrantRequiresAuditEntry        bool                 `json:"grant_requires_audit_entry"`
+	OverrideThreshold              string               `json:"override_threshold"`
+	CommutativeOperations          []uint32             `json:"commutative_operations"`
+}
+
+const credentialValidityPeriodNilSentinel = int64(-1)
+
+// MarshalParameters produces canonical JSON bytes from a
+// *types.SchemaParameters. Inverse of Extract.
+//
+// Round-trip invariant: for every valid p, Extract(Marshal(p))
+// reflect-equals p. The round-trip test in
+// parameters_json_roundtrip_test.go is the permanent regression
+// gate on this property.
+//
+// Enum defaults (MigrationPolicy, ArtifactEncryption,
+// GrantAuthorizationMode, OverrideThreshold) emit their canonical
+// string form. CredentialValidityPeriod nil emits -1 sentinel
+// (documented on marshalShape). PredecessorSchema and
+// ReEncryptionThreshold emit JSON null when nil. CommutativeOperations
+// emits [] when empty (never nil on the wire).
+func MarshalParameters(p *types.SchemaParameters) ([]byte, error) {
+	if p == nil {
+		return nil, errors.New("schema/parameters_json: nil params")
+	}
+	shape := marshalShape{
+		ActivationDelay:         int64(p.ActivationDelay / time.Second),
+		CosignatureThreshold:    p.CosignatureThreshold,
+		MaturationEpoch:         int64(p.MaturationEpoch / time.Second),
+		OverrideRequiresWitness: p.OverrideRequiresIndependentWitness,
+		GrantEntryRequired:      p.GrantEntryRequired,
+		GrantRequiresAuditEntry: p.GrantRequiresAuditEntry,
+	}
+
+	if p.CredentialValidityPeriod == nil {
+		shape.CredentialValidityPeriod = credentialValidityPeriodNilSentinel
+	} else {
+		shape.CredentialValidityPeriod = int64(*p.CredentialValidityPeriod / time.Second)
+	}
+
+	switch p.MigrationPolicy {
+	case 0:
+		// The MigrationPolicyType enum starts at 1. Zero means
+		// "unset" — neither strict, forward, nor amendment was
+		// declared. Emit an empty string; Extract interprets "" as
+		// the same unset state so the round-trip holds.
+		shape.MigrationPolicy = ""
+	case types.MigrationStrict:
+		shape.MigrationPolicy = "strict"
+	case types.MigrationForward:
+		shape.MigrationPolicy = "forward"
+	case types.MigrationAmendment:
+		shape.MigrationPolicy = "amendment"
+	default:
+		return nil, fmt.Errorf("schema/parameters_json: unknown MigrationPolicy %d", p.MigrationPolicy)
+	}
+
+	if p.PredecessorSchema != nil {
+		shape.PredecessorSchema = &jsonLogPosition{
+			LogDID:   p.PredecessorSchema.LogDID,
+			Sequence: p.PredecessorSchema.Sequence,
+		}
+	}
+
+	switch p.ArtifactEncryption {
+	case types.EncryptionAESGCM:
+		shape.ArtifactEncryption = "aes_gcm"
+	case types.EncryptionUmbralPRE:
+		shape.ArtifactEncryption = "umbral_pre"
+	default:
+		return nil, fmt.Errorf("schema/parameters_json: unknown ArtifactEncryption %d", p.ArtifactEncryption)
+	}
+
+	if p.ReEncryptionThreshold != nil {
+		shape.ReEncryptionThreshold = &jsonThresholdConfig{
+			M: p.ReEncryptionThreshold.M,
+			N: p.ReEncryptionThreshold.N,
+		}
+	}
+
+	switch p.GrantAuthorizationMode {
+	case types.GrantAuthOpen:
+		shape.GrantAuthorizationMode = "open"
+	case types.GrantAuthRestricted:
+		shape.GrantAuthorizationMode = "restricted"
+	case types.GrantAuthSealed:
+		shape.GrantAuthorizationMode = "sealed"
+	default:
+		return nil, fmt.Errorf("schema/parameters_json: unknown GrantAuthorizationMode %d", p.GrantAuthorizationMode)
+	}
+
+	switch p.OverrideThreshold {
+	case types.ThresholdTwoThirdsMajority:
+		shape.OverrideThreshold = "two_thirds"
+	case types.ThresholdSimpleMajority:
+		shape.OverrideThreshold = "simple_majority"
+	case types.ThresholdUnanimity:
+		shape.OverrideThreshold = "unanimity"
+	default:
+		return nil, fmt.Errorf("schema/parameters_json: unknown OverrideThreshold %d", p.OverrideThreshold)
+	}
+
+	// Always emit a non-nil slice so JSON output is "[]" not "null".
+	// Keeps the wire format byte-stable between a freshly-constructed
+	// empty schema and one whose CommutativeOperations was explicitly
+	// [] in the input.
+	if p.CommutativeOperations == nil {
+		shape.CommutativeOperations = []uint32{}
+	} else {
+		shape.CommutativeOperations = append([]uint32{}, p.CommutativeOperations...)
+	}
+
+	return json.Marshal(&shape)
 }

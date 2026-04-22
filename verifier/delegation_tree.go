@@ -93,7 +93,7 @@ type WalkDelegationTreeParams struct {
 	RootEntityPos types.LogPosition
 
 	// Fetcher reads entries by position.
-	Fetcher EntryFetcher
+	Fetcher types.EntryFetcher
 
 	// LeafReader reads SMT leaf state for liveness checks.
 	LeafReader smt.LeafReader

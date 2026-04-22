@@ -3,7 +3,7 @@ FILE PATH:
     log/http_entry_fetcher.go
 
 DESCRIPTION:
-    HTTP-backed implementation of builder.EntryFetcher (and
+    HTTP-backed implementation of types.EntryFetcher (and
     verifier.EntryFetcher, lifecycle.EntryFetcher — all structurally
     identical). Targets the ortholog-operator's GET /v1/entries/{sequence}
     endpoint.
@@ -17,7 +17,7 @@ KEY ARCHITECTURAL DECISIONS:
     - The HTTP response schema is unchanged. The operator may continue
       to return sig_algo_id and signature_hex as JSON sidecar fields for
       human-readable diagnostics or for legacy clients. The fetcher
-      simply ignores those fields under v6.
+      simply ignores those fields under v7.
     - This non-breaking HTTP contract means external operators
       (ortholog-operator) do not need a coordinated release with this
       SDK bump. Operators can upgrade the SDK at their own pace; their
@@ -37,8 +37,8 @@ OVERVIEW:
         "sequence":            uint64,
         "canonical_hex":       string,  // authoritative wire bytes
         "log_time_unix_micro": int64,   // operator admission time
-        "sig_algo_id":         uint16,  // IGNORED under v6 (inside canonical)
-        "signature_hex":       string   // IGNORED under v6 (inside canonical)
+        "sig_algo_id":         uint16,  // IGNORED under v7 (inside canonical)
+        "signature_hex":       string   // IGNORED under v7 (inside canonical)
       }
 
     404 → Fetch returns (nil, nil) — entry not found is a normal
@@ -50,7 +50,7 @@ OVERVIEW:
 
 KEY DEPENDENCIES:
     - types/entry_with_metadata.go: EntryWithMetadata struct (no longer
-      carries sig sidecar fields under v6)
+      carries sig sidecar fields under v7)
     - types/log_position.go: LogPosition struct
     - net/http, encoding/hex, encoding/json (standard library)
 */
@@ -72,7 +72,7 @@ import (
 // 1) HTTPEntryFetcher
 // -------------------------------------------------------------------------------------------------
 
-// HTTPEntryFetcher implements builder.EntryFetcher, verifier.EntryFetcher,
+// HTTPEntryFetcher implements types.EntryFetcher, verifier.EntryFetcher,
 // and lifecycle.EntryFetcher (all structurally identical interfaces) by
 // calling the operator's REST API.
 type HTTPEntryFetcher struct {
@@ -122,7 +122,7 @@ func NewHTTPEntryFetcher(cfg HTTPEntryFetcherConfig) *HTTPEntryFetcher {
 // error for any other non-200 response, network failure, parse failure,
 // or canonical-bytes decode failure.
 //
-// Satisfies builder.EntryFetcher, verifier.EntryFetcher, and
+// Satisfies types.EntryFetcher, verifier.EntryFetcher, and
 // lifecycle.EntryFetcher through Go structural typing.
 func (f *HTTPEntryFetcher) Fetch(pos types.LogPosition) (*types.EntryWithMetadata, error) {
 	url := fmt.Sprintf("%s/v1/entries/%d", f.baseURL, pos.Sequence)
@@ -173,7 +173,7 @@ func (f *HTTPEntryFetcher) Fetch(pos types.LogPosition) (*types.EntryWithMetadat
 	}
 
 	// Note: raw.SigAlgoID and raw.SignatureHex are intentionally NOT
-	// consumed under v6. Signatures are inside CanonicalBytes (v6
+	// consumed under v7. Signatures are inside CanonicalBytes (v6
 	// signatures section) and are extracted via envelope.Deserialize
 	// when needed. The fields remain in entryResponse so the JSON
 	// decoder does not fail on operator responses that still include

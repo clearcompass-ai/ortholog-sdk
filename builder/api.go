@@ -55,50 +55,18 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
 
-// ─────────────────────────────────────────────────────────────────────
-// Interfaces
-// ─────────────────────────────────────────────────────────────────────
+// SchemaResolver and SchemaResolution moved to types/ in v7.5 to
+// eliminate the builder↔schema cycle that BuildSchemaEntry's
+// MarshalParameters dependency would have introduced. Type aliases
+// below keep in-package spelling stable; they are not compatibility
+// shims — they are the identifiers builder code internally uses for
+// the shared types.
 
-// EntryFetcher retrieves canonical-bytes + metadata for an entry at a
-// given log position. Satisfied by the operator's query layer
-// (Postgres-backed) in production and by MockFetcher in tests.
-//
-// Returns (nil, nil) when the position has no entry — this is a normal
-// outcome during chain walks, not an error. Returns a non-nil error
-// only for transport or storage failures the caller should propagate.
-type EntryFetcher interface {
-	Fetch(pos types.LogPosition) (*types.EntryWithMetadata, error)
-}
+// SchemaResolver is a re-export of types.SchemaResolver.
+type SchemaResolver = types.SchemaResolver
 
-// SchemaResolver translates a Schema_Ref log position into schema
-// parameters relevant to batch processing. Currently used to detect
-// commutative-OCC schemas and their Δ-window size. The resolver
-// deserializes the schema entry and extracts its parameters
-// (schema.JSONParameterExtractor is the reference implementation).
-//
-// A nil SchemaResolver is legal: ProcessBatch treats all entries as
-// non-commutative (strict OCC) in that case. Commutative resolution
-// requires a schema resolver to be wired in.
-type SchemaResolver interface {
-	Resolve(ref types.LogPosition, fetcher EntryFetcher) (*SchemaResolution, error)
-}
-
-// SchemaResolution is the subset of schema parameters the builder uses
-// during batch processing. Additional fields (activation delay,
-// cosignature threshold, etc.) are resolved by the verifier layer at
-// read time, not here.
-type SchemaResolution struct {
-	// IsCommutative marks the schema as permitting Δ-window CRDT
-	// resolution for Path C enforcement (SDK-D7). When true, concurrent
-	// enforcement entries within the Δ-window are all accepted; when
-	// false, OCC applies strict Prior_Authority matching.
-	IsCommutative bool
-
-	// DeltaWindowSize is the per-schema Δ-window for commutative OCC.
-	// Ignored when IsCommutative is false. Defaults to 10 when the
-	// schema does not specify.
-	DeltaWindowSize int
-}
+// SchemaResolution is a re-export of types.SchemaResolution.
+type SchemaResolution = types.SchemaResolution
 
 // ─────────────────────────────────────────────────────────────────────
 // Path classification
@@ -263,7 +231,7 @@ func ProcessBatch(
 	tree *smt.Tree,
 	entries []*envelope.Entry,
 	positions []types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	schemaRes SchemaResolver,
 	localLogDID string,
 	deltaBuffer *DeltaWindowBuffer,
@@ -324,15 +292,21 @@ func ProcessBatch(
 			localLogDID, deltaBuffer,
 		)
 		if err != nil {
-			// Structural validation error — count as PathD. The tree
-			// mutation pipeline guarantees no partial SMT state from
-			// this entry (compute-then-apply semantics). Preserve the
-			// concrete error in PathFailureReasons so operators can
-			// distinguish a legitimate PathD (foreign log, missing
-			// target) from a structural failure (tip regression,
-			// foreign intermediate, missing intermediate).
-			pathResult = PathResultPathD
+			// Preserve the concrete error so operators can distinguish
+			// a legitimate PathD (foreign log, missing target) from a
+			// structural failure (tip regression, foreign intermediate,
+			// scope-history cycle, cross-log scope traversal).
 			result.PathFailureReasons[i] = err
+			// An explicit Rejected classification from processEntry
+			// carries its own semantic — structural invariant
+			// violation — and must not be silently demoted to PathD.
+			// Any other non-Rejected outcome paired with an error is
+			// a compute-phase failure; collapse to PathD (the tree
+			// mutation pipeline guarantees no partial SMT state,
+			// compute-then-apply).
+			if pathResult != PathResultRejected {
+				pathResult = PathResultPathD
+			}
 		}
 
 		switch pathResult {

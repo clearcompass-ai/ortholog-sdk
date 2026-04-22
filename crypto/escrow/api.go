@@ -29,6 +29,7 @@ package escrow
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"runtime"
@@ -65,29 +66,48 @@ func ZeroBytes(b []byte) {
 
 // ZeroArray32 clears a 32-byte array in place. Authoritative zeroizer
 // for fixed 32-byte secret material (secp256k1 scalars, AES keys,
-// share Value fields, etc.).
+// share Value fields, etc.). A nil pointer is a no-op: callers wiring
+// this into defer chains cannot always statically prove the target is
+// non-nil, and an elision-proof primitive that panics defeats the
+// purpose.
 //
 //go:noinline
 func ZeroArray32(a *[32]byte) {
+	if a == nil {
+		return
+	}
 	for i := range a {
 		a[i] = 0
 	}
 	runtime.KeepAlive(a)
 }
 
-// ZeroizeShare clears all secret-bearing fields of a Share in place.
+// ZeroizeShare clears every field of a Share in place, including the
+// structural metadata (Version, Threshold, Index). A fully zeroed
+// Share is distinguishable from a live one and cannot be re-used as
+// an oracle in a timing or replay attack.
 //
-// Zeros Value and BlindingFactor (V2 secret fields). Leaves Version,
-// Threshold, Index, CommitmentHash, and SplitID intact — they are
-// structural metadata, not secret material. Observers can tell from
-// these fields that the share was zeroized (Value and BlindingFactor
-// all-zero) without needing the secret content.
+// Secret fields: Value, BlindingFactor. Commitment fields:
+// CommitmentHash, SplitID. Structural fields: Version, Threshold,
+// Index. All are reset.
 //
-// In V1, BlindingFactor is already zero by construction (V1 doesn't
-// use it). The call is still correct and idempotent.
+// In V1, BlindingFactor and CommitmentHash are already zero by
+// construction. The call is still correct and idempotent.
+//
+// A nil pointer is a no-op — symmetric with ZeroArray32's
+// elision-proof contract. Defer chains that cannot statically prove
+// non-nil targets remain safe.
 func ZeroizeShare(s *Share) {
+	if s == nil {
+		return
+	}
+	s.Version = 0
+	s.Threshold = 0
+	s.Index = 0
 	ZeroArray32(&s.Value)
 	ZeroArray32(&s.BlindingFactor)
+	ZeroArray32(&s.CommitmentHash)
+	ZeroArray32(&s.SplitID)
 }
 
 // ZeroizeShares clears the secret-bearing fields of a slice of Shares
@@ -303,4 +323,65 @@ func lagrangeInterpolateGF256(xs, ys []byte, target byte) byte {
 		result ^= gf256Mul(ys[i], gf256Mul(num, gf256Inv(den)))
 	}
 	return result
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// GF(256)-scheme variants — explicit-scheme wrappers
+// ─────────────────────────────────────────────────────────────────────
+//
+// The GF256 suffix names the underlying arithmetic (byte-wise
+// polynomial evaluation in GF(2^8)). Reserved for the future V2
+// Pedersen VSS variant that will ship as SplitPedersen /
+// ReconstructPedersen without changing these.
+
+// SplitGF256 is a convenience wrapper around Split that stamps every
+// returned share's FieldTag as SchemeGF256Tag and drops the SplitID
+// from the return (it remains accessible via each share's SplitID
+// field). Tests and domain callers that need an explicit-scheme API
+// prefer this form.
+func SplitGF256(secret []byte, M, N int) ([]Share, error) {
+	shares, _, err := Split(secret, M, N)
+	if err != nil {
+		return nil, err
+	}
+	for i := range shares {
+		shares[i].FieldTag = SchemeGF256Tag
+	}
+	return shares, nil
+}
+
+// ReconstructGF256 is the FieldTag-aware counterpart to Reconstruct.
+// Every non-zero FieldTag on the input shares must equal
+// SchemeGF256Tag; a zero tag is accepted (legacy shares that predate
+// the field). Mismatched tags return ErrUnknownFieldTag so the
+// caller can distinguish a scheme confusion from a share-count or
+// threshold error.
+//
+// Threshold-count failures are surfaced as both ErrBelowThreshold
+// (structural) and ErrInsufficientShares (semantic) so callers can
+// match on either sentinel. Split-level threshold mixing surfaces
+// as ErrMixedThresholds in addition to ErrThresholdMismatch.
+func ReconstructGF256(shares []Share) ([]byte, error) {
+	for _, s := range shares {
+		if s.FieldTag != 0 && s.FieldTag != SchemeGF256Tag {
+			return nil, fmt.Errorf("%w: 0x%02x", ErrUnknownFieldTag, s.FieldTag)
+		}
+	}
+	secret, err := Reconstruct(shares)
+	if err == nil {
+		return secret, nil
+	}
+	// Re-tag known failure modes with the explicit-scheme sentinels
+	// so tests / callers matching on ErrInsufficientShares or
+	// ErrMixedThresholds see the intended error identity. The
+	// original error is wrapped so errors.Is still matches the old
+	// sentinel.
+	switch {
+	case errors.Is(err, ErrBelowThreshold):
+		return nil, fmt.Errorf("%w: %v", ErrInsufficientShares, err)
+	case errors.Is(err, ErrThresholdMismatch):
+		return nil, fmt.Errorf("%w: %v", ErrMixedThresholds, err)
+	default:
+		return nil, err
+	}
 }

@@ -21,9 +21,11 @@ completes before any write.
 package builder
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
+	"github.com/clearcompass-ai/ortholog-sdk/core/scope"
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
@@ -35,7 +37,7 @@ func processEntry(
 	tree *smt.Tree,
 	entry *envelope.Entry,
 	pos types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	schemaRes SchemaResolver,
 	localLogDID string,
 	deltaBuffer *DeltaWindowBuffer,
@@ -154,7 +156,7 @@ func processPathB(
 	target *envelope.Entry,
 	leafKey [32]byte,
 	leaf *types.SMTLeaf,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	localLogDID string,
 	deltaBuffer *DeltaWindowBuffer,
 ) (PathResult, error) {
@@ -268,7 +270,7 @@ func processPathC(
 	targetRoot types.LogPosition,
 	leafKey [32]byte,
 	leaf *types.SMTLeaf,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	schemaRes SchemaResolver,
 	localLogDID string,
 	deltaBuffer *DeltaWindowBuffer,
@@ -277,25 +279,56 @@ func processPathC(
 		return PathResultPathD, nil
 	}
 
-	scopeLeafKey := smt.DeriveKey(*h.ScopePointer)
-	scopeLeaf, err := tree.GetLeaf(scopeLeafKey)
-	if err != nil || scopeLeaf == nil {
+	// Decision 52: resolve the governing AuthoritySet via the shared
+	// scope-history primitive. Scope-creation entries have no
+	// Prior_Authority — they ARE the scope entry, so a query at the
+	// scope's own position returns the creation's own AuthoritySet
+	// (the set the creator is declaring). All other Path C entries
+	// resolve at their Prior_Authority: the observation the signer
+	// committed to at signing time.
+	queryPos := *h.ScopePointer
+	if h.PriorAuthority != nil {
+		queryPos = *h.PriorAuthority
+	}
+	// Fail fast when the Prior_Authority is itself on a foreign log
+	// — the scope primitive would refuse, and PathD is the right
+	// response for any locality violation.
+	if queryPos.LogDID != localLogDID {
 		return PathResultPathD, nil
 	}
-	currentScopeMeta, err := fetcher.Fetch(scopeLeaf.OriginTip)
-	if err != nil || currentScopeMeta == nil {
-		return PathResultPathD, nil
-	}
-	currentScope, err := envelope.Deserialize(currentScopeMeta.CanonicalBytes)
+
+	authoritySet, err := scope.AuthorizedSetAtPosition(*h.ScopePointer, queryPos, fetcher, tree)
 	if err != nil {
-		return PathResultPathD, nil
+		// Structural violations of Decision 52 — cycle, cross-log
+		// walk, empty set, malformed entry, walk-too-deep, or the
+		// caller claiming to observe a scope state that predates
+		// the scope's own creation — are admission-level rejections:
+		// the entry is not valid under any path and should be
+		// flagged rather than quietly dropped.
+		//
+		// Transient or legitimate absence (the scope's leaf is
+		// not yet in this tree, or an entry along the walk is not
+		// yet in the fetcher) degrades to PathD so the builder
+		// continues processing. This matches the pre-Decision-52
+		// behaviour for missing scope state.
+		switch {
+		case errors.Is(err, scope.ErrScopeCycle),
+			errors.Is(err, scope.ErrCrossLogScopeHistory),
+			errors.Is(err, scope.ErrScopeEmptySet),
+			errors.Is(err, scope.ErrScopeEntryMalformed),
+			errors.Is(err, scope.ErrScopeWalkTooDeep),
+			errors.Is(err, scope.ErrScopePositionUnknown):
+			return PathResultRejected, err
+		default:
+			return PathResultPathD, nil
+		}
 	}
-	if !currentScope.Header.AuthoritySetContains(h.SignerDID) {
+	if _, ok := authoritySet[h.SignerDID]; !ok {
 		return PathResultPathD, nil
 	}
 
 	if len(h.ApprovalPointers) > 0 {
-		if err := verifyApprovalPointers(h.ApprovalPointers, currentScope, fetcher, localLogDID); err != nil {
+		if err := verifyApprovalPointersAgainstSet(h.ApprovalPointers, authoritySet, fetcher, localLogDID); err != nil {
 			return PathResultRejected, nil
 		}
 	}
@@ -348,10 +381,14 @@ func processPathC(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
-func verifyApprovalPointers(
+// verifyApprovalPointersAgainstSet validates each approval pointer's
+// signer against an already-resolved AuthoritySet. Decision 52: the
+// caller derives the set via core/scope once, then passes it in;
+// every approval is evaluated against the same time-indexed view.
+func verifyApprovalPointersAgainstSet(
 	pointers []types.LogPosition,
-	currentScope *envelope.Entry,
-	fetcher EntryFetcher,
+	authoritySet map[string]struct{},
+	fetcher types.EntryFetcher,
 	localLogDID string,
 ) error {
 	for i, ptr := range pointers {
@@ -366,7 +403,7 @@ func verifyApprovalPointers(
 		if err != nil {
 			return fmt.Errorf("approval %d: %w", i, err)
 		}
-		if !currentScope.Header.AuthoritySetContains(approval.Header.SignerDID) {
+		if _, ok := authoritySet[approval.Header.SignerDID]; !ok {
 			return fmt.Errorf("approval %d: signer not in authority set", i)
 		}
 	}

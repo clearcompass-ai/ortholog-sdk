@@ -107,7 +107,7 @@ var (
 func EvaluateOrigin(
 	leafKey [32]byte,
 	leafReader smt.LeafReader,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 ) (*OriginEvaluation, error) {
 	// Step 1: Read leaf.
 	leaf, err := leafReader.Get(leafKey)

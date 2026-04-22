@@ -22,7 +22,7 @@ KEY ARCHITECTURAL DECISIONS:
       is tight, callers should Deserialize once and cache the Entry.
     - The HTTP operator API (log/http_entry_fetcher.go) may still return
       sig_algo_id and signature_hex as JSON sidecar fields for
-      human-readable diagnostics. The fetcher ignores them under v6 —
+      human-readable diagnostics. The fetcher ignores them under v7 —
       CanonicalBytes is authoritative.
 
 OVERVIEW:
@@ -33,7 +33,7 @@ OVERVIEW:
       - tests/phase6_part_c_test.go newOperatorEntryServer (test fixture)
 
     EntryWithMetadata is consumed by:
-      - builder.EntryFetcher.Fetch callers (algorithm.go, entry_classification.go)
+      - types.EntryFetcher.Fetch callers (algorithm.go, entry_classification.go)
       - verifier.EntryFetcher.Fetch callers (condition_evaluator.go, delegation_tree.go)
       - lifecycle/recovery.go, scope_governance.go
       - core/smt/derivation_commitment.go (consumes CanonicalBytes as opaque)

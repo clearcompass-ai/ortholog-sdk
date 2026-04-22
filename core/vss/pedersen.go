@@ -154,12 +154,23 @@ func Split(secret [SecretSize]byte, M, N int) ([]Share, Commitments, error) {
 		return nil, Commitments{}, fmt.Errorf("vss/split: derive H: %w", err)
 	}
 
-	// Reduce secret mod n. An exact zero secret is permitted —
-	// callers may legitimately split a derived key whose first
-	// 32 bytes happen to be zero — but Split refuses to operate
-	// on the all-zero scalar because every share would then carry
-	// the same commitment-vector first point (a_0·G = identity),
-	// leaking the fact that the secret was zero.
+	// Reduce secret mod n, reject zero.
+	//
+	// Rejection is application-layer, not cryptographic. Pedersen
+	// hiding still holds for a zero secret: C_0 = 0·G + b_0·H = b_0·H,
+	// a uniformly random curve point that reveals nothing about a_0.
+	// The scheme's hiding property does not care about the secret's
+	// value.
+	//
+	// But the downstream primitives do. A 32-byte zero secret used as
+	// an AES-256 key is a trivially-known key (NIST SP 800-131A flags
+	// it explicitly). A zero re-encryption scalar in Umbral PRE turns
+	// every re-encryption into the identity operation, leaking the
+	// original ciphertext. In every current Ortholog consumer, a zero
+	// secret arriving at Split indicates a caller bug (uninitialised
+	// buffer, failed HKDF, zeroise-before-use) rather than a
+	// legitimate input — Split refuses it so the bug surfaces here
+	// rather than silently proceeding to a degenerate key.
 	a0 := new(big.Int).SetBytes(secret[:])
 	a0.Mod(a0, n)
 	if a0.Sign() == 0 {
@@ -249,23 +260,123 @@ func Verify(share Share, commitments Commitments) error {
 		return fmt.Errorf("vss/verify: derive H: %w", err)
 	}
 
+	// Normalise scalars mod n before any group operation.
+	//
+	// ScalarBaseMult / ScalarMult in both crypto/elliptic and the
+	// decred/secp256k1/v4 adaptor document internal mod-n reduction,
+	// but the contract across future Go versions and swap-compatible
+	// curve backends is not guaranteed. A hostile caller could also
+	// construct a Share whose 32-byte Value encodes an integer >= n
+	// (it is not the dealer who writes the share's bytes at rest;
+	// the wire form is exposed to storage and transport). Explicit
+	// reduction converts the input to its canonical representative
+	// before the curve operation — required for correctness of the
+	// downstream equality check LHS == RHS, which expects both sides
+	// to be computed from canonical scalars.
+	val := new(big.Int).SetBytes(share.Value[:])
+	val.Mod(val, n)
+	blind := new(big.Int).SetBytes(share.BlindingFactor[:])
+	blind.Mod(blind, n)
+
 	// LHS = Value·G + BlindingFactor·H.
-	lhsGx, lhsGy := curve.ScalarBaseMult(share.Value[:])
-	lhsHx, lhsHy := curve.ScalarMult(hX, hY, share.BlindingFactor[:])
+	lhsGx, lhsGy := curve.ScalarBaseMult(padScalar(val))
+	lhsHx, lhsHy := curve.ScalarMult(hX, hY, padScalar(blind))
 	lhsX, lhsY := curve.Add(lhsGx, lhsGy, lhsHx, lhsHy)
 
-	// RHS = sum_{j=0}^{M-1} (i^j mod n)·C_j.
-	// Compute i^j incrementally: power = 1, then *= i mod n.
+	rhsX, rhsY, err := commitmentCombine(curve, n, share.Index, commitments)
+	if err != nil {
+		return err
+	}
+
+	if lhsX.Cmp(rhsX) != 0 || lhsY.Cmp(rhsY) != 0 {
+		return ErrCommitmentMismatch
+	}
+	return nil
+}
+
+// VerifyPoints is the point-level sibling of Verify for callers that
+// have already committed to a (VK, BK) point pair rather than to the
+// underlying scalars. Phase C uses this: a CFrag verifier sees the
+// proxy's VK_i = G^{rk_i} and BK_i = H^{b_i} as points on the wire
+// but never sees the scalars rk_i and b_i (the scalars are the
+// proxy's secret).
+//
+// Checks (index in 1..MaxShares, non-empty commitments, hash match
+// with pre-computed commitment hash is caller's concern):
+//
+//	VK_i + BK_i  ==  sum_{j=0}^{M-1} (i^j mod n) · C_j
+//
+// where all points are on secp256k1. Returns nil on match, one of
+// the ErrInvalid*/ErrCommitment* sentinels otherwise.
+//
+// The function does NOT check CommitmentHash — the caller is
+// responsible for gating on that (in the share path, Verify does
+// it; in the CFrag path, the caller threads the commitment vector
+// through from the on-log commentary entry directly, so the hash
+// check is structural rather than included in the point
+// verification).
+//
+// The inputs vkX, vkY, bkX, bkY must be non-nil and describe points
+// already known to be on secp256k1. A caller with wire bytes should
+// Unmarshal and IsOnCurve-check before calling this — the same
+// discipline the Umbral CFrag parser applies to every point on
+// ingress.
+func VerifyPoints(index byte, vkX, vkY, bkX, bkY *big.Int, commitments Commitments) error {
+	if index == 0 || index > MaxShares {
+		return fmt.Errorf("%w: %d", ErrShareIndexOutOfRange, index)
+	}
+	if len(commitments.Points) == 0 {
+		return ErrCommitmentVectorEmpty
+	}
+	if vkX == nil || vkY == nil || bkX == nil || bkY == nil {
+		return ErrCommitmentMismatch
+	}
+
+	curve := secp256k1.S256()
+	n := curve.Params().N
+
+	// Belt-and-braces on-curve check. A caller that passes an
+	// off-curve point would cause undefined behaviour in curve.Add.
+	if !curve.IsOnCurve(vkX, vkY) {
+		return fmt.Errorf("%w: vk", ErrInvalidCommitmentPoint)
+	}
+	if !curve.IsOnCurve(bkX, bkY) {
+		return fmt.Errorf("%w: bk", ErrInvalidCommitmentPoint)
+	}
+
+	// LHS = VK + BK.
+	lhsX, lhsY := curve.Add(vkX, vkY, bkX, bkY)
+
+	rhsX, rhsY, err := commitmentCombine(curve, n, index, commitments)
+	if err != nil {
+		return err
+	}
+
+	if lhsX.Cmp(rhsX) != 0 || lhsY.Cmp(rhsY) != 0 {
+		return ErrCommitmentMismatch
+	}
+	return nil
+}
+
+// commitmentCombine evaluates sum_{j=0}^{M-1} (i^j mod n) · C_j on
+// the curve. Shared between Verify (scalar-side) and VerifyPoints
+// (point-side). Returns the combined point or one of the
+// ErrInvalidCommitmentPoint / ErrCommitmentVectorEmpty sentinels.
+func commitmentCombine(curve *secp256k1.KoblitzCurve, n *big.Int, index byte, commitments Commitments) (*big.Int, *big.Int, error) {
+	if len(commitments.Points) == 0 {
+		return nil, nil, ErrCommitmentVectorEmpty
+	}
+	// Compute i^j incrementally mod n.
 	power := big.NewInt(1)
-	idx := big.NewInt(int64(share.Index))
+	idx := big.NewInt(int64(index))
 	var rhsX, rhsY *big.Int
 	for j, pt := range commitments.Points {
 		cx, cy := elliptic.Unmarshal(curve, pt)
 		if cx == nil {
-			return fmt.Errorf("%w: point %d", ErrInvalidCommitmentPoint, j)
+			return nil, nil, fmt.Errorf("%w: point %d", ErrInvalidCommitmentPoint, j)
 		}
 		if !curve.IsOnCurve(cx, cy) {
-			return fmt.Errorf("%w: point %d", ErrInvalidCommitmentPoint, j)
+			return nil, nil, fmt.Errorf("%w: point %d", ErrInvalidCommitmentPoint, j)
 		}
 		termX, termY := curve.ScalarMult(cx, cy, padScalar(new(big.Int).Set(power)))
 		if rhsX == nil {
@@ -276,11 +387,7 @@ func Verify(share Share, commitments Commitments) error {
 		power.Mul(power, idx)
 		power.Mod(power, n)
 	}
-
-	if lhsX.Cmp(rhsX) != 0 || lhsY.Cmp(rhsY) != 0 {
-		return ErrCommitmentMismatch
-	}
-	return nil
+	return rhsX, rhsY, nil
 }
 
 // Reconstruct recovers the secret from M-or-more Pedersen-VSS
@@ -328,7 +435,16 @@ func Reconstruct(shares []Share, commitments Commitments) ([SecretSize]byte, err
 	ys := make([]*big.Int, threshold)
 	for i, s := range subset {
 		xs[i] = big.NewInt(int64(s.Index))
-		ys[i] = new(big.Int).SetBytes(s.Value[:])
+		// Reduce the raw 32-byte value into its canonical scalar
+		// representative mod n. Verify (above) normalises before the
+		// curve check, so any bit-pattern that survives Verify
+		// equals its canonical form mod n on the curve — but Lagrange
+		// interpolation here is in Z_n and expects canonical inputs.
+		// Reducing once before the inner loops keeps every term of
+		// the interpolation in [0, n).
+		yi := new(big.Int).SetBytes(s.Value[:])
+		yi.Mod(yi, n)
+		ys[i] = yi
 	}
 
 	// Lagrange interpolation at x = 0 in Z_n.
@@ -392,8 +508,18 @@ func padScalar(x *big.Int) []byte {
 // (zero is a degenerate coefficient: a polynomial whose top-degree
 // coefficient is zero has effective degree M-2, which would let
 // M-1 shares reconstruct the secret).
+//
+// The retry budget is a defense-in-depth bound against a pathological
+// io.Reader, not a statistical necessity: with a healthy CSPRNG the
+// probability of observing zero on a single draw is 1/n ≈ 2^-256, so
+// any finite budget is effectively infinite. 256 is chosen as a round
+// number with plenty of headroom — large enough that a budget-exhausted
+// error unambiguously signals a broken reader (all tests must succeed
+// on the first draw), small enough to bound the worst case to a trivial
+// number of SHA-256 invocations.
 func randScalar(r io.Reader, n *big.Int) (*big.Int, error) {
-	for attempt := 0; attempt < 16; attempt++ {
+	const retries = 256
+	for attempt := 0; attempt < retries; attempt++ {
 		// rand.Int returns [0, n). We then reject zero.
 		k, err := rand.Int(r, n)
 		if err != nil {
@@ -403,10 +529,9 @@ func randScalar(r io.Reader, n *big.Int) (*big.Int, error) {
 			return k, nil
 		}
 	}
-	// 16 uniform draws all returning zero is impossible in
-	// practice (probability ~ 2^-3840). If the loop exits, the
-	// CSPRNG is broken.
-	return nil, errors.New("vss: rand reader returned zero 16 times in a row (CSPRNG broken)")
+	// If the loop exits without returning a non-zero draw, the
+	// reader is broken. Never reachable with a healthy CSPRNG.
+	return nil, errors.New("vss: rand reader exhausted retry budget returning zero (CSPRNG broken)")
 }
 
 // evalPoly evaluates polynomial coeffs[0] + coeffs[1]*x + ... +

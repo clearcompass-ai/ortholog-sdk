@@ -17,11 +17,13 @@ KEY ARCHITECTURAL DECISIONS:
     from pinning an entry to a non-active version through direct
     assignment (NewEntry always overwrites Header.ProtocolVersion
     with the active value).
-  - MaxCanonicalBytes is 1 MiB — an SDK-side guard, not a protocol
-    constraint. The binding ceiling is c2sp.org/tlog-tiles's 64 KiB
-    bundle limit (see tessera_compat.MaxBundleEntrySize). The 1 MiB
-    cap catches runaway allocations during deserialization before
-    bundle-size validation even runs.
+  - MaxCanonicalBytes is pinned to MaxBundleEntrySize (64 KiB — 1). An
+    entry larger than c2sp.org/tlog-tiles's uint16 length prefix
+    cannot be bundled and would panic inside MarshalBundleEntry if it
+    reached the tile writer (ORTHO-BUG-005). Enforcing the bundle
+    limit at construction / Validate / Deserialize time produces a
+    clean HTTP 400-class rejection at the REST boundary instead of
+    crashing the operator backend.
   - v6 is the protocol version shipped by this SDK release. v5 is not
     supported — per the hard-cut migration plan, no v5 data exists in
     production. Reading v5 bytes returns ErrUnknownVersion (see
@@ -65,17 +67,17 @@ func CurrentProtocolVersion() uint16 {
 // -------------------------------------------------------------------------------------------------
 
 const (
-	// MaxCanonicalBytes caps the total serialized entry size at 1 MiB.
+	// MaxCanonicalBytes caps the total serialized entry size at the
+	// c2sp.org/tlog-tiles bundle limit (MaxBundleEntrySize = 65535).
 	// Includes preamble + header body + payload + signatures section.
-	// Rejects oversized entries during NewEntry and Deserialize before
-	// excessive allocation.
+	// Enforced by NewEntry, Entry.Validate, and Deserialize.
 	//
-	// The operational ceiling is tighter: c2sp.org/tlog-tiles bundles
-	// entries with a uint16 length prefix, capping per-entry bundle
-	// size at 65535 bytes. Entries exceeding that limit cannot be
-	// bundled into a Tessera tile. The 1 MiB cap is a defensive
-	// first-pass check before bundle-size validation.
-	MaxCanonicalBytes = 1 << 20
+	// Pinning this to the bundle limit closes ORTHO-BUG-005: any entry
+	// that passes Validate is also guaranteed to fit in a Tessera tile
+	// bundle. Previously MaxCanonicalBytes = 1 MiB admitted entries
+	// that would panic inside MarshalBundleEntry's uint16 length
+	// prefix when the operator later bundled them.
+	MaxCanonicalBytes = MaxBundleEntrySize
 
 	// MaxDelegationPointers caps Path B delegation chain depth at 3.
 	// Enforced by validateHeaderForWrite in serialize.go.

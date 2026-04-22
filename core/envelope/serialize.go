@@ -109,7 +109,7 @@ import (
 // -------------------------------------------------------------------------------------------------
 
 var (
-	ErrCanonicalTooLarge         = errors.New("envelope: canonical bytes exceed MaxCanonicalBytes (1 MiB)")
+	ErrCanonicalTooLarge         = errors.New("envelope: canonical bytes exceed MaxCanonicalBytes (c2sp.org/tlog-tiles bundle limit, 65535 bytes)")
 	ErrMalformedPreamble         = errors.New("envelope: malformed preamble")
 	ErrMalformedHeader           = errors.New("envelope: malformed header body")
 	ErrMalformedPayload          = errors.New("envelope: malformed payload")

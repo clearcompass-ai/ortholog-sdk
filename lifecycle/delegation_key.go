@@ -153,6 +153,20 @@ func UnwrapDelegationKey(wrappedSkDel []byte, ownerSecretKey []byte) ([]byte, er
 		return nil, fmt.Errorf("lifecycle/delegation_key: unwrapped key wrong length %d, expected 32", len(skDel))
 	}
 
+	// 4. Verify the recovered scalar is in the valid curve range
+	// (1 <= skDel < N). A malicious or corrupted escrow node could
+	// return 32 well-formed bytes that decode to 0 or a value >= N,
+	// either of which would silently corrupt every downstream
+	// cryptographic operation (ORTHO-BUG-014). Mirrors the
+	// ownerSecretKey range check above.
+	sk := new(big.Int).SetBytes(skDel)
+	if sk.Sign() == 0 || sk.Cmp(c.Params().N) >= 0 {
+		for i := range skDel {
+			skDel[i] = 0
+		}
+		return nil, errors.New("lifecycle/delegation_key: unwrapped scalar out of range [1, N)")
+	}
+
 	return skDel, nil
 }
 

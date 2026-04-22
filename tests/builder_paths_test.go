@@ -98,7 +98,7 @@ func TestBuilderPathB_DoesNotConnect(t *testing.T) {
 	h.addDelegation(t, d3, "did:example:b", "did:example:c")
 	action := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:c", TargetRoot: ptrTo(rootPos), AuthorityPath: delegation(), DelegationPointers: []types.LogPosition{d3, d2, d1}}, nil)
 	result := h.process(t, action, pos(5))
-	if result.PathBCounts != 0 && result.PathDCounts == 0 && result.RejectedCounts == 0 {
+	if result.PathBCounts != 0 && result.PathDCounts == 0 && len(result.RejectedPositions) == 0 {
 		t.Fatal("chain that doesn't connect should be Path D or rejected")
 	}
 }

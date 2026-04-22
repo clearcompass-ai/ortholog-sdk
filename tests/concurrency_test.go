@@ -41,7 +41,7 @@ func TestOCC_StrictMismatch(t *testing.T) {
 	e1 := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos)}, nil)
 	h.process(t, e1, pos(3))
 	e2 := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(pos(999))}, nil)
-	if r := h.process(t, e2, pos(4)); r.RejectedCounts != 1 {
+	if r := h.process(t, e2, pos(4)); len(r.RejectedPositions) != 1 {
 		t.Fatal("strict OCC mismatch should reject")
 	}
 }
@@ -76,7 +76,7 @@ func TestOCC_CommutativeOutsideWindow(t *testing.T) {
 		prevPos = pos(i)
 	}
 	e := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:judge", TargetRoot: ptrTo(entityPos), AuthorityPath: scopeAuth(), ScopePointer: ptrTo(scopePos), PriorAuthority: ptrTo(pos(3))}, nil)
-	if r := h.process(t, e, pos(8)); r.RejectedCounts != 1 {
+	if r := h.process(t, e, pos(8)); len(r.RejectedPositions) != 1 {
 		t.Fatal("outside window should reject")
 	}
 }

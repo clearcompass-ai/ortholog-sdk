@@ -44,7 +44,9 @@ OVERVIEW:
     404 → Fetch returns (nil, nil) — entry not found is a normal
     condition, not an error. Any other non-200 → Fetch returns an error.
 
-    2 MiB response body limit (1 MiB envelope cap + overhead).
+    2 MiB response body limit — generous margin above the 64 KiB
+    envelope cap (MaxCanonicalBytes) to absorb HTTP/JSON framing and
+    hex expansion (hex is 2× binary size).
 
 KEY DEPENDENCIES:
     - types/entry_with_metadata.go: EntryWithMetadata struct (no longer
@@ -138,8 +140,8 @@ func (f *HTTPEntryFetcher) Fetch(pos types.LogPosition) (*types.EntryWithMetadat
 		return nil, fmt.Errorf("log/http: fetch: HTTP %d for seq %d", resp.StatusCode, pos.Sequence)
 	}
 
-	// 2 MiB cap: 1 MiB entry + HTTP/JSON overhead + hex expansion
-	// (hex is 2x the binary size).
+	// 2 MiB cap: well above the 64 KiB envelope cap to absorb
+	// HTTP/JSON framing and hex expansion (hex is 2x the binary size).
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
 		return nil, fmt.Errorf("log/http: fetch read: %w", err)

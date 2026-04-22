@@ -13,12 +13,19 @@ import (
 // ─────────────────────────────────────────────────────────────────────
 
 // ClassifyParams configures read-only entry classification.
+//
+// SchemaResolver is optional: when nil, the classifier defaults to strict
+// OCC (Decision 37), matching ProcessBatch's behaviour when its resolver is
+// nil. Bridges that need to predict Path C admission for commutative
+// schemas must supply the same resolver the live builder will use — any
+// divergence between the two resolvers reintroduces ORTHO-BUG-004.
 type ClassifyParams struct {
-	Entry       *envelope.Entry
-	Position    types.LogPosition // Entry's own position (for context).
-	LeafReader  smt.LeafReader
-	Fetcher     EntryFetcher
-	LocalLogDID string
+	Entry          *envelope.Entry
+	Position       types.LogPosition // Entry's own position (for context).
+	LeafReader     smt.LeafReader
+	Fetcher        EntryFetcher
+	LocalLogDID    string
+	SchemaResolver SchemaResolver
 }
 
 // Classification is the result of ClassifyEntry.
@@ -34,7 +41,7 @@ type ClassificationDetails struct {
 	DelegationDepth  int       // Number of hops in delegation chain (Path B only).
 	AuthoritySetSize int       // Size of scope authority set (Path C only).
 	IsCommentary     bool      // True for zero-SMT-impact entries.
-	OCCNoteReadOnly  bool      // True when commutative check was skipped in read-only mode.
+	OCCNoteReadOnly  bool      // True when commutative schema accepted a Prior_Authority mismatch provisionally; runtime Δ-window check still required.
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -125,7 +132,7 @@ func ClassifyEntry(p ClassifyParams) (*Classification, error) {
 	case envelope.AuthorityDelegation:
 		return classifyPathB(h, targetEntry, p.Fetcher, p.LeafReader, p.LocalLogDID, &details)
 	case envelope.AuthorityScopeAuthority:
-		return classifyPathC(h, targetRoot, leaf, p.Fetcher, p.LeafReader, p.LocalLogDID, &details)
+		return classifyPathC(h, targetRoot, leaf, p.Fetcher, p.LeafReader, p.SchemaResolver, p.LocalLogDID, &details)
 	default:
 		return &Classification{
 			Path:   PathResultPathD,
@@ -276,6 +283,7 @@ func classifyPathC(
 	leaf *types.SMTLeaf,
 	fetcher EntryFetcher,
 	leafReader smt.LeafReader,
+	schemaResolver SchemaResolver,
 	localLogDID string,
 	d *ClassificationDetails,
 ) (*Classification, error) {
@@ -319,7 +327,9 @@ func classifyPathC(
 	}
 	d.AuthoritySetSize = len(currentScope.Header.AuthoritySet)
 
-	// OCC (Prior_Authority) — read-only, note when commutative check skipped.
+	// OCC (Prior_Authority) — mirrors verifyPriorAuthority (concurrency.go) so
+	// the classifier and live builder agree on acceptance (ORTHO-BUG-004).
+	// Commutativity is decided via the shared resolveCommutativity helper.
 	currentTip := leaf.AuthorityTip
 	if currentTip.Equal(targetRoot) {
 		if h.PriorAuthority != nil {
@@ -336,10 +346,21 @@ func classifyPathC(
 			}, nil
 		}
 		if !h.PriorAuthority.Equal(currentTip) {
+			if !resolveCommutativity(h, schemaResolver, fetcher) {
+				return &Classification{
+					Path:    PathResultRejected,
+					Reason:  "strict OCC: Prior_Authority != Authority_Tip and schema is not commutative",
+					Details: *d,
+				}, nil
+			}
+			// Commutative schema: the Δ-window buffer is runtime-only state
+			// not available to the read-only classifier. Admit provisionally
+			// and flag so bridges know a runtime Δ-window check still gates
+			// final acceptance.
 			d.OCCNoteReadOnly = true
 			return &Classification{
 				Path:    PathResultPathC,
-				Reason:  "Prior_Authority != Authority_Tip — commutative check not available in read-only mode",
+				Reason:  "commutative schema — runtime Δ-window check required",
 				Details: *d,
 			}, nil
 		}
@@ -365,11 +386,13 @@ func classifyPathC(
 // ─────────────────────────────────────────────────────────────────────
 
 // ClassifyBatch classifies multiple entries. Read-only, no SMT modification.
+// A nil schemaResolver keeps the batch under strict OCC (Decision 37).
 func ClassifyBatch(
 	entries []*envelope.Entry,
 	positions []types.LogPosition,
 	leafReader smt.LeafReader,
 	fetcher EntryFetcher,
+	schemaResolver SchemaResolver,
 	logDID string,
 ) ([]Classification, error) {
 	if len(entries) != len(positions) {
@@ -378,11 +401,12 @@ func ClassifyBatch(
 	results := make([]Classification, len(entries))
 	for i, entry := range entries {
 		c, _ := ClassifyEntry(ClassifyParams{
-			Entry:       entry,
-			Position:    positions[i],
-			LeafReader:  leafReader,
-			Fetcher:     fetcher,
-			LocalLogDID: logDID,
+			Entry:          entry,
+			Position:       positions[i],
+			LeafReader:     leafReader,
+			Fetcher:        fetcher,
+			LocalLogDID:    logDID,
+			SchemaResolver: schemaResolver,
 		})
 		if c != nil {
 			results[i] = *c

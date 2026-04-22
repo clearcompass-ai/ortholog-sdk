@@ -158,21 +158,35 @@ func computeIntermediateAuthorityTip(
 // Apply primitive — writes staged updates to SMT and buffer
 // ─────────────────────────────────────────────────────────────────────
 
-// applyLeafUpdates commits staged leaf updates to the SMT. DeltaWindowBuffer
-// entries are recorded only after successful SetLeaf calls so failed writes
-// never leave phantom buffer records.
+// applyLeafUpdates commits staged leaf updates to the SMT as a single atomic
+// batch. On a backing-store failure, zero leaves are written (all-or-nothing
+// semantics per the LeafStore.SetBatch contract). DeltaWindowBuffer entries
+// are recorded only after the commit succeeds so a failed batch never leaves
+// phantom buffer records.
+//
+// This is the sole atomicity boundary for leaf mutations in the builder.
+// Callers must route every multi-leaf mutation through this primitive to
+// prevent the partial-mutation class of defects (ORTHO-BUG-002).
 func applyLeafUpdates(
 	tree *smt.Tree,
 	buffer *DeltaWindowBuffer,
 	updates []leafUpdate,
 ) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	leaves := make([]types.SMTLeaf, len(updates))
 	for i, u := range updates {
-		if err := tree.SetLeaf(u.key, u.leaf); err != nil {
-			return fmt.Errorf("builder/path: apply update %d of %d: %w",
-				i+1, len(updates), err)
-		}
-		if u.recordsBuffer && buffer != nil {
-			buffer.Record(u.key, u.bufferPos)
+		leaves[i] = u.leaf
+	}
+	if err := tree.SetLeaves(leaves); err != nil {
+		return fmt.Errorf("builder/path: atomic batch commit of %d leaf update(s): %w", len(updates), err)
+	}
+	if buffer != nil {
+		for _, u := range updates {
+			if u.recordsBuffer {
+				buffer.Record(u.key, u.bufferPos)
+			}
 		}
 	}
 	return nil

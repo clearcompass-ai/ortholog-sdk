@@ -49,7 +49,11 @@ func processEntry(
 		}
 		key := smt.DeriveKey(pos)
 		leaf := types.SMTLeaf{Key: key, OriginTip: pos, AuthorityTip: pos}
-		if err := tree.SetLeaf(key, leaf); err != nil {
+		// Route through the shared atomicity boundary so every leaf
+		// mutation in the builder flows through a single primitive
+		// (ORTHO-BUG-002). New-leaf creation does not participate in
+		// the Δ-window, so the buffer is nil.
+		if err := applyLeafUpdates(tree, nil, []leafUpdate{{key: key, leaf: leaf}}); err != nil {
 			return PathResultPathD, fmt.Errorf("creating leaf: %w", err)
 		}
 		return PathResultNewLeaf, nil

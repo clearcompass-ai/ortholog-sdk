@@ -8,7 +8,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/dustinxie/ecc"
+	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 // newTestSecret returns a 32-byte deterministic-looking secret for
@@ -27,7 +27,7 @@ func newTestSecret(t *testing.T, seed byte) []byte {
 // own curve accessor. Errors fail the test immediately.
 func newTestKeyPair(t *testing.T) *ecdsa.PrivateKey {
 	t.Helper()
-	priv, err := ecdsa.GenerateKey(ecc.P256k1(), rand.Reader)
+	priv, err := ecdsa.GenerateKey(secp256k1.S256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("newTestKeyPair: generate secp256k1 key: %v", err)
 	}

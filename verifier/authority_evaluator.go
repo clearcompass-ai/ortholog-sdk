@@ -27,10 +27,12 @@ Consumed by:
 package verifier
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
+	"github.com/clearcompass-ai/ortholog-sdk/core/scope"
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
 	"github.com/clearcompass-ai/ortholog-sdk/schema"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
@@ -130,7 +132,7 @@ const maxAuthorityChainDepth = 1000
 func EvaluateAuthority(
 	leafKey [32]byte,
 	leafReader smt.LeafReader,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	extractor schema.SchemaParameterExtractor,
 ) (*AuthorityEvaluation, error) {
 	leaf, err := leafReader.Get(leafKey)
@@ -224,12 +226,28 @@ func EvaluateAuthority(
 	}
 
 	// Classify entries: newest first (allEntries[0] is the most recent).
+	//
+	// Decision 52 adds a defense-in-depth layer here: for each walked
+	// Path C enforcement entry, verify the signer was authorised in
+	// the governing scope at the entry's admission position. The
+	// shared primitive core/scope.AuthorizedSetAtPosition answers
+	// that question directly. An entry whose signer fails the check
+	// is reclassified as Overridden so it does not contribute to the
+	// active constraint set.
+	//
+	// Admission-time enforcement in processPathC already catches the
+	// common case; this check guards against a corrupted store
+	// surfacing entries that were never properly admitted (or were
+	// admitted against a pre-Decision-52 builder).
 	now := time.Now().UTC()
 	for i := range allEntries {
 		if allEntries[i].State != 0 {
 			continue // Already classified (snapshot entries).
 		}
 		state := classifyConstraint(allEntries[i], extractor, fetcher, now)
+		if state == ConstraintActive && !scopeMembershipValid(allEntries[i], fetcher, leafReader) {
+			state = ConstraintOverridden
+		}
 		allEntries[i].State = state
 	}
 
@@ -259,7 +277,7 @@ func EvaluateAuthority(
 func classifyConstraint(
 	ce ConstraintEntry,
 	extractor schema.SchemaParameterExtractor,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	now time.Time,
 ) ConstraintState {
 	if extractor == nil || ce.Entry == nil {
@@ -291,6 +309,48 @@ func classifyConstraint(
 		return ConstraintPending
 	}
 	return ConstraintActive
+}
+
+// scopeMembershipValid reports whether a walked constraint entry's
+// signer was a member of the governing scope's AuthoritySet at the
+// entry's admission position, resolved via the Decision 52 primitive.
+//
+// Returns true for entries that carry no ScopePointer (non-scope
+// constraints are out of this check's scope), for entries whose
+// scope resolution fails in a transient way (missing leaf, missing
+// entry), and for entries whose signer is in the resolved set.
+//
+// Returns false only when the set is resolved successfully AND the
+// signer is not a member. Structural chain errors (cycle, cross-log,
+// malformed, too-deep, position-unknown) also mark the entry as
+// un-trustworthy — an entry that cannot resolve its own scope
+// authority cannot be counted as active.
+func scopeMembershipValid(
+	ce ConstraintEntry,
+	fetcher types.EntryFetcher,
+	leafReader smt.LeafReader,
+) bool {
+	if ce.Entry == nil || ce.Entry.Header.ScopePointer == nil {
+		return true
+	}
+	set, err := scope.AuthorizedSetAtPosition(
+		*ce.Entry.Header.ScopePointer,
+		ce.Position,
+		fetcher,
+		leafReader,
+	)
+	if err != nil {
+		// Transient lookup failure (missing leaf, missing entry) —
+		// decline to penalise an entry we cannot verify. Structural
+		// errors flag the entry as un-trustworthy.
+		if errors.Is(err, scope.ErrScopeLeafMissing) ||
+			errors.Is(err, scope.ErrScopeEntryMissing) {
+			return true
+		}
+		return false
+	}
+	_, ok := set[ce.Entry.Header.SignerDID]
+	return ok
 }
 
 // isAuthoritySnapshotEntry detects an authority snapshot entry by shape.
@@ -334,7 +394,7 @@ func isAuthoritySnapshotEntry(entry *envelope.Entry) bool {
 // Consumed by judicial network's verification/delegation_chain.go.
 func VerifyDelegationProvenance(
 	delegationPointers []types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	leafReader smt.LeafReader,
 ) ([]DelegationHop, error) {
 	if len(delegationPointers) == 0 {

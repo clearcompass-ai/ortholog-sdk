@@ -24,7 +24,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/clearcompass-ai/ortholog-sdk/builder"
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/artifact"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
@@ -54,11 +53,11 @@ var (
 	// LeafReader implementation.
 	_ leafReader = (*smt.HTTPLeafReader)(nil)
 
-	// entryFetcher must remain a strict subset of builder.EntryFetcher.
+	// entryFetcher must remain a strict subset of types.EntryFetcher.
 	// Interface-to-interface assignment: compiles only if every method
 	// in entryFetcher exists with identical signature on
-	// builder.EntryFetcher.
-	_ entryFetcher = (builder.EntryFetcher)(nil)
+	// types.EntryFetcher.
+	_ entryFetcher = (types.EntryFetcher)(nil)
 )
 
 // -------------------------------------------------------------------------------------------------

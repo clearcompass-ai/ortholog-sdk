@@ -84,7 +84,7 @@ type RotationEvaluation struct {
 //  6. Tier 3: delegate to EvaluateContest
 func EvaluateKeyRotation(
 	rotationPos types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	leafReader smt.LeafReader,
 	extractor schema.SchemaParameterExtractor,
 ) (*RotationEvaluation, error) {

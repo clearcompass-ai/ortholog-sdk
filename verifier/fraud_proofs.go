@@ -105,7 +105,7 @@ type FraudProofResult struct {
 func VerifyDerivationCommitment(
 	commitment types.SMTDerivationCommitment,
 	priorState smt.LeafStore,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	schemaRes builder.SchemaResolver,
 	logDID string,
 ) (*FraudProofResult, error) {

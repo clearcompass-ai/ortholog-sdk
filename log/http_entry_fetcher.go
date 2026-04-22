@@ -3,7 +3,7 @@ FILE PATH:
     log/http_entry_fetcher.go
 
 DESCRIPTION:
-    HTTP-backed implementation of builder.EntryFetcher (and
+    HTTP-backed implementation of types.EntryFetcher (and
     verifier.EntryFetcher, lifecycle.EntryFetcher — all structurally
     identical). Targets the ortholog-operator's GET /v1/entries/{sequence}
     endpoint.
@@ -72,7 +72,7 @@ import (
 // 1) HTTPEntryFetcher
 // -------------------------------------------------------------------------------------------------
 
-// HTTPEntryFetcher implements builder.EntryFetcher, verifier.EntryFetcher,
+// HTTPEntryFetcher implements types.EntryFetcher, verifier.EntryFetcher,
 // and lifecycle.EntryFetcher (all structurally identical interfaces) by
 // calling the operator's REST API.
 type HTTPEntryFetcher struct {
@@ -122,7 +122,7 @@ func NewHTTPEntryFetcher(cfg HTTPEntryFetcherConfig) *HTTPEntryFetcher {
 // error for any other non-200 response, network failure, parse failure,
 // or canonical-bytes decode failure.
 //
-// Satisfies builder.EntryFetcher, verifier.EntryFetcher, and
+// Satisfies types.EntryFetcher, verifier.EntryFetcher, and
 // lifecycle.EntryFetcher through Go structural typing.
 func (f *HTTPEntryFetcher) Fetch(pos types.LogPosition) (*types.EntryWithMetadata, error) {
 	url := fmt.Sprintf("%s/v1/entries/%d", f.baseURL, pos.Sequence)

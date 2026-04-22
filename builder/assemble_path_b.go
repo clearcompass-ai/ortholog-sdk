@@ -32,7 +32,7 @@ type AssemblePathBParams struct {
 	DelegateDID        string              // Action signer's DID.
 	TargetRoot         types.LogPosition   // Root entity being targeted.
 	LeafReader         smt.LeafReader      // SMT leaf access for liveness checks.
-	Fetcher            EntryFetcher        // Positional entry lookup.
+	Fetcher            types.EntryFetcher        // Positional entry lookup.
 	MaxDepth           int                 // 0 = default (MaxDelegationPointers).
 	CandidatePositions []types.LogPosition // Delegation positions the caller knows about.
 }
@@ -157,7 +157,7 @@ func AssemblePathB(params AssemblePathBParams) (*PathBAssembly, error) {
 type ValidateChainParams struct {
 	DelegationPointers []types.LogPosition
 	LeafReader         smt.LeafReader
-	Fetcher            EntryFetcher
+	Fetcher            types.EntryFetcher
 }
 
 // ChainLivenessResult is the output of ValidateChainLiveness.

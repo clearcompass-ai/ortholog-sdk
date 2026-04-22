@@ -142,7 +142,7 @@ func (b *DeltaWindowBuffer) Len() int {
 // classifier (classifyPathC) so both paths make identical OCC-mode decisions
 // for the same entry. Any divergence in OCC classification is a bug (see
 // ORTHO-BUG-004); centralising the decision here prevents reintroduction.
-func resolveCommutativity(h *envelope.ControlHeader, resolver SchemaResolver, fetcher EntryFetcher) bool {
+func resolveCommutativity(h *envelope.ControlHeader, resolver SchemaResolver, fetcher types.EntryFetcher) bool {
 	if h == nil || h.SchemaRef == nil || resolver == nil {
 		return false
 	}
@@ -176,7 +176,7 @@ func verifyPriorAuthority(
 	leaf *types.SMTLeaf,
 	buffer *DeltaWindowBuffer,
 	schemaRes SchemaResolver,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 ) error {
 	currentTip := leaf.AuthorityTip
 

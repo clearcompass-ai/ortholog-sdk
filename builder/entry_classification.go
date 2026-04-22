@@ -23,7 +23,7 @@ type ClassifyParams struct {
 	Entry          *envelope.Entry
 	Position       types.LogPosition // Entry's own position (for context).
 	LeafReader     smt.LeafReader
-	Fetcher        EntryFetcher
+	Fetcher        types.EntryFetcher
 	LocalLogDID    string
 	SchemaResolver SchemaResolver
 }
@@ -167,7 +167,7 @@ func classifyPathA(h *envelope.ControlHeader, target *envelope.Entry, d *Classif
 func classifyPathB(
 	h *envelope.ControlHeader,
 	target *envelope.Entry,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	leafReader smt.LeafReader,
 	localLogDID string,
 	d *ClassificationDetails,
@@ -281,7 +281,7 @@ func classifyPathC(
 	h *envelope.ControlHeader,
 	targetRoot types.LogPosition,
 	leaf *types.SMTLeaf,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	leafReader smt.LeafReader,
 	schemaResolver SchemaResolver,
 	localLogDID string,
@@ -391,7 +391,7 @@ func ClassifyBatch(
 	entries []*envelope.Entry,
 	positions []types.LogPosition,
 	leafReader smt.LeafReader,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	schemaResolver SchemaResolver,
 	logDID string,
 ) ([]Classification, error) {

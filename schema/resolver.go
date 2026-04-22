@@ -18,7 +18,7 @@ func NewCachingResolver() *CachingResolver {
 	return &CachingResolver{cache: make(map[types.LogPosition]*builder.SchemaResolution)}
 }
 
-func (r *CachingResolver) Resolve(ref types.LogPosition, fetcher builder.EntryFetcher) (*builder.SchemaResolution, error) {
+func (r *CachingResolver) Resolve(ref types.LogPosition, fetcher types.EntryFetcher) (*builder.SchemaResolution, error) {
 	r.mu.RLock(); cached, ok := r.cache[ref]; r.mu.RUnlock()
 	if ok { return cached, nil }
 	meta, err := fetcher.Fetch(ref)

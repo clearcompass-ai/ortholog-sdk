@@ -102,7 +102,7 @@ const maxSchemaChainDepth = 100
 // to extract migration_policy and predecessor_schema.
 func WalkSchemaChain(
 	pinnedRef types.LogPosition,
-	fetcher EntryFetcher,
+	fetcher types.EntryFetcher,
 	extractor schema.SchemaParameterExtractor,
 ) (*SchemaChain, error) {
 	if extractor == nil {

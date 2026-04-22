@@ -41,6 +41,8 @@ import (
 	"time"
 
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
+	"github.com/clearcompass-ai/ortholog-sdk/core/scope"
+	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
 	"github.com/clearcompass-ai/ortholog-sdk/schema"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
@@ -101,7 +103,7 @@ type EvaluateConditionsParams struct {
 
 	// Fetcher reads entries by position. Satisfied by operator's
 	// PostgresEntryFetcher or test MockFetcher.
-	Fetcher EntryFetcher
+	Fetcher types.EntryFetcher
 
 	// Extractor reads schema parameters from Domain Payload.
 	// Nil is safe — all conditions default to met/not-applicable.
@@ -112,18 +114,21 @@ type EvaluateConditionsParams struct {
 	// OperatorQueryAPI.QueryByCosignatureOf(pendingPos).
 	Cosignatures []types.EntryWithMetadata
 
-	// AuthorizedSet is the set of DIDs whose cosignatures count toward
-	// CosignatureThreshold. Any cosignature whose signer is not a
-	// member is discarded as spoofed — a Sybil defense. Derived by the
-	// caller from the governing scope entry's AuthoritySet (typically
-	// the scope referenced by the pending entry's Scope_Pointer).
+	// LeafReader is the read-only SMT view used to resolve the
+	// governing scope's AuthoritySet via core/scope.AuthorizedSetAtPosition.
+	// Decision 52: the SDK derives the authorised set from the
+	// pending entry's Prior_Authority rather than trusting a
+	// caller-supplied map. The set is cryptographically anchored
+	// to the scope-history chain; a caller can no longer supply a
+	// permissive override to bypass cosignature authority checks.
 	//
-	// Nil is legal and preserves prior behaviour: every cosignature
-	// entry that binds to pendingPos counts. Callers exposed to the
-	// Sybil vector MUST populate this field; leaving it nil in
-	// production is a policy choice that accepts counterfeit
-	// cosignatures as valid.
-	AuthorizedSet map[string]struct{}
+	// Required when the pending entry is a Path C scope-authority
+	// operation (ScopePointer + PriorAuthority both non-nil). For
+	// pending entries that carry no scope context, the evaluator
+	// treats the cosignature count as unfiltered by scope membership
+	// (no authorised-set filter applied) — matching the pre-
+	// Decision-52 behaviour for non-scope operations.
+	LeafReader smt.LeafReader
 
 	// Now is the evaluation time. Pass time.Now().UTC() for live
 	// evaluation or a fixed time for deterministic testing.
@@ -180,16 +185,44 @@ func EvaluateConditions(p EvaluateConditionsParams) (*ConditionResult, error) {
 	// 3. Evaluate each condition.
 	entryTime := pendingMeta.LogTime
 
+	// Derive the governing AuthoritySet via the shared scope-history
+	// primitive (Decision 52). For Path C entries the SDK — not the
+	// caller — is the trust boundary for cosignature authority
+	// membership. Only resolved when the pending entry carries both
+	// ScopePointer and PriorAuthority; other shapes leave the
+	// authorised set nil (no filtering, same as pre-Decision-52
+	// non-scope evaluation).
+	//
+	// Fail-closed: any non-nil error from the primitive rejects the
+	// entire evaluation rather than silently falling back to an
+	// unfiltered count. The caller sees the typed scope error
+	// wrapped with verifier context.
+	var authorizedSet map[string]struct{}
+	if p.LeafReader != nil &&
+		pendingEntry.Header.ScopePointer != nil &&
+		pendingEntry.Header.PriorAuthority != nil {
+		set, err := scope.AuthorizedSetAtPosition(
+			*pendingEntry.Header.ScopePointer,
+			*pendingEntry.Header.PriorAuthority,
+			p.Fetcher,
+			p.LeafReader,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("verifier/conditions: resolve authority set: %w", err)
+		}
+		authorizedSet = set
+	}
+
 	// Condition 1: Activation delay.
 	result.Conditions = append(result.Conditions, evaluateActivationDelay(params, entryTime, p.Now))
 
 	// Condition 2: Cosignature threshold.
-	// BUG-015 fix: pass p.PendingPos explicitly so countValidCosignatures
-	// can bind each cosignature to the correct position.
-	// Sybil fix: pass p.AuthorizedSet so cosignatures from signers
-	// outside the governing scope are discarded.
-	cosigDetail := evaluateCosignatureThreshold(params, p.Cosignatures, pendingEntry, p.PendingPos, p.AuthorizedSet)
-	result.CosignatureCount = countValidCosignatures(p.Cosignatures, pendingEntry, p.PendingPos, p.AuthorizedSet)
+	// BUG-015: pass p.PendingPos explicitly so countValidCosignatures
+	// binds each cosignature to the correct position.
+	// Decision 52: authorizedSet derived cryptographically above
+	// from the pending entry's Prior_Authority observation time.
+	cosigDetail := evaluateCosignatureThreshold(params, p.Cosignatures, pendingEntry, p.PendingPos, authorizedSet)
+	result.CosignatureCount = countValidCosignatures(p.Cosignatures, pendingEntry, p.PendingPos, authorizedSet)
 	result.Conditions = append(result.Conditions, cosigDetail)
 
 	// Condition 3: Maturation epoch.

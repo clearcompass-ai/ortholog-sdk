@@ -11,7 +11,7 @@ import (
 
 type mockSchemaResolver struct{ commutative bool }
 
-func (r *mockSchemaResolver) Resolve(ref types.LogPosition, fetcher builder.EntryFetcher) (*builder.SchemaResolution, error) {
+func (r *mockSchemaResolver) Resolve(ref types.LogPosition, fetcher types.EntryFetcher) (*builder.SchemaResolution, error) {
 	return &builder.SchemaResolution{IsCommutative: r.commutative, DeltaWindowSize: 10}, nil
 }
 

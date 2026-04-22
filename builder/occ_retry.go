@@ -108,21 +108,23 @@ type ProcessWithRetryParams struct {
 // ProcessWithRetry
 // ─────────────────────────────────────────────────────────────────────
 
-// ProcessWithRetry wraps ProcessBatch with exponential backoff on OCC
-// rejection. It calls ProcessBatch, checks RejectedCounts, and if
-// rejections occurred, waits with exponential backoff and retries.
+// ProcessWithRetry wraps ProcessBatch with exponential backoff on
+// rejection. It calls ProcessBatch, and if the result reports any
+// RejectedPositions, waits and retries — but only for the rejected
+// indices. Entries that were accepted on an earlier attempt are NOT
+// re-submitted; re-submitting an already-applied entry would trigger
+// ErrTipRegression and falsely classify the valid entry as rejected
+// (ORTHO-BUG-003).
 //
-// The retry is meaningful because between attempts:
-//   - The DeltaWindowBuffer may have been updated by concurrent batches
-//     on other goroutines (operator processes multiple batches)
-//   - The SMT tree state may have advanced (new leaves from other batches)
-//   - The fetcher returns fresher entries (Postgres reads latest state)
+// Between attempts the SMT tree state, DeltaWindowBuffer, and fetcher
+// may reflect writes from concurrent operators, which is what gives
+// retry its chance to succeed. The caller's entries and positions
+// slices are not mutated; retries work on internal views.
 //
-// The function does NOT re-fetch entries or re-resolve schemas between
-// attempts — the caller's entries and positions are fixed. What changes
-// is the tree state and buffer state, which are passed by reference.
-//
-// Returns the result from the last attempt (successful or not).
+// Indices reported in the returned RetryResult.BatchResult.RejectedPositions
+// are indices into the ORIGINAL p.Entries slice, not into any retry
+// sub-batch. Callers always see rejections in terms of the batch they
+// submitted.
 func ProcessWithRetry(p ProcessWithRetryParams) (*RetryResult, error) {
 	cfg := p.Config
 	if cfg.MaxAttempts < 1 {
@@ -136,7 +138,6 @@ func ProcessWithRetry(p ProcessWithRetryParams) (*RetryResult, error) {
 	}
 
 	if len(p.Entries) == 0 {
-		// Empty batch — process once, no retry needed.
 		result, err := ProcessBatch(p.Tree, p.Entries, p.Positions, p.Fetcher, p.SchemaRes, p.LocalLogDID, p.DeltaBuffer)
 		if err != nil {
 			return nil, err
@@ -144,46 +145,70 @@ func ProcessWithRetry(p ProcessWithRetryParams) (*RetryResult, error) {
 		return &RetryResult{BatchResult: result, Attempts: 1}, nil
 	}
 
-	var totalDelay time.Duration
-	var lastResult *BatchResult
+	var (
+		totalDelay  time.Duration
+		aggregate   *BatchResult // accumulates accepted-entry state across attempts
+		pending     = make([]int, len(p.Entries))
+	)
+	for i := range pending {
+		pending[i] = i
+	}
 
 	for attempt := 1; attempt <= cfg.MaxAttempts; attempt++ {
-		result, err := ProcessBatch(p.Tree, p.Entries, p.Positions, p.Fetcher, p.SchemaRes, p.LocalLogDID, p.DeltaBuffer)
+		// Build the sub-batch for this attempt from the entries still
+		// pending after prior attempts. On attempt 1 this is the full
+		// batch; on later attempts it contains only the previously-
+		// rejected indices.
+		subEntries := make([]*envelope.Entry, len(pending))
+		subPositions := make([]types.LogPosition, len(pending))
+		for k, origIdx := range pending {
+			subEntries[k] = p.Entries[origIdx]
+			subPositions[k] = p.Positions[origIdx]
+		}
+
+		attemptResult, err := ProcessBatch(
+			p.Tree, subEntries, subPositions,
+			p.Fetcher, p.SchemaRes, p.LocalLogDID, p.DeltaBuffer,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("builder/retry: attempt %d: %w", attempt, err)
 		}
-		lastResult = result
 
-		// Check for rejections.
-		if result.RejectedCounts == 0 {
+		// Map the sub-batch's RejectedPositions back to original indices
+		// and fold this attempt's accepted-entry counts into the aggregate.
+		aggregate = mergeAttempt(aggregate, attemptResult, pending)
+		nextPending := make([]int, 0, len(attemptResult.RejectedPositions))
+		for _, subIdx := range attemptResult.RejectedPositions {
+			nextPending = append(nextPending, pending[subIdx])
+		}
+		pending = nextPending
+
+		// Success — nothing left to retry.
+		if len(pending) == 0 {
 			return &RetryResult{
-				BatchResult:     result,
+				BatchResult:     aggregate,
 				Attempts:        attempt,
 				TotalDelay:      totalDelay,
 				FinalRejections: 0,
 			}, nil
 		}
 
-		// Partial success accepted — stop if we made progress.
-		if cfg.AcceptPartialSuccess && result.RejectedCounts < len(p.Entries) {
-			accepted := result.PathACounts + result.PathBCounts + result.PathCCounts +
-				result.CommentaryCounts + result.NewLeafCounts
-			if accepted > 0 {
-				return &RetryResult{
-					BatchResult:     result,
-					Attempts:        attempt,
-					TotalDelay:      totalDelay,
-					FinalRejections: result.RejectedCounts,
-				}, nil
-			}
+		// Partial success is acceptable when the config permits it and
+		// at least one entry was applied on the most recent attempt.
+		if cfg.AcceptPartialSuccess &&
+			attemptAccepted(attemptResult) > 0 {
+			return &RetryResult{
+				BatchResult:     aggregate,
+				Attempts:        attempt,
+				TotalDelay:      totalDelay,
+				FinalRejections: len(pending),
+			}, nil
 		}
 
-		// Last attempt — don't sleep, just return.
 		if attempt == cfg.MaxAttempts {
 			break
 		}
 
-		// Exponential backoff: baseDelay * 2^(attempt-1), capped at maxDelay.
 		delay := time.Duration(float64(cfg.BaseDelay) * math.Pow(2, float64(attempt-1)))
 		if delay > cfg.MaxDelay {
 			delay = cfg.MaxDelay
@@ -193,9 +218,47 @@ func ProcessWithRetry(p ProcessWithRetryParams) (*RetryResult, error) {
 	}
 
 	return &RetryResult{
-		BatchResult:     lastResult,
+		BatchResult:     aggregate,
 		Attempts:        cfg.MaxAttempts,
 		TotalDelay:      totalDelay,
-		FinalRejections: lastResult.RejectedCounts,
+		FinalRejections: len(aggregate.RejectedPositions),
 	}, nil
+}
+
+// mergeAttempt folds a sub-batch attempt's result into the running
+// aggregate. Rejected-position indices from the sub-batch are remapped
+// into the original batch's index space via the pending slice.
+// Mutations and counts are concatenated/accumulated. NewRoot and
+// UpdatedBuffer always reflect the most recent attempt.
+func mergeAttempt(agg, attempt *BatchResult, pending []int) *BatchResult {
+	if agg == nil {
+		agg = &BatchResult{}
+	}
+	agg.PathACounts += attempt.PathACounts
+	agg.PathBCounts += attempt.PathBCounts
+	agg.PathCCounts += attempt.PathCCounts
+	agg.PathDCounts += attempt.PathDCounts
+	agg.CommentaryCounts += attempt.CommentaryCounts
+	agg.NewLeafCounts += attempt.NewLeafCounts
+	agg.Mutations = append(agg.Mutations, attempt.Mutations...)
+
+	// Rejections are the indices still not applied after this attempt,
+	// remapped to the original batch's index space.
+	remapped := make([]int, 0, len(attempt.RejectedPositions))
+	for _, subIdx := range attempt.RejectedPositions {
+		remapped = append(remapped, pending[subIdx])
+	}
+	agg.RejectedPositions = remapped
+
+	agg.NewRoot = attempt.NewRoot
+	agg.UpdatedBuffer = attempt.UpdatedBuffer
+	return agg
+}
+
+// attemptAccepted returns the number of entries a single attempt
+// successfully classified into a state-advancing or zero-impact bucket
+// (i.e. not Rejected and not routed to PathD).
+func attemptAccepted(r *BatchResult) int {
+	return r.PathACounts + r.PathBCounts + r.PathCCounts +
+		r.CommentaryCounts + r.NewLeafCounts
 }

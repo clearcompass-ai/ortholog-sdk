@@ -10,8 +10,9 @@ SMT state. Given a set of entries and their log positions, it:
 
  2. Tallies results by classification bucket (PathA, PathB, PathC,
     Commentary, NewLeaf, PathD, Rejected). The operator uses these
-    counts for observability and the OCC retry wrapper uses
-    RejectedCounts to decide whether to back off and retry.
+    counts for observability and the OCC retry wrapper uses the
+    RejectedPositions index list to decide whether to back off and
+    retry, and which entries to re-submit.
 
  3. Collects the mutation record from the SMT tree and computes the new
     root. The mutation set is what the operator persists to its storage
@@ -166,14 +167,23 @@ type BatchResult struct {
 	Mutations []types.LeafMutation
 
 	// Path counts — one entry contributes to exactly one bucket.
-	// The sum of all counts equals len(entries).
+	// The sum of all counts plus len(RejectedPositions) equals len(entries).
 	PathACounts      int
 	PathBCounts      int
 	PathCCounts      int
 	PathDCounts      int
 	CommentaryCounts int
 	NewLeafCounts    int
-	RejectedCounts   int
+
+	// RejectedPositions holds the indices (into the input entries slice)
+	// of entries classified as PathResultRejected on this attempt.
+	// ProcessWithRetry uses these to retry only the rejected subset,
+	// avoiding ErrTipRegression false-rejections on entries already
+	// applied by previous attempts (ORTHO-BUG-003).
+	//
+	// Length is len(RejectedPositions); callers that previously consumed
+	// a "rejected counts" scalar should use len(result.RejectedPositions).
+	RejectedPositions []int
 
 	// UpdatedBuffer is the DeltaWindowBuffer after all Path C
 	// authority-tip advances have been recorded. The operator persists
@@ -323,7 +333,7 @@ func ProcessBatch(
 		case PathResultPathD:
 			result.PathDCounts++
 		case PathResultRejected:
-			result.RejectedCounts++
+			result.RejectedPositions = append(result.RejectedPositions, i)
 		}
 	}
 

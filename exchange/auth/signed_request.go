@@ -359,7 +359,15 @@ type VerifyRequestOptions struct {
 //  7. Call registry.Verify(did, hash, sig, algoID).
 //
 // Any step failing fails the whole verification.
+//
+// The caller's context is threaded through to NonceStore.Reserve —
+// an HTTP handler should pass r.Context() so a client cancellation
+// or deadline propagates into the nonce store's network call. A
+// stalled backing store (Postgres, Redis) that ignored context would
+// otherwise hold a goroutine open past the HTTP request's lifetime
+// and eventually exhaust server memory (ORTHO-BUG-019).
 func VerifyRequest(
+	ctx context.Context,
 	registry *did.VerifierRegistry,
 	env *SignedRequestEnvelope,
 	sig []byte,
@@ -367,6 +375,9 @@ func VerifyRequest(
 	nonces NonceStore,
 	opts VerifyRequestOptions,
 ) error {
+	if ctx == nil {
+		return fmt.Errorf("exchange/auth: context required")
+	}
 	if registry == nil {
 		return fmt.Errorf("exchange/auth: VerifierRegistry required")
 	}
@@ -436,7 +447,7 @@ func VerifyRequest(
 	// on a replay than to run ecrecover first). Skipped if the caller
 	// opted out.
 	if nonces != nil {
-		if err := nonces.Reserve(context.Background(), env.Nonce); err != nil {
+		if err := nonces.Reserve(ctx, env.Nonce); err != nil {
 			return fmt.Errorf("%w: %v", ErrEnvelopeNonceReused, err)
 		}
 	}

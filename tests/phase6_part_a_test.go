@@ -1104,7 +1104,7 @@ func TestClassifyBatch_MixedPaths(t *testing.T) {
 	entries := []*envelope.Entry{commentary, amendment, foreign}
 	positions := []types.LogPosition{pos(10), pos(11), pos(12)}
 
-	results, err := builder.ClassifyBatch(entries, positions, store, fetcher, testLogDID)
+	results, err := builder.ClassifyBatch(entries, positions, store, fetcher, nil, testLogDID)
 	if err != nil {
 		t.Fatalf("ClassifyBatch: %v", err)
 	}

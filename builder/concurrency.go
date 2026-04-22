@@ -133,6 +133,26 @@ func (b *DeltaWindowBuffer) Len() int {
 // OCC verification — Prior_Authority validation for Path C entries
 // ─────────────────────────────────────────────────────────────────────────────
 
+// resolveCommutativity reports whether an entry's schema opts into commutative
+// Path C (Δ-window CRDT) resolution. Returns false on any resolver miss,
+// unresolved schema reference, or resolver error — strict OCC is the default
+// (Decision 37, SDK-D7).
+//
+// Shared by the live builder (verifyPriorAuthority) and the read-only
+// classifier (classifyPathC) so both paths make identical OCC-mode decisions
+// for the same entry. Any divergence in OCC classification is a bug (see
+// ORTHO-BUG-004); centralising the decision here prevents reintroduction.
+func resolveCommutativity(h *envelope.ControlHeader, resolver SchemaResolver, fetcher EntryFetcher) bool {
+	if h == nil || h.SchemaRef == nil || resolver == nil {
+		return false
+	}
+	resolution, err := resolver.Resolve(*h.SchemaRef, fetcher)
+	if err != nil || resolution == nil {
+		return false
+	}
+	return resolution.IsCommutative
+}
+
 // verifyPriorAuthority validates the Prior_Authority field for a Path C entry
 // against the target leaf's current Authority_Tip and the delta-window buffer.
 //
@@ -175,14 +195,8 @@ func verifyPriorAuthority(
 	}
 
 	// Determine OCC mode from schema (SDK-D7: boolean check on Commutative_Operations).
-	isCommutative := false
-	if h.SchemaRef != nil && schemaRes != nil {
-		resolution, err := schemaRes.Resolve(*h.SchemaRef, fetcher)
-		if err == nil && resolution != nil {
-			isCommutative = resolution.IsCommutative
-		}
-		// Resolution failure → default to strict OCC (conservative).
-	}
+	// Resolver failure or missing schema ⇒ strict OCC (conservative default, Decision 37).
+	isCommutative := resolveCommutativity(h, schemaRes, fetcher)
 
 	// Case 2: commutative OCC — Prior_Authority within delta window.
 	if isCommutative && buffer != nil {

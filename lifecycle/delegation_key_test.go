@@ -8,10 +8,12 @@ package lifecycle
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/elliptic"
 	"math/big"
 	"testing"
 
+	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/dustinxie/ecc"
 )
 
@@ -231,5 +233,66 @@ func TestPadScalarTo32_HandlesExactly32Bytes(t *testing.T) {
 	}
 	if !bytes.Equal(out, bytes.Repeat([]byte{0xFF}, 32)) {
 		t.Fatal("32-byte scalar modified during padding")
+	}
+}
+
+// -------------------------------------------------------------------------------------------------
+// ORTHO-BUG-014 — unwrapped scalar range check
+// -------------------------------------------------------------------------------------------------
+//
+// A corrupted or malicious escrow node could return 32 well-formed
+// bytes that decode to 0 or a value >= N. Either silently corrupts
+// every downstream cryptographic operation. UnwrapDelegationKey must
+// reject both.
+
+// unwrapOutOfRangeScalarHelper encrypts the given out-of-range scalar
+// to a fresh owner pubkey and runs UnwrapDelegationKey against the
+// result. Returns the owner scalar and the unwrap error so the caller
+// can assert rejection.
+func unwrapOutOfRangeScalarHelper(t *testing.T, badScalar []byte) error {
+	t.Helper()
+	ownerPubBytes, ownerPriv := freshUncompressedPubKey(t)
+	// Parse owner pub so EncryptForNode can consume it.
+	x, y := elliptic.Unmarshal(ecc.P256k1(), ownerPubBytes) //nolint:staticcheck // test uses secp256k1 unmarshal
+	if x == nil {
+		t.Fatal("failed to unmarshal owner pubkey")
+	}
+	pub := &ecdsa.PublicKey{Curve: ecc.P256k1(), X: x, Y: y}
+	wrapped, err := escrow.EncryptForNode(badScalar, pub)
+	if err != nil {
+		t.Fatalf("EncryptForNode: %v", err)
+	}
+	_, err = UnwrapDelegationKey(wrapped, padScalarTo32(ownerPriv.D))
+	return err
+}
+
+func TestUnwrapDelegationKey_RejectsUnwrappedZeroScalar(t *testing.T) {
+	bad := make([]byte, 32) // all zeros → scalar == 0
+	err := unwrapOutOfRangeScalarHelper(t, bad)
+	if err == nil {
+		t.Fatal("expected rejection of zero unwrapped scalar (ORTHO-BUG-014), got nil")
+	}
+}
+
+func TestUnwrapDelegationKey_RejectsUnwrappedScalarEqualToN(t *testing.T) {
+	n := ecc.P256k1().Params().N
+	bad := make([]byte, 32)
+	nBytes := n.Bytes()
+	copy(bad[32-len(nBytes):], nBytes)
+	err := unwrapOutOfRangeScalarHelper(t, bad)
+	if err == nil {
+		t.Fatal("expected rejection of unwrapped scalar == N (ORTHO-BUG-014), got nil")
+	}
+}
+
+func TestUnwrapDelegationKey_RejectsUnwrappedScalarAboveN(t *testing.T) {
+	// N + 1 — above the curve order.
+	n := new(big.Int).Add(ecc.P256k1().Params().N, big.NewInt(1))
+	bad := make([]byte, 32)
+	nBytes := n.Bytes()
+	copy(bad[32-len(nBytes):], nBytes)
+	err := unwrapOutOfRangeScalarHelper(t, bad)
+	if err == nil {
+		t.Fatal("expected rejection of unwrapped scalar > N (ORTHO-BUG-014), got nil")
 	}
 }

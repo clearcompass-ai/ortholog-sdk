@@ -240,13 +240,13 @@ func TestVerifyRequest_Replay_Rejected(t *testing.T) {
 
 func TestVerifyRequest_NoStore_NoOptIn_Rejected(t *testing.T) {
 	t.Skip(`fill in with local scaffolding:
-        VerifyRequest(req, registry, VerifyRequestOptions{Nonces: nil, AllowNoReplayCheck: false}).
+        VerifyRequest(ctx, registry, env, sig, algoID, nil, VerifyRequestOptions{AllowNoReplayCheck: false}).
         Expect a NonceStore-required error.`)
 }
 
 func TestVerifyRequest_NoStore_WithOptIn_Accepted(t *testing.T) {
 	t.Skip(`fill in with local scaffolding:
-        VerifyRequest(req, registry, VerifyRequestOptions{Nonces: nil, AllowNoReplayCheck: true}).
+        VerifyRequest(ctx, registry, env, sig, algoID, nil, VerifyRequestOptions{AllowNoReplayCheck: true}).
         Expect success (caller explicitly acknowledged skipping replay check).`)
 }
 

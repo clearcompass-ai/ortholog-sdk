@@ -20,42 +20,47 @@ DESCRIPTION:
 	  - Phase 6 anchors.go (periodic anchor publishing)
 	  - Domain topology/anchor_publisher.go
 
-WAVE 2 CHANGE: Propagate SchemeTag from operator wire format
+BUG-012 FIX — WIRE FORMAT CUTOVER
 
-	Pre-Wave-2 the operator's SigAlgo JSON field was parsed into
-	the raw struct but then silently discarded when constructing
-	WitnessSignature — the head-level CosignedTreeHead.SchemeTag
-	was set upstream by the caller.
+	Previously the parser received only the "signer" string from
+	operator JSON and attempted to derive PubKeyID by hashing that
+	string: sha256([]byte(s.Signer)). The canonical PubKeyID used
+	throughout the SDK — produced by did/resolver.go:181 and every
+	verifier keyMap — is sha256(publicKeyBytes), i.e., the hash of
+	the raw key material. Hash(string) ≠ Hash(bytes), so the parser
+	and verifier disagreed on identity and every HTTP-fetched tree
+	head failed verification silently.
 
-	Post-Wave-2 SchemeTag lives on each WitnessSignature, and
-	parseTreeHeadResponse populates it directly from SigAlgo.
-	This is a single-field addition in the struct literal.
+	The clean-cutover fix:
 
-	If an operator response lacks SigAlgo (absent field, zero
-	value), the resulting WitnessSignature carries SchemeTag=0
-	and will be rejected by the verifier's strict zero-tag check.
-	This is intentional: a Wave-2+ verifier cannot safely dispatch
-	a signature whose scheme is not declared, and operators that
-	produce such responses need to be fixed (not papered over with
-	a defensive default).
+	1. Operator JSON contract now REQUIRES a "pubkey_id" field
+	   carrying the hex-encoded 32-byte canonical ID. The operator
+	   already holds this value (computed at witness-registration
+	   time as sha256(pubkey)); it now serializes it on the wire.
 
-KNOWN PRE-EXISTING TECHNICAL DEBT (not a Wave 2 concern):
+	2. The parser is a dumb deserializer. It copies "pubkey_id"
+	   verbatim into WitnessSignature.PubKeyID. It does NOT derive,
+	   compute, or fabricate identity. Missing or malformed fields
+	   are hard errors.
 
-	The hashString function at the bottom of this file is not a
-	cryptographic hash — it's an XOR-fold that produces frequent
-	collisions and is therefore not suitable as a witness identity
-	derivation. This pre-dates Wave 2 and is not addressed here.
-	Consumers that need correct PubKeyID derivation should either:
-	  - Re-populate WitnessSignature.PubKeyID from the actual
-	    witness registry after fetch, OR
-	  - Not rely on TreeHeadClient's parsed IDs for verification.
-	A follow-up issue should replace this with sha256 of the
-	signer string, but that is out of scope for Wave 2.
+	3. The legacy "signer" field is REMOVED from the wire contract.
+	   A human-readable label in the JSON would invite exactly the
+	   confusion that produced BUG-012 — the temptation to "use
+	   signer instead" of pubkey_id. One identity field, period.
+
+	4. No compatibility path. The SDK fails loud on the old format.
+	   Operators that don't emit pubkey_id get a precise error
+	   message from the parser and know exactly what to fix.
+
+	Epoch-correctness note: PubKeyID is sha256(pubkey_bytes), so
+	a key rotation produces a new PubKeyID. Signatures bind to the
+	exact key material that produced them. The verifier does no
+	historical DID resolution. This aligns with RFC 6962 / SPKI
+	Key Identifier semantics.
 */
 package witness
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -287,55 +292,101 @@ func (tc *TreeHeadClient) updateCache(logDID string, head types.CosignedTreeHead
 // parseTreeHeadResponse parses the JSON response from GET
 // /v1/tree/head.
 //
-// WAVE 2: The SigAlgo field is now propagated to each
-// WitnessSignature's SchemeTag. Pre-Wave-2 this field was parsed
-// into the raw struct but then dropped; the head-level SchemeTag
-// was populated by the caller instead. Post-Wave-2 the per-signature
-// SchemeTag is the source of truth and must be populated here.
+// # BUG-012 FIX — STRICT PARSING, NO DERIVATION
 //
-// Operators that emit tree-head responses with SigAlgo absent or
-// zero will produce WitnessSignature values with SchemeTag=0, which
-// Wave-2+ verifiers reject via their strict zero-tag check. This is
-// intentional — it surfaces malformed operator responses as loud
-// verification failures rather than silent misdispatch.
+// The parser is a pure deserializer. It transcribes JSON into
+// *types.CosignedTreeHead and nothing more. It does NOT derive
+// PubKeyID from any other field. It does NOT default missing
+// fields. It does NOT tolerate malformed input.
+//
+// Required fields (hard error on absence, malformed value, or
+// wrong length):
+//
+//   - root_hash: 32-byte hex (64 chars)
+//   - signatures[i].pubkey_id: 32-byte hex (64 chars) — the
+//     canonical witness identifier, sha256(pubkey_bytes), as
+//     produced by did/resolver.go:181
+//   - signatures[i].sig_algo: non-zero (Wave 2 strict zero-tag)
+//   - signatures[i].signature: hex, decodable
+//
+// The "signer" field from the pre-cutover format is explicitly
+// NOT read. Operators emitting the old format will fail parsing
+// with "missing required pubkey_id field" — a precise, actionable
+// diagnostic.
 func parseTreeHeadResponse(data []byte) (types.CosignedTreeHead, error) {
 	var raw struct {
 		TreeSize uint64 `json:"tree_size"`
 		RootHash string `json:"root_hash"`
 		HashAlgo int    `json:"hash_algo"`
 		Sigs     []struct {
-			Signer  string `json:"signer"`
-			SigAlgo int    `json:"sig_algo"`
-			Sig     string `json:"signature"`
+			PubKeyID string `json:"pubkey_id"`
+			SigAlgo  int    `json:"sig_algo"`
+			Sig      string `json:"signature"`
 		} `json:"signatures"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return types.CosignedTreeHead{}, fmt.Errorf("witness/client: parse response: %w", err)
+		return types.CosignedTreeHead{}, fmt.Errorf("witness/client: decode JSON: %w", err)
+	}
+
+	// root_hash: required, 32 bytes.
+	if raw.RootHash == "" {
+		return types.CosignedTreeHead{}, fmt.Errorf(
+			"witness/client: missing required root_hash field")
+	}
+	rootBytes, err := hex.DecodeString(raw.RootHash)
+	if err != nil {
+		return types.CosignedTreeHead{}, fmt.Errorf(
+			"witness/client: invalid root_hash hex: %w", err)
+	}
+	if len(rootBytes) != 32 {
+		return types.CosignedTreeHead{}, fmt.Errorf(
+			"witness/client: root_hash must be 32 bytes, got %d", len(rootBytes))
 	}
 
 	var head types.CosignedTreeHead
 	head.TreeSize = raw.TreeSize
+	copy(head.RootHash[:], rootBytes)
 
-	rootBytes, err := hex.DecodeString(raw.RootHash)
-	if err == nil && len(rootBytes) == 32 {
-		copy(head.RootHash[:], rootBytes)
-	}
-
-	/// Parse signatures. PubKeyID is derived via SHA-256 over the signer
-	// string, which is the cryptographically sound identity derivation
-	// expected by the verifier. An earlier version of this parser used a
-	// custom XOR-fold helper (hashString); that was removed in Wave 2
-	// because XOR-fold produces frequent collisions and therefore
-	// misidentifies witnesses.
-	for _, s := range raw.Sigs {
-		sigBytes, _ := hex.DecodeString(s.Sig)
-		var pubKeyID [32]byte
-		if s.Signer != "" {
-			pubKeyID = sha256.Sum256([]byte(s.Signer))
+	// signatures: each element must carry pubkey_id, sig_algo, signature.
+	// Empty signature list is permitted — the verifier rejects it
+	// separately. What we guard here is wire-format validity.
+	for i, s := range raw.Sigs {
+		if s.PubKeyID == "" {
+			return types.CosignedTreeHead{}, fmt.Errorf(
+				"witness/client: signature[%d]: missing required pubkey_id field", i)
 		}
+		idBytes, err := hex.DecodeString(s.PubKeyID)
+		if err != nil {
+			return types.CosignedTreeHead{}, fmt.Errorf(
+				"witness/client: signature[%d]: invalid pubkey_id hex: %w", i, err)
+		}
+		if len(idBytes) != 32 {
+			return types.CosignedTreeHead{}, fmt.Errorf(
+				"witness/client: signature[%d]: pubkey_id must be 32 bytes, got %d",
+				i, len(idBytes))
+		}
+		if s.SigAlgo == 0 {
+			return types.CosignedTreeHead{}, fmt.Errorf(
+				"witness/client: signature[%d]: missing or zero sig_algo", i)
+		}
+		// signature hex: required and decodable. Empty string is
+		// rejected — a zero-byte signature is never correct.
+		if s.Sig == "" {
+			return types.CosignedTreeHead{}, fmt.Errorf(
+				"witness/client: signature[%d]: missing signature field", i)
+		}
+		sigBytes, err := hex.DecodeString(s.Sig)
+		if err != nil {
+			return types.CosignedTreeHead{}, fmt.Errorf(
+				"witness/client: signature[%d]: invalid signature hex: %w", i, err)
+		}
+
+		var pubKeyID [32]byte
+		copy(pubKeyID[:], idBytes)
+
 		head.Signatures = append(head.Signatures, types.WitnessSignature{
 			PubKeyID:  pubKeyID,
-			SchemeTag: byte(s.SigAlgo), // Wave 2: propagate from operator response
+			SchemeTag: byte(s.SigAlgo),
 			SigBytes:  sigBytes,
 		})
 	}

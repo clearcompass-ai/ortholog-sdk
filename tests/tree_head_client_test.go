@@ -1,3 +1,28 @@
+/*
+FILE PATH:
+
+	tests/tree_head_client_test.go
+
+DESCRIPTION:
+
+	External black-box integration tests for witness.TreeHeadClient.
+	Exercises public API (FetchLatestTreeHead, FetchFromURL, CachedHead,
+	InvalidateCache, CacheSize) through HTTP test servers.
+
+	BUG-012 CUTOVER UPDATE:
+	  - All mock server responses now emit the post-cutover JSON:
+	    {"pubkey_id": "<hex>", "sig_algo": N, "signature": "<hex>"}
+	  - The pre-cutover "signer" string is no longer produced anywhere
+	    in this file. A signature without pubkey_id is a wire-format
+	    violation under the new contract and the parser rejects it.
+	  - The dedicated wire-contract regression tests (missing pubkey_id,
+	    wrong length, malformed hex) live next to the parser, in
+	    witness/tree_head_client_test.go as white-box tests.
+
+	Unit-level parser tests do not belong in this file. This file
+	exercises the network path, the cache, the fallback ladder, and
+	the static endpoint provider.
+*/
 package tests
 
 import (
@@ -16,9 +41,25 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────
+// Test helpers
+// ─────────────────────────────────────────────────────────────────────
+
+// pubKeyIDHex returns a hex-encoded 32-byte pubkey_id derived by
+// hashing a label. Used only to populate valid-shape fixtures in
+// these integration tests — no verifier lookup is performed here,
+// so the specific bytes don't matter as long as they're 32 bytes.
+func pubKeyIDHex(label string) string {
+	sum := sha256.Sum256([]byte(label))
+	return hex.EncodeToString(sum[:])
+}
+
+// ─────────────────────────────────────────────────────────────────────
 // Mock HTTP servers
 // ─────────────────────────────────────────────────────────────────────
 
+// newMockOperatorServer emits the minimal valid post-cutover response:
+// tree_size + root_hash, no signatures. Used by tests that exercise
+// the network / cache path and don't care about signature content.
 func newMockOperatorServer(treeSize uint64, rootHash [32]byte) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/tree/head" {
@@ -26,7 +67,7 @@ func newMockOperatorServer(treeSize uint64, rootHash [32]byte) *httptest.Server 
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"tree_size": treeSize,
 			"root_hash": hex.EncodeToString(rootHash[:]),
 			"hash_algo": 1,
@@ -40,7 +81,7 @@ func newCountingOperatorServer(treeSize uint64) (*httptest.Server, *atomic.Int64
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"tree_size": treeSize,
 			"root_hash": hex.EncodeToString(rootHash[:]),
 		})
@@ -363,19 +404,25 @@ func TestTreeHeadClient_NoWitnessEndpoints_OperatorOnly(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Tests: Response parsing
+// Tests: Response parsing — post-BUG-012 wire contract
 // ─────────────────────────────────────────────────────────────────────
 
+// TestTreeHeadClient_ParsesSignatures verifies the happy path with
+// the post-cutover wire format. Each signature carries an explicit
+// pubkey_id field (hex-encoded 32-byte canonical witness ID).
+//
+// BUG-012 UPDATE: fixture migrated from {"signer":"..."} to
+// {"pubkey_id":"..."}. The pre-cutover format no longer parses.
 func TestTreeHeadClient_ParsesSignatures(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rootHash := sha256.Sum256([]byte("signed-root"))
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"tree_size": 9000,
 			"root_hash": hex.EncodeToString(rootHash[:]),
 			"hash_algo": 1,
 			"signatures": []map[string]any{
-				{"signer": "witness-1", "sig_algo": 1, "signature": hex.EncodeToString(make([]byte, 64))},
-				{"signer": "witness-2", "sig_algo": 1, "signature": hex.EncodeToString(make([]byte, 64))},
+				{"pubkey_id": pubKeyIDHex("witness-1"), "sig_algo": 1, "signature": hex.EncodeToString(make([]byte, 64))},
+				{"pubkey_id": pubKeyIDHex("witness-2"), "sig_algo": 1, "signature": hex.EncodeToString(make([]byte, 64))},
 			},
 		})
 	}))
@@ -396,11 +443,21 @@ func TestTreeHeadClient_ParsesSignatures(t *testing.T) {
 	if len(head.Signatures[0].SigBytes) != 64 {
 		t.Fatalf("sig[0] len: %d", len(head.Signatures[0].SigBytes))
 	}
+	// Post-BUG-012 invariant: PubKeyID transcribed verbatim from JSON,
+	// NOT derived from any other field.
+	sum := sha256.Sum256([]byte("witness-1"))
+	if head.Signatures[0].PubKeyID != sum {
+		t.Fatalf("pubkey_id not transcribed verbatim for witness-1; "+
+			"got %x, want %x", head.Signatures[0].PubKeyID, sum)
+	}
+	if head.Signatures[0].SchemeTag != 1 {
+		t.Fatalf("scheme tag not propagated; got %d, want 1", head.Signatures[0].SchemeTag)
+	}
 }
 
 func TestTreeHeadClient_ParsesEmptySignatures(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"tree_size": 100,
 			"root_hash": hex.EncodeToString(make([]byte, 32)),
 		})

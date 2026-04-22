@@ -39,15 +39,34 @@ import (
 // 1. VerifyShare / VerifyShareSet (3 tests)
 // ═════════════════════════════════════════════════════════════════════
 
+// makeTestShare constructs a fully-valid V1 share with the required
+// Version / Threshold / SplitID / FieldTag fields populated. Tests
+// that exercise a single invariant should construct via this helper
+// and mutate only the field under test, so unrelated invariants
+// don't trip the validator first.
+func makeTestShare(index, threshold byte) escrow.Share {
+	var splitID [32]byte
+	splitID[0] = 0xAA // any non-zero 32-byte value
+	return escrow.Share{
+		Version:   escrow.VersionV1,
+		Threshold: threshold,
+		Index:     index,
+		Value:     [32]byte{},
+		SplitID:   splitID,
+		FieldTag:  escrow.SchemeGF256Tag,
+	}
+}
+
 func TestVerifyShare_ValidShare(t *testing.T) {
-	share := escrow.Share{FieldTag: 0x01, Index: 1, Value: make([]byte, 32)}
+	share := makeTestShare(1, 2)
 	if err := escrow.VerifyShare(share); err != nil {
 		t.Fatalf("valid share should pass: %v", err)
 	}
 }
 
 func TestVerifyShare_WrongFieldTag(t *testing.T) {
-	share := escrow.Share{FieldTag: 0x02, Index: 1, Value: make([]byte, 32)}
+	share := makeTestShare(1, 2)
+	share.FieldTag = 0x02 // unknown scheme
 	if err := escrow.VerifyShare(share); err == nil {
 		t.Fatal("wrong field tag should be rejected")
 	}
@@ -55,8 +74,8 @@ func TestVerifyShare_WrongFieldTag(t *testing.T) {
 
 func TestVerifyShareSet_DuplicateIndex(t *testing.T) {
 	shares := []escrow.Share{
-		{FieldTag: 0x01, Index: 1, Value: make([]byte, 32)},
-		{FieldTag: 0x01, Index: 1, Value: make([]byte, 32)},
+		makeTestShare(1, 2),
+		makeTestShare(1, 2), // same Index as above — duplicate
 	}
 	if err := escrow.VerifyShareSet(shares); err == nil {
 		t.Fatal("duplicate indices should be rejected")
@@ -799,11 +818,15 @@ func TestRecovery_CollectSharesValidates(t *testing.T) {
 }
 
 func TestRecovery_CollectSharesRejectsBadTag(t *testing.T) {
-	badShare := escrow.Share{FieldTag: 0xFF, Index: 1, Value: make([]byte, 32)}
-	collected, _ := lifecycle.CollectShares(lifecycle.CollectSharesParams{
+	badShare := makeTestShare(1, 2)
+	badShare.FieldTag = 0xFF // unknown scheme — ValidateShareFormat rejects
+	collected, err := lifecycle.CollectShares(lifecycle.CollectSharesParams{
 		DecryptedShares:   []escrow.Share{badShare},
-		RequiredThreshold: 1,
+		RequiredThreshold: 2,
 	})
+	if err != nil {
+		t.Fatalf("CollectShares: %v", err)
+	}
 	if collected.InvalidCount != 1 {
 		t.Fatalf("invalid: %d", collected.InvalidCount)
 	}
@@ -813,32 +836,32 @@ func TestRecovery_CollectSharesRejectsBadTag(t *testing.T) {
 }
 
 func TestRecovery_ExecuteRoundTrip(t *testing.T) {
-	plaintext := []byte("recovery target artifact data!!!")
-	ct, artKey, _ := artifact.EncryptArtifact(plaintext)
-	artCID := storage.Compute(ct)
+	// ExecuteRecovery's load-bearing job is reconstructing the
+	// 32-byte Master Identity Key from M-of-N escrow shares. No
+	// artifact re-encryption happens here — that's a separate
+	// downstream flow. The round-trip invariant is:
+	//   MasterKey → Split → ExecuteRecovery.MasterKey == original
+	var masterKey [32]byte
+	copy(masterKey[:], []byte("deadbeefdeadbeefdeadbeefdeadbeef"))
+	shares, _ := escrow.SplitGF256(masterKey[:], 3, 5)
 
-	contentStore := storage.NewInMemoryContentStore()
-	contentStore.Push(artCID, ct)
-
-	// Shamir-split the key material.
-	keyMaterial := make([]byte, artifact.KeySize+artifact.NonceSize)
-	copy(keyMaterial[:artifact.KeySize], artKey.Key[:])
-	copy(keyMaterial[artifact.KeySize:], artKey.Nonce[:])
-	shares, _ := escrow.SplitGF256(keyMaterial, 3, 5)
-
-	keyStore := lifecycle.NewInMemoryKeyStore()
 	result, err := lifecycle.ExecuteRecovery(lifecycle.ExecuteRecoveryParams{
-		Destination:  testDestinationDID,
-		Shares:       shares[:3],
-		ArtifactCIDs: []storage.CID{artCID},
-		ContentStore: contentStore,
-		KeyStore:     keyStore,
+		Destination: testDestinationDID,
+		Shares:      shares[:3], // threshold-meeting subset
 	})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	if len(result.ReEncryptedArtifacts) != 1 {
-		t.Fatalf("re-encrypted: %d", len(result.ReEncryptedArtifacts))
+	defer result.Zeroize()
+	if result.MasterKey != masterKey {
+		t.Fatalf("MasterKey mismatch: want %x, got %x", masterKey, result.MasterKey)
+	}
+	// No succession requested → no entry, no error.
+	if result.SuccessionEntry != nil {
+		t.Fatalf("unexpected succession entry when NewExchangeDID/TargetRoot unset")
+	}
+	if result.SuccessionError != nil {
+		t.Fatalf("unexpected succession error: %v", result.SuccessionError)
 	}
 }
 

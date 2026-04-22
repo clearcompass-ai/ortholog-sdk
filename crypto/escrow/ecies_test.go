@@ -166,9 +166,11 @@ func TestECIES_ShareRoundTrip(t *testing.T) {
 		t.Fatalf("EncryptShareForNode: %v", err)
 	}
 
-	// Documented: a 131-byte share produces a 224-byte ciphertext.
-	if len(ct) != 224 {
-		t.Fatalf("share ciphertext len = %d, want 224", len(ct))
+	// Documented: a ShareWireLen (132-byte, v7.5) share produces a
+	// 225-byte ciphertext (65 ephemeral pubkey + 12 nonce +
+	// 132 share + 16 GCM tag).
+	if len(ct) != 225 {
+		t.Fatalf("share ciphertext len = %d, want 225", len(ct))
 	}
 
 	recovered, err := DecryptShareFromNode(ct, priv)

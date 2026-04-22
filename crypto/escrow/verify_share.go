@@ -62,8 +62,21 @@ func ValidateShareFormat(s Share) error {
 	if !zeroArray32(s.CommitmentHash) {
 		return fmt.Errorf("%w: CommitmentHash must be zero in V1", ErrV1FieldNotEmpty)
 	}
+	// FieldTag discriminates which scheme produced this share. Zero
+	// is tolerated for legacy shares that predate the field; any
+	// explicit non-zero value MUST equal SchemeGF256Tag (V1 GF(256)).
+	// Unknown non-zero values indicate either a forgery or a share
+	// from a future scheme being fed into V1 code — both rejected.
+	if s.FieldTag != 0 && s.FieldTag != SchemeGF256Tag {
+		return fmt.Errorf("%w: 0x%02x", ErrUnknownFieldTag, s.FieldTag)
+	}
 	return nil
 }
+
+// VerifyShare is a structural alias for ValidateShareFormat retained
+// for callers migrating from the pre-rename public name. See the
+// package-level naming note in the file header.
+func VerifyShare(s Share) error { return ValidateShareFormat(s) }
 
 // VerifyShareSet validates a set of shares for mutual consistency and
 // reconstruction eligibility.

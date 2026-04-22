@@ -51,8 +51,7 @@ EvaluateArbitration handles the case where escrow nodes refuse to
 cooperate or the holder's key is stolen. A schema-declared supermajority
 of escrow-node cosignatures on the recovery request (typically ⌈2N/3⌉)
 plus an optional independent-identity-witness cosignature authorizes
-the override without escrow cooperation. All three BUG-009 validation
-fixes are preserved in this file; see EvaluateArbitration for details.
+the override without escrow cooperation.
 
 # Scheme-agnosticism (V1/V2 escrow)
 
@@ -141,8 +140,7 @@ var (
 
 	// ErrMissingEscrowNodeSet is returned when
 	// OverrideRequiresIndependentWitness=true and EscrowNodeSet is
-	// empty. The independence check (BUG-009 fix 3) requires the set
-	// to be populated; silently skipping it was the pre-fix behavior.
+	// empty. The independence check requires the set to be populated.
 	ErrMissingEscrowNodeSet = fmt.Errorf("lifecycle/recovery: OverrideRequiresIndependentWitness requires EscrowNodeSet")
 
 	// ErrInvalidEscrowNodeCount is returned when TotalEscrowNodes is
@@ -264,25 +262,17 @@ func InitiateRecovery(p InitiateRecoveryParams) (*InitiateRecoveryResult, error)
 
 // CollectSharesParams configures share collection.
 type CollectSharesParams struct {
-	// EscrowPackageCID locates the holder's escrow package. Held for
-	// audit and cross-reference; not required for validation.
+	// EscrowPackageCID identifies the original escrow package whose
+	// shares are being collected. Held for audit and cross-reference;
+	// not required for validation.
 	EscrowPackageCID storage.CID
 
-	// ContentStore provides access to the escrow package if deeper
-	// validation is needed. Not used by this function directly; held
-	// for symmetry with InitiateRecoveryParams.
-	ContentStore storage.ContentStore
-
-	// DecryptedShares are the plaintext shares, already unwrapped from
-	// their per-node ECIES envelopes by the caller (who holds the
-	// node-private-keys). This function does not decrypt.
+	// DecryptedShares are the plaintext Shamir shares previously
+	// recovered from cooperating escrow nodes by the domain layer.
 	DecryptedShares []escrow.Share
 
-	// RequiredThreshold is M — the minimum valid shares needed to
-	// reconstruct. Typically taken from the escrow package metadata.
-	// CollectShares reports SufficientForRecovery against this value
-	// as an early-warning signal; the escrow package also enforces
-	// threshold at Reconstruct time.
+	// RequiredThreshold is the M parameter from the original split.
+	// Validated at function entry (must be >= 2).
 	RequiredThreshold int
 }
 
@@ -324,11 +314,23 @@ type CollectedShares struct {
 // duplicate detection runs at Reconstruct time; early detection here
 // gives a clearer error surface.
 //
-// This function never returns a hard error — invalid shares are
-// surfaced via InvalidReasons. A caller receiving
+// Returns a hard error only when RequiredThreshold is invalid (< 2).
+// All per-share problems surface via InvalidReasons. A caller receiving
 // SufficientForRecovery=false should continue collecting; a caller
 // receiving SufficientForRecovery=true may proceed to ExecuteRecovery.
 func CollectShares(p CollectSharesParams) (*CollectedShares, error) {
+	// Threshold validation. A threshold of 0 would make
+	// SufficientForRecovery vacuously true (len(ValidShares) >= 0 is
+	// always true); a threshold of 1 is degenerate (a single share
+	// trivially reconstructs the secret, defeating M-of-N). Matches
+	// the M >= 2 constraint enforced by escrow.Split.
+	if p.RequiredThreshold < 2 {
+		return nil, fmt.Errorf(
+			"lifecycle/recovery: RequiredThreshold must be >= 2, got %d",
+			p.RequiredThreshold,
+		)
+	}
+
 	result := &CollectedShares{
 		InvalidReasons: make(map[int]string),
 		Threshold:      p.RequiredThreshold,
@@ -576,7 +578,7 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 type ArbitrationParams struct {
 	// RecoveryRequestPos is the log position of the InitiateRecovery
 	// entry. Escrow approvals and the witness cosignature must all
-	// reference this position (BUG-009 binding requirement).
+	// reference this position.
 	RecoveryRequestPos types.LogPosition
 
 	// EscrowApprovals are cosignature entries from escrow nodes
@@ -596,17 +598,16 @@ type ArbitrationParams struct {
 	// EscrowNodeSet is the set of escrow-node DIDs for this holder.
 	// Required when SchemaParams.OverrideRequiresIndependentWitness
 	// is true; EvaluateArbitration returns ErrMissingEscrowNodeSet
-	// if the field is empty in that configuration.
-	//
-	// Used for BUG-009 fix 3: the witness cosigner's DID must NOT
-	// appear in this set.
+	// if the field is empty in that configuration. The witness
+	// cosigner's DID must NOT appear in this set — enforces the
+	// independence requirement.
 	EscrowNodeSet map[string]bool
 
 	// WitnessCosignature is the independent-identity-witness
 	// cosignature, required when
 	// SchemaParams.OverrideRequiresIndependentWitness is true. Must
-	// reference RecoveryRequestPos (BUG-009 fix 2) and must be signed
-	// by a DID outside EscrowNodeSet (fix 3).
+	// reference RecoveryRequestPos and must be signed by a DID
+	// outside EscrowNodeSet.
 	WitnessCosignature *types.EntryWithMetadata
 
 	// SchemaParams provides the override policy. Nil means defaults:
@@ -641,33 +642,33 @@ type ArbitrationResult struct {
 // sufficient approvals and (when required) a valid independent witness
 // cosignature bound to the specific recovery request.
 //
-// # BUG-009 FIXES (preserved)
+// # Validation gates
 //
-// Three distinct validation holes are closed here. An override is
-// authorized only when all three gates pass:
+// An override is authorized only when all applicable gates pass:
 //
-//	Gate 1: Witness-cosignature deserialize errors are fatal. A
-//	        malformed witness does not silently pass as "no witness
-//	        available, fall through" (the pre-fix behavior).
-//	Gate 2: Witness cosignature must reference p.RecoveryRequestPos
-//	        via verifier.IsCosignatureOf. Any other cosignature
-//	        target fails this gate.
-//	Gate 3: Witness signer must not appear in p.EscrowNodeSet. A
-//	        witness that is itself an escrow node violates the
-//	        independence requirement.
+//	Escrow approvals: each cosig must reference RecoveryRequestPos and
+//	                  the count of UNIQUE signers must meet the schema-
+//	                  declared supermajority threshold.
+//	Witness Gate 1:   witness-cosignature deserialize errors are fatal.
+//	                  A malformed witness does not fall through to "no
+//	                  witness available".
+//	Witness Gate 2:   witness cosignature must reference
+//	                  RecoveryRequestPos via verifier.IsCosignatureOf.
+//	Witness Gate 3:   witness signer must not appear in EscrowNodeSet.
+//	                  A witness that is itself an escrow node violates
+//	                  the independence requirement.
 //
 // # Configuration guard
 //
 // When the schema declares OverrideRequiresIndependentWitness=true,
 // EscrowNodeSet must be non-empty. An empty set would silently skip
-// Gate 3; we fail fast with ErrMissingEscrowNodeSet rather than allow
-// silent degradation.
+// the independence check; EvaluateArbitration fails fast with
+// ErrMissingEscrowNodeSet instead.
 //
 // # Loop style
 //
-// The EscrowApprovals loop uses verifier.IsCosignatureOf for
-// SDK-wide consistency. This loop was already binding correctly
-// pre-fix; the style alignment does not change behavior.
+// The EscrowApprovals loop uses verifier.IsCosignatureOf for SDK-wide
+// consistency across every cosignature-binding check.
 func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 	if p.TotalEscrowNodes <= 0 {
 		return nil, fmt.Errorf("%w: got %d", ErrInvalidEscrowNodeCount, p.TotalEscrowNodes)
@@ -723,8 +724,7 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 		return result, nil
 	}
 
-	// Witness-cosignature gate. All three BUG-009 fixes run inside
-	// this block; each establishes an invariant that must hold before
+	// Witness-cosignature gate. Each invariant must hold before
 	// OverrideAuthorized can flip true.
 	if requiresWitness {
 		if p.WitnessCosignature == nil {

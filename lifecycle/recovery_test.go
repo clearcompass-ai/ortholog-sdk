@@ -1,26 +1,83 @@
-// Package lifecycle — recovery_test.go tests the full three-phase identity
-// recovery pipeline plus arbitration evaluation.
+// Package lifecycle — recovery_test.go tests the full three-phase
+// identity recovery pipeline plus arbitration evaluation.
 //
-// This file COMPLEMENTS recovery_bug009_test.go (which covers the
-// three witness-binding fixes in depth) rather than duplicating it.
-// Focus here:
-//   - Phase 1 (InitiateRecovery): destination validation, payload shape
-//   - Phase 2 (CollectShares): share validation, duplicate detection,
-//     threshold sufficiency calculation
-//   - Phase 3 (ExecuteRecovery): reconstruction, MasterKey invariants,
-//     zeroization, optional Succession Entry construction
-//   - RecoveryResult.Zeroize (idempotent, nil-safe)
-//   - EvaluateArbitration: threshold math for non-witness configurations
+// This file ABSORBS the former recovery_bug009_test.go (which tested
+// the three EvaluateArbitration witness-binding fixes). Delete that
+// file after installing this one.
+//
+// Coverage:
+//   - InitiateRecovery: destination validation, payload fields
+//   - CollectShares: threshold validation (BUG-010), share validation,
+//     duplicate detection, sufficiency math
+//   - ExecuteRecovery: reconstruction, MasterKey invariants, Zeroize,
+//     optional Succession Entry, failure paths
+//   - RecoveryResult.Zeroize: idempotent, nil-safe
+//   - EvaluateArbitration: threshold math, three witness-binding
+//     gates, configuration guard, positive control
 package lifecycle
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/sha256"
 	"errors"
 	"testing"
 
+	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
+	"github.com/clearcompass-ai/ortholog-sdk/crypto/signatures"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
+	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
+
+// -------------------------------------------------------------------------------------------------
+// Test helpers (shared across this file)
+// -------------------------------------------------------------------------------------------------
+
+// signTestEntry completes a signed envelope.Entry. Used for building
+// cosignature fixtures for EvaluateArbitration tests.
+func signTestEntry(t *testing.T, entry *envelope.Entry, priv *ecdsa.PrivateKey) {
+	t.Helper()
+	hash := sha256.Sum256(envelope.SigningPayload(entry))
+	sig, err := signatures.SignEntry(hash, priv)
+	if err != nil {
+		t.Fatalf("SignEntry: %v", err)
+	}
+	entry.Signatures = []envelope.Signature{{
+		SignerDID: entry.Header.SignerDID,
+		AlgoID:    envelope.SigAlgoECDSA,
+		Bytes:     sig,
+	}}
+	if err := entry.Validate(); err != nil {
+		t.Fatalf("entry.Validate: %v", err)
+	}
+}
+
+// buildCosigMeta produces a cosignature EntryWithMetadata for tests.
+func buildCosigMeta(t *testing.T, signerDID string, cosigOf *types.LogPosition) types.EntryWithMetadata {
+	t.Helper()
+
+	priv, err := signatures.GenerateKey()
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	unsigned, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
+		SignerDID:     signerDID,
+		Destination:   "did:web:target",
+		CosignatureOf: cosigOf,
+		EventTime:     1_700_000_000,
+	}, []byte("cosig-payload"))
+	if err != nil {
+		t.Fatalf("NewUnsignedEntry: %v", err)
+	}
+
+	signTestEntry(t, unsigned, priv)
+
+	return types.EntryWithMetadata{
+		CanonicalBytes: envelope.Serialize(unsigned),
+	}
+}
 
 // -------------------------------------------------------------------------------------------------
 // InitiateRecovery
@@ -46,7 +103,6 @@ func TestInitiateRecovery_HappyPath(t *testing.T) {
 	if result.RequestPayload == nil {
 		t.Fatal("RequestPayload is nil")
 	}
-	// Verify payload fields documented in the function contract.
 	if result.RequestPayload["recovery_type"] != "escrow_key_recovery" {
 		t.Errorf("recovery_type = %v, want escrow_key_recovery", result.RequestPayload["recovery_type"])
 	}
@@ -89,7 +145,47 @@ func TestInitiateRecovery_RejectsEmptyHolderDID(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------------------------------
-// CollectShares
+// CollectShares — threshold validation (guards vacuous-sufficiency bug)
+// -------------------------------------------------------------------------------------------------
+
+// TestCollectShares_RejectsZeroThreshold guards against the vacuous
+// sufficiency bug. With RequiredThreshold=0, len(ValidShares) >= 0 is
+// always true, so SufficientForRecovery would falsely report "yes" for
+// any share set (including empty). The function must reject this input.
+func TestCollectShares_RejectsZeroThreshold(t *testing.T) {
+	_, err := CollectShares(CollectSharesParams{
+		RequiredThreshold: 0,
+	})
+	if err == nil {
+		t.Fatal("expected error for RequiredThreshold=0, got nil")
+	}
+}
+
+// TestCollectShares_RejectsThresholdOne guards against the degenerate
+// case: a single share trivially reconstructs the secret, defeating
+// M-of-N. Matches the M >= 2 constraint in escrow.Split.
+func TestCollectShares_RejectsThresholdOne(t *testing.T) {
+	_, err := CollectShares(CollectSharesParams{
+		RequiredThreshold: 1,
+	})
+	if err == nil {
+		t.Fatal("expected error for RequiredThreshold=1, got nil")
+	}
+}
+
+// TestCollectShares_RejectsNegativeThreshold guards against integer
+// underflow / caller misuse of the signed int field.
+func TestCollectShares_RejectsNegativeThreshold(t *testing.T) {
+	_, err := CollectShares(CollectSharesParams{
+		RequiredThreshold: -1,
+	})
+	if err == nil {
+		t.Fatal("expected error for RequiredThreshold=-1, got nil")
+	}
+}
+
+// -------------------------------------------------------------------------------------------------
+// CollectShares — happy paths
 // -------------------------------------------------------------------------------------------------
 
 func TestCollectShares_EmptyInputYieldsEmptyResult(t *testing.T) {
@@ -182,7 +278,7 @@ func TestCollectShares_InvalidSharesSurfaceInReasons(t *testing.T) {
 func TestCollectShares_DuplicateIndexRejected(t *testing.T) {
 	secret := make([]byte, escrow.SecretSize)
 	shares, _, _ := escrow.Split(secret, 3, 5)
-	// Force duplicate: copy share[0] into share[2] (keeping index from [0]).
+	// Force duplicate: copy share[0] into share[2].
 	shares[2] = shares[0]
 	result, err := CollectShares(CollectSharesParams{
 		RequiredThreshold: 3,
@@ -191,14 +287,13 @@ func TestCollectShares_DuplicateIndexRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CollectShares: %v", err)
 	}
-	// 4 valid (index 0 as dup counts as 1 invalid).
 	if result.InvalidCount != 1 {
 		t.Errorf("InvalidCount = %d, want 1", result.InvalidCount)
 	}
 }
 
 // -------------------------------------------------------------------------------------------------
-// ExecuteRecovery — happy path
+// ExecuteRecovery — happy paths
 // -------------------------------------------------------------------------------------------------
 
 func TestExecuteRecovery_ReconstructsMasterKey(t *testing.T) {
@@ -224,7 +319,6 @@ func TestExecuteRecovery_ReconstructsMasterKey(t *testing.T) {
 	if !bytes.Equal(result.MasterKey[:], secret) {
 		t.Fatal("MasterKey does not match the original secret")
 	}
-	// No succession requested, so both fields must be nil/zero.
 	if result.SuccessionEntry != nil {
 		t.Error("SuccessionEntry should be nil when not requested")
 	}
@@ -308,13 +402,12 @@ func TestExecuteRecovery_RejectsBelowThreshold(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------------------------------
-// RecoveryResult.Zeroize — idempotent, nil-safe
+// RecoveryResult.Zeroize
 // -------------------------------------------------------------------------------------------------
 
 func TestRecoveryResult_ZeroizeNilReceiver(t *testing.T) {
 	var r *RecoveryResult
-	// Must not panic.
-	r.Zeroize()
+	r.Zeroize() // must not panic
 }
 
 func TestRecoveryResult_ZeroizeIsIdempotent(t *testing.T) {
@@ -340,33 +433,24 @@ func TestRecoveryResult_ZeroizeIsIdempotent(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------------------------------
-// EvaluateArbitration — threshold math (non-witness configurations)
-//
-// recovery_bug009_test.go covers the three witness-binding fixes in
-// depth. These tests cover threshold math at different N values and
-// configurations where no witness is required.
+// EvaluateArbitration — threshold math
 // -------------------------------------------------------------------------------------------------
 
 func TestEvaluateArbitration_RejectsZeroTotalNodes(t *testing.T) {
-	_, err := EvaluateArbitration(ArbitrationParams{
-		TotalEscrowNodes: 0,
-	})
+	_, err := EvaluateArbitration(ArbitrationParams{TotalEscrowNodes: 0})
 	if !errors.Is(err, ErrInvalidEscrowNodeCount) {
 		t.Fatalf("got %v, want ErrInvalidEscrowNodeCount", err)
 	}
 }
 
 func TestEvaluateArbitration_RejectsNegativeTotalNodes(t *testing.T) {
-	_, err := EvaluateArbitration(ArbitrationParams{
-		TotalEscrowNodes: -1,
-	})
+	_, err := EvaluateArbitration(ArbitrationParams{TotalEscrowNodes: -1})
 	if !errors.Is(err, ErrInvalidEscrowNodeCount) {
 		t.Fatalf("got %v, want ErrInvalidEscrowNodeCount", err)
 	}
 }
 
 func TestEvaluateArbitration_ReportsInsufficientWhenBelowThreshold(t *testing.T) {
-	// 0 approvals against 5-node set with default 2/3 threshold → insufficient.
 	result, err := EvaluateArbitration(ArbitrationParams{
 		TotalEscrowNodes: 5,
 		EscrowApprovals:  nil,
@@ -388,15 +472,194 @@ func TestEvaluateArbitration_ReportsInsufficientWhenBelowThreshold(t *testing.T)
 	}
 }
 
-func TestEvaluateArbitration_RejectsMissingEscrowNodeSetWhenWitnessRequired(t *testing.T) {
-	// When OverrideRequiresIndependentWitness=true, EscrowNodeSet MUST
-	// be non-empty. This is the BUG-009 configuration guard.
-	// Note: we'd need an actual SchemaParameters with
-	// OverrideRequiresIndependentWitness=true; if such a test fixture
-	// is exercised elsewhere (recovery_bug009_test.go), this case is
-	// covered there. Here we check the field-shape: empty set rejected.
-	//
-	// Without evidence of the full SchemaParameters shape, we only
-	// exercise the no-witness-required path in this file.
-	t.Skip("covered in recovery_bug009_test.go via real SchemaParameters fixtures")
+// -------------------------------------------------------------------------------------------------
+// EvaluateArbitration — witness-binding gates
+//
+// Each independent gate gets its own test so a regression surfaces
+// precisely. Mutation probes against recovery.go:
+//
+//	Probe 1: Comment out the deserialize-error guard.
+//	         TestEvaluateArbitration_RejectsDeserializeFailure must FAIL.
+//	Probe 2: Replace `!verifier.IsCosignatureOf(...)` with a weaker check.
+//	         TestEvaluateArbitration_RejectsUnboundWitnessCosignature must FAIL.
+//	Probe 3: Comment out the EscrowNodeSet membership check.
+//	         TestEvaluateArbitration_RejectsEscrowNodeAsWitness must FAIL.
+//	Probe 4: Comment out the requiresWitness && empty-set guard.
+//	         TestEvaluateArbitration_RequiresEscrowNodeSet must FAIL.
+//
+// Restore all probes → full suite green.
+// -------------------------------------------------------------------------------------------------
+
+// arbitrationFixture holds common inputs for EvaluateArbitration tests.
+type arbitrationFixture struct {
+	recoveryPos      types.LogPosition
+	totalEscrowNodes int
+	escrowNodeSet    map[string]bool
+	escrowApprovals  []types.EntryWithMetadata
+	schemaParams     *types.SchemaParameters
+}
+
+func newArbitrationFixture(t *testing.T) *arbitrationFixture {
+	t.Helper()
+	recoveryPos := types.LogPosition{LogDID: "did:web:source-log", Sequence: 50}
+
+	escrowSet := map[string]bool{
+		"did:web:escrow-1": true,
+		"did:web:escrow-2": true,
+		"did:web:escrow-3": true,
+	}
+
+	// 3 escrow approvals correctly bound to recoveryPos — meets 2/3 of 3 nodes.
+	approvals := []types.EntryWithMetadata{}
+	for did := range escrowSet {
+		approvals = append(approvals, buildCosigMeta(t, did, &recoveryPos))
+	}
+
+	sp := &types.SchemaParameters{
+		OverrideThreshold:                  types.ThresholdTwoThirdsMajority,
+		OverrideRequiresIndependentWitness: true,
+	}
+
+	return &arbitrationFixture{
+		recoveryPos:      recoveryPos,
+		totalEscrowNodes: 3,
+		escrowNodeSet:    escrowSet,
+		escrowApprovals:  approvals,
+		schemaParams:     sp,
+	}
+}
+
+// Gate 1: malformed witness cosignature bytes block authorization.
+func TestEvaluateArbitration_RejectsDeserializeFailure(t *testing.T) {
+	fx := newArbitrationFixture(t)
+
+	garbageWitness := &types.EntryWithMetadata{
+		CanonicalBytes: []byte("not-a-valid-envelope-entry"),
+	}
+
+	result, err := EvaluateArbitration(ArbitrationParams{
+		RecoveryRequestPos: fx.recoveryPos,
+		EscrowApprovals:    fx.escrowApprovals,
+		TotalEscrowNodes:   fx.totalEscrowNodes,
+		EscrowNodeSet:      fx.escrowNodeSet,
+		WitnessCosignature: garbageWitness,
+		SchemaParams:       fx.schemaParams,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OverrideAuthorized {
+		t.Fatal("OverrideAuthorized = true despite witness deserialize failure. " +
+			"The deserialize-error guard is missing or broken.")
+	}
+}
+
+// Gate 2: witness cosignature must bind to recovery request position.
+func TestEvaluateArbitration_RejectsUnboundWitnessCosignature(t *testing.T) {
+	fx := newArbitrationFixture(t)
+
+	unrelatedPos := types.LogPosition{LogDID: "did:web:source-log", Sequence: 999}
+	witnessMeta := buildCosigMeta(t, "did:web:independent-witness", &unrelatedPos)
+
+	result, err := EvaluateArbitration(ArbitrationParams{
+		RecoveryRequestPos: fx.recoveryPos,
+		EscrowApprovals:    fx.escrowApprovals,
+		TotalEscrowNodes:   fx.totalEscrowNodes,
+		EscrowNodeSet:      fx.escrowNodeSet,
+		WitnessCosignature: &witnessMeta,
+		SchemaParams:       fx.schemaParams,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OverrideAuthorized {
+		t.Fatalf("OverrideAuthorized = true for witness cosignature bound to "+
+			"position %v (expected %v). The IsCosignatureOf binding is "+
+			"missing or broken.", unrelatedPos, fx.recoveryPos)
+	}
+}
+
+// Gate 3: witness must be independent of escrow (most consequential).
+// Without this check, a compromised escrow operator could sign their
+// own "witness attestation" and satisfy the independence requirement
+// unilaterally.
+func TestEvaluateArbitration_RejectsEscrowNodeAsWitness(t *testing.T) {
+	fx := newArbitrationFixture(t)
+
+	// Witness correctly bound, but signed by an escrow node.
+	witnessMeta := buildCosigMeta(t, "did:web:escrow-1", &fx.recoveryPos)
+
+	result, err := EvaluateArbitration(ArbitrationParams{
+		RecoveryRequestPos: fx.recoveryPos,
+		EscrowApprovals:    fx.escrowApprovals,
+		TotalEscrowNodes:   fx.totalEscrowNodes,
+		EscrowNodeSet:      fx.escrowNodeSet,
+		WitnessCosignature: &witnessMeta,
+		SchemaParams:       fx.schemaParams,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.OverrideAuthorized {
+		t.Fatal("OverrideAuthorized = true for witness cosignature signed by " +
+			"an escrow node. The independence check is missing or broken.")
+	}
+}
+
+// Configuration guard: EscrowNodeSet required when witness required.
+// Silently skipping the independence check in this configuration
+// would turn gate 3 into a no-op.
+func TestEvaluateArbitration_RequiresEscrowNodeSet(t *testing.T) {
+	fx := newArbitrationFixture(t)
+
+	witnessMeta := buildCosigMeta(t, "did:web:independent-witness", &fx.recoveryPos)
+
+	_, err := EvaluateArbitration(ArbitrationParams{
+		RecoveryRequestPos: fx.recoveryPos,
+		EscrowApprovals:    fx.escrowApprovals,
+		TotalEscrowNodes:   fx.totalEscrowNodes,
+		EscrowNodeSet:      nil, // deliberate
+		WitnessCosignature: &witnessMeta,
+		SchemaParams:       fx.schemaParams,
+	})
+
+	if err == nil {
+		t.Fatal("expected error when EscrowNodeSet is nil but " +
+			"OverrideRequiresIndependentWitness is true. Silent skip would " +
+			"disable the independence check.")
+	}
+	if !errors.Is(err, ErrMissingEscrowNodeSet) {
+		t.Errorf("expected ErrMissingEscrowNodeSet, got: %v", err)
+	}
+}
+
+// Positive control: all gates pass.
+func TestEvaluateArbitration_AcceptsValidIndependentBoundCosignature(t *testing.T) {
+	fx := newArbitrationFixture(t)
+
+	witnessMeta := buildCosigMeta(t, "did:web:independent-witness", &fx.recoveryPos)
+
+	result, err := EvaluateArbitration(ArbitrationParams{
+		RecoveryRequestPos: fx.recoveryPos,
+		EscrowApprovals:    fx.escrowApprovals,
+		TotalEscrowNodes:   fx.totalEscrowNodes,
+		EscrowNodeSet:      fx.escrowNodeSet,
+		WitnessCosignature: &witnessMeta,
+		SchemaParams:       fx.schemaParams,
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error on valid fixture: %v", err)
+	}
+	if !result.OverrideAuthorized {
+		t.Fatalf("positive control failed: OverrideAuthorized = false "+
+			"for a valid independent bound witness. Reason: %q",
+			result.Reason)
+	}
+	if !result.HasWitnessCosig {
+		t.Error("HasWitnessCosig = false despite valid witness")
+	}
 }

@@ -40,11 +40,32 @@ TRUST BOUNDARY (AuthorizedRecipients in sealed mode):
 	The SDK enforces membership. The domain application is responsible for
 	correctness. Same pattern as CosignaturePositions in EvaluateConditions
 	and CandidatePositions in AssemblePathB.
+
+# Interface segregation
+
+Every external interface this file consumes is declared locally as a
+narrow interface containing only the methods lifecycle/ calls. External
+implementations satisfy these via Go's structural typing — producers
+don't import lifecycle/, and consumers don't depend on producer
+surfaces they don't use. When a producer package grows methods,
+lifecycle/ and its tests are unaffected.
+
+Narrow interfaces declared in this file:
+
+	artifactContentStore — Fetch/Push/Delete subset of storage.ContentStore
+	retrievalResolver    — Resolve subset of storage.RetrievalProvider
+	entryFetcher         — Fetch subset of builder.EntryFetcher
+	leafReader           — Get subset of smt.LeafReader
+
+Compile-time drift detection lives in artifact_access_test.go: every
+narrow interface has a `var _ narrow = (producer)(nil)` assertion that
+fails at build time if the producer removes or re-signs a method.
 */
 package lifecycle
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -57,6 +78,70 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
 )
+
+// ═════════════════════════════════════════════════════════════════════
+// Sentinel errors
+// ═════════════════════════════════════════════════════════════════════
+
+var (
+	// ErrOldCiphertextEraseFailed is returned by ReEncryptWithGrant
+	// when re-encryption succeeded but deleting the old ciphertext
+	// (requested via DeleteOldCiphertext=true) failed. The new
+	// ciphertext has been rolled back (best effort) to restore the
+	// pre-call state. Callers should retry or escalate to operations
+	// — the rotation is a no-op from the caller's perspective.
+	ErrOldCiphertextEraseFailed = errors.New(
+		"lifecycle/artifact: failed to erase old ciphertext",
+	)
+
+	// ErrCryptographicErasureFailed is returned by ReEncryptWithGrant
+	// when re-encryption succeeded but deleting the old key failed.
+	// This is the most severe failure mode — the old key remains
+	// reachable in the key store and any holder of the old ciphertext
+	// could still decrypt. The new ciphertext has been rolled back
+	// (best effort). Callers MUST either retry until the old key is
+	// deleted or treat the rotation as having not happened.
+	ErrCryptographicErasureFailed = errors.New(
+		"lifecycle/artifact: cryptographic erasure failed (old key still present)",
+	)
+)
+
+// ═════════════════════════════════════════════════════════════════════
+// Consumed interfaces (narrow subsets of external producers)
+// ═════════════════════════════════════════════════════════════════════
+
+// artifactContentStore is the blob-store surface lifecycle/ consumes
+// from storage.ContentStore. Satisfied by *storage.InMemoryContentStore,
+// *storage.HTTPContentStore, and any future ContentStore implementation
+// — they all have Fetch/Push/Delete whether or not they also have
+// Pin/Exists/etc.
+type artifactContentStore interface {
+	Fetch(cid storage.CID) ([]byte, error)
+	Push(cid storage.CID, data []byte) error
+	Delete(cid storage.CID) error
+}
+
+// retrievalResolver is the credential-resolution surface lifecycle/
+// consumes from storage.RetrievalProvider. A single method — narrow by
+// construction but declared locally for symmetry with the other three
+// and for compile-time drift detection.
+type retrievalResolver interface {
+	Resolve(artifactCID storage.CID, expiry time.Duration) (*storage.RetrievalCredential, error)
+}
+
+// entryFetcher is the entry-by-position surface lifecycle/ consumes
+// from builder.EntryFetcher. Used to dereference scope-entity pointers
+// during grant authorization.
+type entryFetcher interface {
+	Fetch(pos types.LogPosition) (*types.EntryWithMetadata, error)
+}
+
+// leafReader is the SMT-leaf-by-key surface lifecycle/ consumes from
+// smt.LeafReader. Used to look up the current OriginTip of a scope
+// entity before fetching its backing entry.
+type leafReader interface {
+	Get(key [32]byte) (*types.SMTLeaf, error)
+}
 
 // ═════════════════════════════════════════════════════════════════════
 // ArtifactKeyStore
@@ -140,10 +225,14 @@ type GrantAuthCheckParams struct {
 	AuthorizedRecipients []string
 
 	// Fetcher retrieves entries by position (scope entry lookup).
-	Fetcher builder.EntryFetcher
+	// builder.EntryFetcher satisfies this interface via structural
+	// typing; test mocks implement only Fetch.
+	Fetcher entryFetcher
 
 	// LeafReader reads SMT leaves (scope OriginTip lookup).
-	LeafReader smt.LeafReader
+	// smt.LeafReader satisfies this interface via structural typing;
+	// test mocks implement only Get.
+	LeafReader leafReader
 }
 
 // GrantAuthCheckResult holds the authorization outcome.
@@ -257,23 +346,30 @@ type GrantArtifactAccessParams struct {
 	// envelope.ValidateDestination.
 	Destination string
 
-	ArtifactCID       storage.CID
-	ContentDigest     storage.CID               // CID of plaintext, for audit entries.
-	RecipientPubKey   []byte                    // 65-byte uncompressed secp256k1 public key.
-	KeyStore          ArtifactKeyStore          // AES-GCM key material.
-	RetrievalProvider storage.RetrievalProvider // Resolves retrieval credentials.
-	SchemaParams      *types.SchemaParameters   // Caller provides directly.
+	ArtifactCID     storage.CID
+	ContentDigest   storage.CID      // CID of plaintext, for audit entries.
+	RecipientPubKey []byte           // 65-byte uncompressed secp256k1 public key.
+	KeyStore        ArtifactKeyStore // AES-GCM key material.
+
+	// RetrievalProvider resolves retrieval credentials. Any
+	// storage.RetrievalProvider implementation satisfies this interface
+	// via structural typing.
+	RetrievalProvider retrievalResolver
+
+	SchemaParams *types.SchemaParameters // Caller provides directly.
 
 	// Audit entry fields.
 	GranterDID   string
 	RecipientDID string
 
 	// Grant authorization (Phase 6). Required when
-	// SchemaParams.GrantAuthorizationMode != GrantAuthOpen.
+	// SchemaParams.GrantAuthorizationMode != GrantAuthOpen. Any
+	// builder.EntryFetcher / smt.LeafReader satisfies these interfaces
+	// via structural typing.
 	ScopePointer         *types.LogPosition
 	AuthorizedRecipients []string
-	Fetcher              builder.EntryFetcher
-	LeafReader           smt.LeafReader
+	Fetcher              entryFetcher
+	LeafReader           leafReader
 
 	// PRE-specific fields. Nil/zero for AES-GCM mode.
 	Capsule        *artifact.Capsule
@@ -531,9 +627,15 @@ func VerifyAndDecryptArtifact(params VerifyAndDecryptArtifactParams) ([]byte, er
 
 // ReEncryptWithGrantParams configures artifact re-encryption.
 type ReEncryptWithGrantParams struct {
-	OldCID              storage.CID
-	KeyStore            ArtifactKeyStore
-	ContentStore        storage.ContentStore
+	OldCID   storage.CID
+	KeyStore ArtifactKeyStore
+
+	// ContentStore provides the blob-level operations this function
+	// needs: Fetch the old ciphertext, Push the new ciphertext, Delete
+	// the old one. Every storage.ContentStore implementation satisfies
+	// this interface via structural typing.
+	ContentStore artifactContentStore
+
 	DeleteOldCiphertext bool
 }
 
@@ -554,6 +656,22 @@ type ReEncryptWithGrantResult struct {
 // does NOT call this function — it has no awareness of artifacts,
 // content stores, or artifact key stores. The architectural boundary
 // is: SDK recovers identity; domain orchestrates artifacts.
+//
+// # Erasure semantics
+//
+// The old-key delete is CRYPTOGRAPHIC ERASURE — a security-critical
+// operation, not best-effort cleanup. If the key delete fails, the
+// old key remains reachable in the key store; any holder of the old
+// ciphertext can still decrypt; the access-revocation invariant is
+// violated. ReEncryptWithGrant surfaces erasure failures as
+// ErrCryptographicErasureFailed. When configured with
+// DeleteOldCiphertext=true, an old-ciphertext delete failure surfaces
+// as ErrOldCiphertextEraseFailed.
+//
+// On either erasure failure, ReEncryptWithGrant best-effort deletes
+// the NEW ciphertext it just pushed, restoring the pre-call state
+// from the caller's perspective. A rollback failure is wrapped into
+// the returned error so operators can reconcile manually.
 func ReEncryptWithGrant(params ReEncryptWithGrantParams) (*ReEncryptWithGrantResult, error) {
 	oldKey, err := params.KeyStore.Get(params.OldCID)
 	if err != nil || oldKey == nil {
@@ -575,12 +693,33 @@ func ReEncryptWithGrant(params ReEncryptWithGrantParams) (*ReEncryptWithGrantRes
 		return nil, fmt.Errorf("lifecycle/artifact: push: %w", err)
 	}
 
+	// Erase old ciphertext if requested. On failure, best-effort
+	// roll back the new ciphertext so the store is restored to its
+	// pre-call state before the caller observes the error.
 	if params.DeleteOldCiphertext {
-		_ = params.ContentStore.Delete(params.OldCID)
+		if delErr := params.ContentStore.Delete(params.OldCID); delErr != nil {
+			if rbErr := params.ContentStore.Delete(newCID); rbErr != nil {
+				return nil, fmt.Errorf(
+					"%w: %v (rollback of new ciphertext also failed: %v)",
+					ErrOldCiphertextEraseFailed, delErr, rbErr,
+				)
+			}
+			return nil, fmt.Errorf("%w: %v", ErrOldCiphertextEraseFailed, delErr)
+		}
 	}
 
-	// Cryptographic erasure: old key no longer valid.
-	_ = params.KeyStore.Delete(params.OldCID)
+	// Cryptographic erasure: old key no longer valid. On failure,
+	// best-effort roll back the new ciphertext — from the caller's
+	// perspective the rotation is a no-op.
+	if delErr := params.KeyStore.Delete(params.OldCID); delErr != nil {
+		if rbErr := params.ContentStore.Delete(newCID); rbErr != nil {
+			return nil, fmt.Errorf(
+				"%w: %v (rollback of new ciphertext also failed: %v)",
+				ErrCryptographicErasureFailed, delErr, rbErr,
+			)
+		}
+		return nil, fmt.Errorf("%w: %v", ErrCryptographicErasureFailed, delErr)
+	}
 
 	return &ReEncryptWithGrantResult{NewCID: newCID, NewKey: newKey}, nil
 }

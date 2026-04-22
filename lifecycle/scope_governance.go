@@ -3,20 +3,23 @@ Package lifecycle — scope_governance.go implements the three-phase scope
 amendment lifecycle from the governance design document.
 
 Three phases:
-  Phase 1 — Proposal: any scope authority publishes a commentary entry
-  Phase 2 — Approvals: authorities publish cosignature entries
-  Phase 3 — Execution: once unanimity (or N-1 for removal) is met,
-    any authority publishes the execution entry
+
+	Phase 1 — Proposal: any scope authority publishes a commentary entry
+	Phase 2 — Approvals: authorities publish cosignature entries
+	Phase 3 — Execution: once unanimity (or N-1 for removal) is met,
+	  any authority publishes the execution entry
 
 Scope operations:
-  ProposeAmendment → CollectApprovals → ExecuteAmendment
-  ProposeRemoval   → CollectApprovals → ExecuteRemoval (with time-lock)
+
+	ProposeAmendment → CollectApprovals → ExecuteAmendment
+	ProposeRemoval   → CollectApprovals → ExecuteRemoval (with time-lock)
 
 The time-lock mechanism:
-  Default 90 days for N-1 scope removal.
-  Reduced to 7 days with objective triggers (proven equivocation,
-  missed SLA attestations, builder-rejected unauthorized actions,
-  escrow node fire drill non-response within SLA window).
+
+	Default 90 days for N-1 scope removal.
+	Reduced to 7 days with objective triggers (proven equivocation,
+	missed SLA attestations, builder-rejected unauthorized actions,
+	escrow node fire drill non-response within SLA window).
 
 Destination binding: every public *Params struct that produces an entry
 carries a Destination field (DID of the target exchange). Lifecycle
@@ -71,7 +74,7 @@ const (
 )
 
 // ─────────────────────────────────────────────────────────────────────
-// ProposalType — typed enum (Wave 2)
+// ProposalType — typed enum
 // ─────────────────────────────────────────────────────────────────────
 //
 // ProposalType classifies a scope amendment proposal for the SDK's
@@ -80,10 +83,7 @@ const (
 // in the judicial network) are encoded in the Domain Payload and do not
 // change SDK routing.
 //
-// Before Wave 2, ProposalType was a free-form string with a documented
-// set of allowed values and a branch (`!= "remove_authority"`) that
-// silently routed typos and domain-specific strings to unanimity. The
-// typed enum makes the routing exhaustive: every value is a declared
+// The typed enum makes routing exhaustive: every value is a declared
 // constant, and domain-specific types route explicitly via
 // ProposalDomainExtension.
 //
@@ -235,7 +235,7 @@ func ProposeAmendment(p AmendmentProposalParams) (*AmendmentProposal, error) {
 	// Only ProposalRemoveAuthority uses the N-1 rule. Everything else —
 	// add, change_parameters, domain_extension, and any unrecognized
 	// future constant — requires unanimity. The conservative default
-	// matches the pre-Wave-2 branch `!= "remove_authority"` exactly.
+	// routes unknown types to the stricter rule.
 	requiresUnanimity := p.ProposalType != ProposalRemoveAuthority
 
 	return &AmendmentProposal{
@@ -263,21 +263,31 @@ type ApprovalStatus struct {
 	// TotalAuthorities is the size of the current Authority_Set.
 	TotalAuthorities int
 
-	// ApprovalCount is the number of unique valid cosignatures.
+	// ApprovalCount is the number of approvals counted toward
+	// sufficiency. For removal this INCLUDES the proposer's implicit
+	// approval; for unanimity it does NOT (the proposer's implicit
+	// approval is already accounted for in the N-1 math on both sides).
 	ApprovalCount int
 
-	// ApproverDIDs lists the DIDs that have approved.
+	// ApproverDIDs lists the DIDs credited in ApprovalCount (including
+	// the proposer for removal, excluding the proposer for unanimity).
 	ApproverDIDs []string
 
 	// RequiredCount is the number of approvals needed:
-	// Unanimity (all) for amendments, N-1 for removals.
+	//   Unanimity: N-1 non-proposer cosignatures.
+	//   Removal:   N-1 non-target approvals (proposer's implicit
+	//              approval counts; target cannot approve own removal).
 	RequiredCount int
 
 	// Sufficient is true when ApprovalCount >= RequiredCount.
 	Sufficient bool
 
-	// ApprovalPositions are the log positions of the cosignature entries.
-	// Used as Approval_Pointers in the execution entry.
+	// ApprovalPositions are the log positions of the approvals counted
+	// in ApprovalCount, in credit order. For removal, the proposer's
+	// implicit approval is recorded as ProposalPos (the proposal itself
+	// stands as the approval vehicle); subsequent positions are the
+	// explicit cosignature entries. Used as Approval_Pointers in the
+	// execution entry.
 	ApprovalPositions []types.LogPosition
 }
 
@@ -296,20 +306,52 @@ type CollectApprovalsParams struct {
 	// RequiresUnanimity is true for add/change, false for removal.
 	RequiresUnanimity bool
 
-	// ProposerDID is excluded from the required approvers
-	// (the proposer's intent is implicit in the proposal).
+	// ProposerDID is the authority that published the proposal.
+	//
+	// For UNANIMITY proposals, the proposer's intent is implicit in
+	// the proposal itself and does NOT count in ApprovalCount — the
+	// N-1 math already excludes the proposer from both sides
+	// (RequiredCount = N-1 non-proposer cosigs; ApprovalCount counts
+	// only non-proposer cosigs).
+	//
+	// For REMOVAL proposals, the proposer's approval IS counted in
+	// ApprovalCount (via the implicit-approval credit at function
+	// entry), because RequiredCount = N-1 for removal means "all
+	// authorities except target" which includes the proposer.
 	ProposerDID string
+
+	// TargetDID is the authority being removed. REQUIRED when
+	// RequiresUnanimity is false (removal proposals). Must not equal
+	// ProposerDID — an authority cannot propose their own removal.
+	// Ignored for unanimity proposals.
+	TargetDID string
 }
 
 // CollectApprovals queries for cosignature entries and determines
 // whether the approval threshold is met.
 //
 // The caller provides the current Authority_Set. For unanimity, every
-// authority except the proposer must cosign. For N-1 removal, all
-// authorities except the target must cosign.
+// authority except the proposer must cosign. For N-1 removal, every
+// authority except the TARGET must approve — the proposer's implicit
+// approval is credited, and explicit cosignatures are counted from all
+// other non-target non-proposer authorities. The target cannot approve
+// their own removal; any cosignature they produce is ignored.
+//
+// Returns an error when RequiresUnanimity=false and TargetDID is empty
+// or equal to ProposerDID (self-removal attempt).
 func CollectApprovals(p CollectApprovalsParams) (*ApprovalStatus, error) {
 	if p.Querier == nil {
 		return nil, fmt.Errorf("lifecycle/scope: nil cosignature querier")
+	}
+
+	// Removal-specific validation.
+	if !p.RequiresUnanimity {
+		if p.TargetDID == "" {
+			return nil, fmt.Errorf("lifecycle/scope: removal requires TargetDID")
+		}
+		if p.TargetDID == p.ProposerDID {
+			return nil, fmt.Errorf("lifecycle/scope: proposer cannot be removal target")
+		}
 	}
 
 	cosigs, err := p.Querier.QueryByCosignatureOf(p.ProposalPos)
@@ -323,25 +365,43 @@ func CollectApprovals(p CollectApprovalsParams) (*ApprovalStatus, error) {
 		TotalAuthorities: totalAuth,
 	}
 
-	// Count required approvals.
-	if p.RequiresUnanimity {
-		// All authorities must approve (proposer's intent is implicit).
-		status.RequiredCount = totalAuth - 1 // Exclude proposer.
-	} else {
-		// N-1 for removal: all except the target.
-		status.RequiredCount = totalAuth - 1
-	}
+	// RequiredCount is N-1 in both branches, but the semantics differ:
+	//   Unanimity: N-1 non-proposer cosigs needed (proposer implicit
+	//              in the proposal, not counted in ApprovalCount).
+	//   Removal:   N-1 non-target approvals needed (proposer's implicit
+	//              approval IS counted in ApprovalCount).
+	status.RequiredCount = totalAuth - 1
 	if status.RequiredCount < 1 {
 		status.RequiredCount = 1
 	}
 
-	// Count valid approvals.
+	// Seed `seen` with the DID whose cosig must not count:
+	//   Unanimity: proposer (cosigning own proposal is redundant; the
+	//              proposer's intent is already implicit in the proposal).
+	//   Removal:   target (cannot approve own removal).
 	seen := make(map[string]bool)
-	// Proposer's intent counts as implicit approval.
-	if p.ProposerDID != "" {
-		seen[p.ProposerDID] = true
+	excluded := p.ProposerDID
+	if !p.RequiresUnanimity {
+		excluded = p.TargetDID
+	}
+	if excluded != "" {
+		seen[excluded] = true
 	}
 
+	// Removal-only: credit the proposer's implicit approval up front.
+	// Its ApprovalPosition is the proposal itself — execution entries'
+	// Approval_Pointers reference the proposal as the proposer's
+	// approval vehicle.
+	if !p.RequiresUnanimity && p.ProposerDID != "" {
+		if _, inSet := p.CurrentAuthoritySet[p.ProposerDID]; inSet {
+			status.ApprovalCount = 1
+			status.ApproverDIDs = append(status.ApproverDIDs, p.ProposerDID)
+			status.ApprovalPositions = append(status.ApprovalPositions, p.ProposalPos)
+			seen[p.ProposerDID] = true // prevent double-count if proposer also cosigns
+		}
+	}
+
+	// Count explicit cosigs from the cosignature query results.
 	for _, meta := range cosigs {
 		entry, desErr := envelope.Deserialize(meta.CanonicalBytes)
 		if desErr != nil {
@@ -354,7 +414,8 @@ func CollectApprovals(p CollectApprovalsParams) (*ApprovalStatus, error) {
 			continue
 		}
 
-		// Skip duplicates.
+		// Skip excluded DID (proposer for unanimity, target for
+		// removal) and any duplicate cosigner.
 		if seen[signerDID] {
 			continue
 		}
@@ -503,9 +564,9 @@ type RemovalExecution struct {
 // The removal entry is published immediately but enters a pending state.
 // The activation entry cannot be published before TimeLock elapses.
 // During the time-lock window, the targeted authority:
-//  - Remains in the active Authority_Set
-//  - Can sign Path C actions
-//  - Can publish contest entries
+//   - Remains in the active Authority_Set
+//   - Can sign Path C actions
+//   - Can publish contest entries
 func ExecuteRemoval(p RemovalParams) (*RemovalExecution, error) {
 	if err := envelope.ValidateDestination(p.Destination); err != nil {
 		return nil, fmt.Errorf("lifecycle/scope: %w", err)
@@ -640,10 +701,9 @@ func ActivateRemoval(p ActivateRemovalParams) (*envelope.Entry, error) {
 // BuildApprovalCosignature creates a cosignature entry for a proposal.
 // Convenience wrapper around builder.BuildCosignature.
 //
-// SIGNATURE CHANGE: now takes destination as a required argument (second
-// parameter). Every caller must supply the destination DID of the target
-// exchange. The destination is validated via envelope.ValidateDestination
-// and threaded into builder.CosignatureParams.
+// Every caller must supply the destination DID of the target exchange.
+// The destination is validated via envelope.ValidateDestination and
+// threaded into builder.CosignatureParams.
 func BuildApprovalCosignature(
 	signerDID string,
 	destination string,

@@ -1,15 +1,31 @@
 /*
 Package verifier — fraud_proofs.go replays entries from a derivation
-commitment against a prior SMT snapshot and detects divergences.
+commitment against a caller-supplied prior SMT snapshot and detects
+divergences in either the per-leaf mutations or the post-replay root.
 
-Takes a DerivationCommitment (range of entries + claimed pre/post SMT
-roots + claimed leaf mutations), constructs a fresh smt.Tree initialized
-with the prior leaf states, replays entries via builder.ProcessBatch,
-and compares each resulting LeafMutation against the commitment's
-claimed mutations.
+ARCHITECTURE — BUG-017
+──────────────────────
+Earlier revisions of this file seeded the verifier's tree only from the
+mutations carried by the commitment. That is correct exclusively for a
+genesis commitment (sequence 0+); for any commitment whose log range
+starts after genesis, the prior tree contains leaves outside the batch
+and the seeded-tree root necessarily diverges from the commitment's
+PriorSMTRoot, falsely flagging honest operators as fraudulent.
 
-Any divergence produces an O(1) fraud proof per incorrect mutation —
-just the leaf key, the expected mutation, and the actual mutation.
+The fix is structural: the caller supplies the prior tree state as an
+smt.LeafStore. The verifier wraps it in an OverlayLeafStore so that
+replay writes are buffered ephemerally and never pollute the caller's
+persistent state, then compares per-leaf mutations and computes the
+post-root incrementally via tree.ComputeDirtyRoot — O(M log N) once
+the cache is warm, no full-tree iteration per batch.
+
+CALLER CONTRACT
+───────────────
+priorState MUST correspond to commitment.PriorSMTRoot. The verifier
+does not separately validate this. If the caller supplies a store that
+does not match PriorSMTRoot, the post-root comparison will surface the
+discrepancy as a FraudProofResult{Valid: false} just like genuine
+fraud — there is no separate error path, by design.
 
 Depends only on Phase 1 ProcessBatch — no Phase 5 dependencies.
 
@@ -63,18 +79,32 @@ type FraudProofResult struct {
 // ─────────────────────────────────────────────────────────────────────
 
 // VerifyDerivationCommitment replays entries from a derivation commitment
-// and compares the result against the claimed mutations and post-root.
+// against a caller-supplied prior SMT snapshot and reports per-leaf fraud
+// proofs and/or a root-level mismatch.
+//
+// priorState is the leaf store representing the SMT at commitment.PriorSMTRoot.
+// The verifier wraps it in an OverlayLeafStore so replay writes are
+// buffered ephemerally — priorState is never mutated, regardless of
+// outcome. Callers are responsible for ensuring priorState matches
+// PriorSMTRoot; mismatches surface as a post-root divergence (Valid: false
+// with no per-leaf proofs).
 //
 // Algorithm:
-//  1. Build fresh smt.Tree with InMemoryLeafStore + InMemoryNodeCache
-//  2. Seed prior state: for each mutation, set leaf to old tips
-//  3. Fetch entries in [LogRangeStart.Sequence, LogRangeEnd.Sequence]
-//  4. Deserialize entries, call builder.ProcessBatch
-//  5. Compare result mutations against commitment mutations
-//  6. Check PostSMTRoot match
-//  7. Any divergence → FraudProof
+//  1. Wrap priorState in OverlayLeafStore + a fresh OverlayNodeCache
+//  2. Compute the prior root via tree.Root() — warms the node cache for
+//     the subsequent dirty-root computation
+//  3. Fetch entries in [LogRangeStart, LogRangeEnd] via the EntryFetcher
+//  4. Replay entries via builder.ProcessBatch (writes buffer in overlay)
+//  5. Per-leaf comparison: replayed mutations vs commitment.Mutations
+//  6. Compute post-root via tree.ComputeDirtyRoot using the warm cache
+//     and compare to commitment.PostSMTRoot
+//  7. Any divergence → FraudProofResult{Valid: false}
+//
+// Cost: O(M log N) per batch once the cache is warm, where M is the
+// mutation count and N is the leaf count.
 func VerifyDerivationCommitment(
 	commitment types.SMTDerivationCommitment,
+	priorState smt.LeafStore,
 	fetcher EntryFetcher,
 	schemaRes builder.SchemaResolver,
 	logDID string,
@@ -83,34 +113,20 @@ func VerifyDerivationCommitment(
 	if commitment.MutationCount == 0 && len(commitment.Mutations) == 0 {
 		return &FraudProofResult{Valid: true}, nil
 	}
-
-	// 1. Build fresh tree.
-	leafStore := smt.NewInMemoryLeafStore()
-	nodeCache := smt.NewInMemoryNodeCache()
-	tree := smt.NewTree(leafStore, nodeCache)
-
-	// 2. Seed prior state from commitment mutations.
-	for _, mut := range commitment.Mutations {
-		// Skip new leaves (no prior state).
-		if mut.OldOriginTip.IsNull() && mut.OldAuthorityTip.IsNull() {
-			continue
-		}
-		oldLeaf := types.SMTLeaf{
-			Key:          mut.LeafKey,
-			OriginTip:    mut.OldOriginTip,
-			AuthorityTip: mut.OldAuthorityTip,
-		}
-		if err := leafStore.Set(mut.LeafKey, oldLeaf); err != nil {
-			return nil, fmt.Errorf("verifier/fraud: seed leaf %x: %w", mut.LeafKey[:8], err)
-		}
+	if priorState == nil {
+		return nil, fmt.Errorf("verifier/fraud: priorState is required (use smt.NewInMemoryLeafStore for an empty prior)")
 	}
 
-	// 2b. Verify PriorSMTRoot matches the seeded tree state.
-	// If the commitment claims a different prior root than what the seeded
-	// tree produces, the commitment is fraudulent.
-	seededRoot, _ := tree.Root()
-	if seededRoot != commitment.PriorSMTRoot {
-		return &FraudProofResult{Valid: false}, nil
+	// 1. Wrap caller's prior state. Writes go to the overlay only.
+	leafOverlay := smt.NewOverlayLeafStore(priorState)
+	cacheOverlay := smt.NewOverlayNodeCache(smt.NewInMemoryNodeCache())
+	tree := smt.NewTree(leafOverlay, cacheOverlay)
+
+	// 2. Compute prior root over the supplied state. Side effect: warms
+	// the node cache so the post-replay ComputeDirtyRoot can run in
+	// O(M log N) without descending into clean subtrees.
+	if _, err := tree.Root(); err != nil {
+		return nil, fmt.Errorf("verifier/fraud: warm prior root: %w", err)
 	}
 
 	// 3. Fetch entries in range.
@@ -136,7 +152,7 @@ func VerifyDerivationCommitment(
 		positions = append(positions, pos)
 	}
 
-	// 4. Replay via ProcessBatch.
+	// 4. Replay via ProcessBatch. Writes accumulate in leafOverlay's buffer.
 	buf := builder.NewDeltaWindowBuffer(10)
 	result, err := builder.ProcessBatch(tree, entries, positions, fetcher, schemaRes, logDID, buf)
 	if err != nil {
@@ -146,34 +162,29 @@ func VerifyDerivationCommitment(
 	// 5. Compare mutations.
 	var proofs []FraudProof
 
-	// Index committed mutations by leaf key.
 	committed := make(map[[32]byte]types.LeafMutation, len(commitment.Mutations))
 	for _, m := range commitment.Mutations {
 		committed[m.LeafKey] = m
 	}
 
-	// Index replayed mutations by leaf key.
 	replayed := make(map[[32]byte]types.LeafMutation, len(result.Mutations))
 	for _, m := range result.Mutations {
 		replayed[m.LeafKey] = m
 	}
 
-	// Check each committed mutation against replay.
+	// Each committed mutation must match the replay.
 	for key, cm := range committed {
 		rm, found := replayed[key]
 		if !found {
-			// Commitment claims mutation for a key replay didn't touch.
 			proofs = append(proofs, FraudProof{
 				LeafKey:             key,
 				ClaimedNewOriginTip: cm.NewOriginTip,
-				ActualNewOriginTip:  cm.OldOriginTip, // Unchanged.
+				ActualNewOriginTip:  cm.OldOriginTip,
 				ClaimedNewAuthTip:   cm.NewAuthorityTip,
-				ActualNewAuthTip:    cm.OldAuthorityTip, // Unchanged.
+				ActualNewAuthTip:    cm.OldAuthorityTip,
 			})
 			continue
 		}
-
-		// Compare new tips.
 		if !cm.NewOriginTip.Equal(rm.NewOriginTip) || !cm.NewAuthorityTip.Equal(rm.NewAuthorityTip) {
 			proofs = append(proofs, FraudProof{
 				LeafKey:             key,
@@ -185,24 +196,29 @@ func VerifyDerivationCommitment(
 		}
 	}
 
-	// Check for mutations replay produced that commitment doesn't mention.
+	// Replayed mutations not mentioned by the commitment are also fraud.
 	for key, rm := range replayed {
 		if _, found := committed[key]; !found {
 			proofs = append(proofs, FraudProof{
 				LeafKey:             key,
-				ClaimedNewOriginTip: types.LogPosition{}, // Not claimed.
+				ClaimedNewOriginTip: types.LogPosition{},
 				ActualNewOriginTip:  rm.NewOriginTip,
-				ClaimedNewAuthTip:   types.LogPosition{}, // Not claimed.
+				ClaimedNewAuthTip:   types.LogPosition{},
 				ActualNewAuthTip:    rm.NewAuthorityTip,
 			})
 		}
 	}
 
-	// 6. Check PostSMTRoot.
-	if len(proofs) == 0 && result.NewRoot != commitment.PostSMTRoot {
-		// Individual mutations match but root diverges.
-		// This is still fraud — return invalid with no per-leaf proofs.
-		return &FraudProofResult{Valid: false}, nil
+	// 6. Post-root check via the dirty path. Uses the warm cache from
+	// step 2 plus the overlay's buffered writes. O(M log N).
+	writes, _ := leafOverlay.Mutations()
+	postRoot, err := tree.ComputeDirtyRoot(commitment.PriorSMTRoot, writes)
+	if err != nil {
+		return nil, fmt.Errorf("verifier/fraud: ComputeDirtyRoot: %w", err)
+	}
+	if postRoot != commitment.PostSMTRoot {
+		// Per-leaf checks may also have produced proofs; surface both.
+		return &FraudProofResult{Valid: false, Proofs: proofs}, nil
 	}
 
 	if len(proofs) > 0 {

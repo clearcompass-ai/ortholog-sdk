@@ -29,8 +29,9 @@
 //	35      32    BlindingFactor (V1: zeros; V2: Pedersen r_i)
 //	67      32    CommitmentHash (V1: zeros; V2: SHA-256 of commitments)
 //	99      32    SplitID        (random 256-bit identifier for this split)
+//	131     1     FieldTag       (0x01 = V1 GF(256); reserved for future schemes)
 //	────────────────────────────────────
-//	Total:  131 bytes
+//	Total:  132 bytes
 package escrow
 
 import (
@@ -50,7 +51,9 @@ const (
 )
 
 // ShareWireLen is the fixed on-wire size of a serialized Share.
-const ShareWireLen = 131
+// Grew from 131 to 132 in v7.5 when the FieldTag scheme discriminator
+// was added at offset 131.
+const ShareWireLen = 132
 
 // Field offsets within the wire format.
 const (
@@ -61,6 +64,7 @@ const (
 	offsetBlindingFactor = 35
 	offsetCommitmentHash = 67
 	offsetSplitID        = 99
+	offsetFieldTag       = 131
 )
 
 // Share is a single secret share produced by Split and consumed by Reconstruct.
@@ -129,10 +133,11 @@ func SerializeShare(s Share) ([]byte, error) {
 	copy(buf[offsetBlindingFactor:offsetBlindingFactor+32], s.BlindingFactor[:])
 	copy(buf[offsetCommitmentHash:offsetCommitmentHash+32], s.CommitmentHash[:])
 	copy(buf[offsetSplitID:offsetSplitID+32], s.SplitID[:])
+	buf[offsetFieldTag] = s.FieldTag
 	return buf, nil
 }
 
-// DeserializeShare decodes a 131-byte wire form into a Share.
+// DeserializeShare decodes a ShareWireLen-byte wire form into a Share.
 //
 // Validates structurally after deserializing; a malformed wire payload
 // produces an error rather than a malformed Share. Callers do not need
@@ -152,6 +157,7 @@ func DeserializeShare(data []byte) (Share, error) {
 	copy(s.BlindingFactor[:], data[offsetBlindingFactor:offsetBlindingFactor+32])
 	copy(s.CommitmentHash[:], data[offsetCommitmentHash:offsetCommitmentHash+32])
 	copy(s.SplitID[:], data[offsetSplitID:offsetSplitID+32])
+	s.FieldTag = data[offsetFieldTag]
 	if err := ValidateShareFormat(s); err != nil {
 		return Share{}, fmt.Errorf("escrow/deserialize: %w", err)
 	}

@@ -13,17 +13,22 @@ import (
 // Wire format invariants
 // -------------------------------------------------------------------------------------------------
 
-func TestShareFormat_WireLenIs131(t *testing.T) {
-	if ShareWireLen != 131 {
-		t.Fatalf("ShareWireLen = %d, want 131", ShareWireLen)
+func TestShareFormat_WireLenIs132(t *testing.T) {
+	// v7.5 grew the wire format from 131 to 132 bytes when the
+	// FieldTag scheme discriminator was added. Changing this value
+	// invalidates every serialized share; update share_format.go's
+	// comment block and the offsets together.
+	if ShareWireLen != 132 {
+		t.Fatalf("ShareWireLen = %d, want 132", ShareWireLen)
 	}
 }
 
-func TestShareFormat_OffsetsSumTo131(t *testing.T) {
-	// The layout is: Version(1) + Threshold(1) + Index(1) + Value(32) +
-	// BlindingFactor(32) + CommitmentHash(32) + SplitID(32) = 131.
-	if offsetSplitID+32 != ShareWireLen {
-		t.Fatalf("offsetSplitID+32 = %d, want %d", offsetSplitID+32, ShareWireLen)
+func TestShareFormat_OffsetsSumToWireLen(t *testing.T) {
+	// Layout: Version(1) + Threshold(1) + Index(1) + Value(32) +
+	// BlindingFactor(32) + CommitmentHash(32) + SplitID(32) +
+	// FieldTag(1) = 132.
+	if offsetFieldTag+1 != ShareWireLen {
+		t.Fatalf("offsetFieldTag+1 = %d, want %d", offsetFieldTag+1, ShareWireLen)
 	}
 	// Per-field contiguity checks.
 	if offsetThreshold != offsetVersion+1 {
@@ -43,6 +48,9 @@ func TestShareFormat_OffsetsSumTo131(t *testing.T) {
 	}
 	if offsetSplitID != offsetCommitmentHash+32 {
 		t.Fatalf("offsetSplitID = %d, want %d", offsetSplitID, offsetCommitmentHash+32)
+	}
+	if offsetFieldTag != offsetSplitID+32 {
+		t.Fatalf("offsetFieldTag = %d, want %d", offsetFieldTag, offsetSplitID+32)
 	}
 }
 

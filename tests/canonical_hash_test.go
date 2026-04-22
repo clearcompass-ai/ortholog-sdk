@@ -97,11 +97,11 @@ func TestCanonicalHash_PreambleStructure(t *testing.T) {
 	entry := buildTestEntry(t, envelope.ControlHeader{Destination: testDestinationDID, SignerDID: "did:example:preamble"}, []byte("test"))
 	b := envelope.Serialize(entry)
 	version := binary.BigEndian.Uint16(b[0:2])
-	// FROZEN for v6 wire format. Changing this value invalidates every
-	// entry ever serialized; do not update casually. See
-	// core/envelope/api.go currentProtocolVersion.
-	if version != 6 {
-		t.Fatalf("version: got %d, want 6", version)
+	// FROZEN for v7 wire format (v7.5 hard cut from v6). Changing this
+	// value invalidates every entry ever serialized; do not update
+	// casually. See core/envelope/api.go currentProtocolVersion.
+	if version != 7 {
+		t.Fatalf("version: got %d, want 7", version)
 	}
 	hbl := binary.BigEndian.Uint32(b[2:6])
 	if hbl == 0 {

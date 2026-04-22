@@ -445,8 +445,26 @@ func TestAuthority_SingleActiveConstraint(t *testing.T) {
 	h := newP5Harness()
 	entityPos := p5pos(1)
 	h.addEntity(t, entityPos, "did:example:entity")
+
+	// v7.5 Decision 52: EvaluateAuthority verifies each walked
+	// constraint entry's signer is in the governing scope's
+	// AuthoritySet at the entry's admission position. The scope
+	// entry therefore needs an explicit AuthoritySet that contains
+	// the enforcement's signer. Pre-Decision-52 the scope read was
+	// current-tip and the set wasn't consulted at EvaluateAuthority
+	// time; this fixture used to get away with an empty-set scope.
 	scopePos := p5pos(2)
-	h.addEntity(t, scopePos, "did:example:judge")
+	scopeEntry := buildTestEntry(t, envelope.ControlHeader{
+		Destination:   testDestinationDID,
+		SignerDID:     "did:example:judge",
+		AuthorityPath: sameSigner(),
+		AuthoritySet:  map[string]struct{}{"did:example:judge": {}},
+	}, nil)
+	h.storeEntry(t, scopePos, scopeEntry)
+	scopeKey := smt.DeriveKey(scopePos)
+	if err := h.tree.SetLeaf(scopeKey, types.SMTLeaf{Key: scopeKey, OriginTip: scopePos, AuthorityTip: scopePos}); err != nil {
+		t.Fatalf("seed scope leaf: %v", err)
+	}
 
 	// Create enforcement entry (Path C).
 	enfPos := p5pos(3)

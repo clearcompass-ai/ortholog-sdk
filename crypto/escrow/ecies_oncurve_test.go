@@ -6,14 +6,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dustinxie/ecc"
+	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 // TestEncryptForNode_RejectsNilCoordinates ensures a partially-
 // constructed ECDSA public key cannot bypass validation and reach
 // ScalarMult with nil X/Y (which would panic inside the curve math).
 func TestEncryptForNode_RejectsNilCoordinates(t *testing.T) {
-	pub := &ecdsa.PublicKey{Curve: ecc.P256k1(), X: nil, Y: nil}
+	pub := &ecdsa.PublicKey{Curve: secp256k1.S256(), X: nil, Y: nil}
 	_, err := EncryptForNode([]byte("payload"), pub)
 	if err == nil {
 		t.Fatal("EncryptForNode: expected error on nil coordinates, got nil")
@@ -31,11 +31,11 @@ func TestEncryptForNode_RejectsOffCurvePoint(t *testing.T) {
 	// (1, 1) is not a secp256k1 point. Any sufficiently random pair
 	// works; (1, 1) is the obvious inspection-friendly choice.
 	pub := &ecdsa.PublicKey{
-		Curve: ecc.P256k1(),
+		Curve: secp256k1.S256(),
 		X:     big.NewInt(1),
 		Y:     big.NewInt(1),
 	}
-	if ecc.P256k1().IsOnCurve(pub.X, pub.Y) {
+	if secp256k1.S256().IsOnCurve(pub.X, pub.Y) {
 		t.Fatal("test fixture broken: (1,1) unexpectedly on curve")
 	}
 	_, err := EncryptForNode([]byte("payload"), pub)
@@ -52,7 +52,7 @@ func TestEncryptForNode_RejectsOffCurvePoint(t *testing.T) {
 // to an off-curve ephemeral point must be rejected before it feeds
 // ScalarMult with the node's private key.
 func TestDecryptFromNode_RejectsOffCurveEphemeral(t *testing.T) {
-	priv, err := ecdsa.GenerateKey(ecc.P256k1(), noiseReader{})
+	priv, err := ecdsa.GenerateKey(secp256k1.S256(), noiseReader{})
 	if err != nil {
 		t.Fatalf("GenerateKey: %v", err)
 	}

@@ -226,7 +226,7 @@ func TestECIES_DecryptShareRejectsTampered(t *testing.T) {
 // -------------------------------------------------------------------------------------------------
 
 func TestECIES_Secp256k1Accessor(t *testing.T) {
-	c := secp256k1()
+	c := secp256k1Curve()
 	if c == nil {
 		t.Fatal("secp256k1() returned nil curve")
 	}

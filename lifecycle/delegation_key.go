@@ -64,7 +64,7 @@ func GenerateDelegationKey(ownerPubKey []byte) (pkDel []byte, wrappedSkDel []byt
 	}
 
 	// 2. Generate ephemeral secp256k1 keypair
-	c := secp256k1()
+	c := secp256k1Curve()
 	delKey, err := ecdsa.GenerateKey(c, rand.Reader)
 	if err != nil {
 		return nil, nil, fmt.Errorf("lifecycle/delegation_key: generate keypair: %w", err)
@@ -124,7 +124,7 @@ func UnwrapDelegationKey(wrappedSkDel []byte, ownerSecretKey []byte) ([]byte, er
 	}
 
 	// 1. Reconstruct the owner's ecdsa.PrivateKey
-	c := secp256k1()
+	c := secp256k1Curve()
 	d := new(big.Int).SetBytes(ownerSecretKey)
 
 	// Validate the scalar is within the curve's order (1 <= d < N)

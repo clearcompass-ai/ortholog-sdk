@@ -10,7 +10,7 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/clearcompass-ai/ortholog-sdk/exchange/identity"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
-	"github.com/dustinxie/ecc"
+	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ func makeEscrowNodes(t *testing.T, n int) ([]identity.EscrowNode, []*ecdsa.Priva
 	nodes := make([]identity.EscrowNode, n)
 	privs := make([]*ecdsa.PrivateKey, n)
 	for i := 0; i < n; i++ {
-		priv, err := ecdsa.GenerateKey(ecc.P256k1(), rand.Reader)
+		priv, err := ecdsa.GenerateKey(secp256k1.S256(), rand.Reader)
 		if err != nil {
 			t.Fatalf("generate escrow node key %d: %v", i, err)
 		}

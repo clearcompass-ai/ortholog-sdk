@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/dustinxie/ecc"
+	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
@@ -33,7 +33,7 @@ const testDestination = "did:web:test-exchange.example.org"
 // need real cryptographic material (delegation keys, ECIES wrapping, etc.).
 func freshSecp256k1KeyPair(t *testing.T) *ecdsa.PrivateKey {
 	t.Helper()
-	priv, err := ecdsa.GenerateKey(ecc.P256k1(), rand.Reader)
+	priv, err := ecdsa.GenerateKey(secp256k1.S256(), rand.Reader)
 	if err != nil {
 		t.Fatalf("freshSecp256k1KeyPair: %v", err)
 	}

@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
-	"github.com/dustinxie/ecc"
+	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
 // -------------------------------------------------------------------------------------------------
@@ -59,7 +59,7 @@ func TestGenerateDelegationKey_PkDelIsOnCurve(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateDelegationKey: %v", err)
 	}
-	c := ecc.P256k1()
+	c := secp256k1.S256()
 	x, y := elliptic.Unmarshal(c, pkDel)
 	if x == nil {
 		t.Fatal("pkDel does not decode to a valid point")
@@ -101,7 +101,7 @@ func TestUnwrapDelegationKey_RejectsZeroScalar(t *testing.T) {
 }
 
 func TestUnwrapDelegationKey_RejectsScalarEqualToN(t *testing.T) {
-	n := ecc.P256k1().Params().N
+	n := secp256k1.S256().Params().N
 	badScalar := make([]byte, 32)
 	nBytes := n.Bytes()
 	copy(badScalar[32-len(nBytes):], nBytes)
@@ -134,7 +134,7 @@ func TestDelegationKey_RoundTrip(t *testing.T) {
 
 	// skDel * G must equal pkDel (confirms the returned scalar IS the
 	// private counterpart of the published pkDel).
-	c := ecc.P256k1()
+	c := secp256k1.S256()
 	gotX, gotY := c.ScalarBaseMult(skDel)
 	pkDelX, pkDelY := elliptic.Unmarshal(c, pkDel)
 	if pkDelX == nil {
@@ -253,11 +253,11 @@ func unwrapOutOfRangeScalarHelper(t *testing.T, badScalar []byte) error {
 	t.Helper()
 	ownerPubBytes, ownerPriv := freshUncompressedPubKey(t)
 	// Parse owner pub so EncryptForNode can consume it.
-	x, y := elliptic.Unmarshal(ecc.P256k1(), ownerPubBytes) //nolint:staticcheck // test uses secp256k1 unmarshal
+	x, y := elliptic.Unmarshal(secp256k1.S256(), ownerPubBytes) //nolint:staticcheck // test uses secp256k1 unmarshal
 	if x == nil {
 		t.Fatal("failed to unmarshal owner pubkey")
 	}
-	pub := &ecdsa.PublicKey{Curve: ecc.P256k1(), X: x, Y: y}
+	pub := &ecdsa.PublicKey{Curve: secp256k1.S256(), X: x, Y: y}
 	wrapped, err := escrow.EncryptForNode(badScalar, pub)
 	if err != nil {
 		t.Fatalf("EncryptForNode: %v", err)
@@ -275,7 +275,7 @@ func TestUnwrapDelegationKey_RejectsUnwrappedZeroScalar(t *testing.T) {
 }
 
 func TestUnwrapDelegationKey_RejectsUnwrappedScalarEqualToN(t *testing.T) {
-	n := ecc.P256k1().Params().N
+	n := secp256k1.S256().Params().N
 	bad := make([]byte, 32)
 	nBytes := n.Bytes()
 	copy(bad[32-len(nBytes):], nBytes)
@@ -287,7 +287,7 @@ func TestUnwrapDelegationKey_RejectsUnwrappedScalarEqualToN(t *testing.T) {
 
 func TestUnwrapDelegationKey_RejectsUnwrappedScalarAboveN(t *testing.T) {
 	// N + 1 — above the curve order.
-	n := new(big.Int).Add(ecc.P256k1().Params().N, big.NewInt(1))
+	n := new(big.Int).Add(secp256k1.S256().Params().N, big.NewInt(1))
 	bad := make([]byte, 32)
 	nBytes := n.Bytes()
 	copy(bad[32-len(nBytes):], nBytes)

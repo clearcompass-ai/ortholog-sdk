@@ -27,10 +27,16 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/dustinxie/ecc"
+	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
-func secp256k1() elliptic.Curve { return ecc.P256k1() }
+// secp256k1 returns the secp256k1 curve as an elliptic.Curve.
+// v7.75 Phase A′ migrated this package from github.com/dustinxie/ecc
+// to github.com/decred/dcrd/dcrec/secp256k1/v4 to align with the rest
+// of the SDK (entry_verify.go, ethereum_primitives.go). Wire formats
+// are unchanged — the curve math is identical; only the backing
+// library differs.
+func secp256k1Curve() elliptic.Curve { return secp256k1.S256() }
 
 // EncryptForNode encrypts plaintext for a specific escrow node's secp256k1
 // public key. Uses ECIES: ephemeral ECDH → SHA-256 KDF → AES-256-GCM.
@@ -45,7 +51,7 @@ func EncryptForNode(plaintext []byte, nodePubKey *ecdsa.PublicKey) ([]byte, erro
 	if nodePubKey == nil {
 		return nil, errors.New("escrow/ecies: nil public key")
 	}
-	curve := secp256k1()
+	curve := secp256k1Curve()
 	// Validate the recipient point lies on the curve before it feeds
 	// ScalarMult. An off-curve point yields an undefined ECDH result
 	// and would poison the KDF input.
@@ -130,7 +136,7 @@ func DecryptFromNode(ciphertext []byte, nodePrivKey *ecdsa.PrivateKey) ([]byte, 
 	if nodePrivKey == nil {
 		return nil, errors.New("escrow/ecies: nil private key")
 	}
-	curve := secp256k1()
+	curve := secp256k1Curve()
 
 	// Parse ephemeral public key (65 bytes uncompressed).
 	if len(ciphertext) < 65+12+16 { // pubkey + nonce + minimum GCM tag

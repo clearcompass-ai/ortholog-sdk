@@ -47,10 +47,16 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/dustinxie/ecc"
+	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
 
-func curve() elliptic.Curve { return ecc.P256k1() }
+// curve returns the secp256k1 curve as an elliptic.Curve.
+// v7.75 Phase A′ migrated this package from github.com/dustinxie/ecc
+// to github.com/decred/dcrd/dcrec/secp256k1/v4. Wire formats are
+// unchanged — the curve math is identical; only the backing library
+// differs. All existing PRE capsule / CFrag ciphertexts continue to
+// round-trip losslessly.
+func curve() elliptic.Curve { return secp256k1.S256() }
 func curveN() *big.Int      { return curve().Params().N }
 
 // ─────────────────────────────────────────────────────────────────────

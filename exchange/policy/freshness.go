@@ -1,17 +1,19 @@
 /*
 FILE PATH:
-    exchange/policy/freshness.go
+
+	exchange/policy/freshness.go
 
 DESCRIPTION:
-    Ingestion-layer freshness policy. Called by an operator at the point of
-    entry acceptance, BEFORE appending to the log. Rejects entries whose
-    EventTime is outside a configurable tolerance of "now."
 
-    This is the defense against late-replay: an attacker captures a
-    legitimately-signed entry, blocks its delivery, and replays it
-    arbitrarily later. Even though the entry's signature is still valid
-    and the log has never seen its canonical hash, the freshness window
-    rejects it at ingestion because EventTime is too far in the past.
+	Ingestion-layer freshness policy. Called by an operator at the point of
+	entry acceptance, BEFORE appending to the log. Rejects entries whose
+	EventTime is outside a configurable tolerance of "now."
+
+	This is the defense against late-replay: an attacker captures a
+	legitimately-signed entry, blocks its delivery, and replays it
+	arbitrarily later. Even though the entry's signature is still valid
+	and the log has never seen its canonical hash, the freshness window
+	rejects it at ingestion because EventTime is too far in the past.
 
 KEY ARCHITECTURAL DECISIONS:
   - Freshness is OPERATOR POLICY, not PROTOCOL RULE. Different operators
@@ -28,8 +30,8 @@ KEY ARCHITECTURAL DECISIONS:
     treated as "always reject." Fail-loud.
 
 KEY DEPENDENCIES:
-    - core/envelope.Entry (for EventTime access)
-    - standard library time
+  - core/envelope.Entry (for EventTime access)
+  - standard library time
 */
 package policy
 
@@ -116,9 +118,9 @@ var (
 //
 // Typical call:
 //
-//     if err := policy.CheckFreshness(entry, time.Now().UTC(), policy.FreshnessInteractive); err != nil {
-//         return fmt.Errorf("ingestion: %w", err)
-//     }
+//	if err := policy.CheckFreshness(entry, time.Now().UTC(), policy.FreshnessInteractive); err != nil {
+//	    return fmt.Errorf("ingestion: %w", err)
+//	}
 //
 // The `now` parameter is explicit (not time.Now() internally) for
 // determinism in tests and to make clock dependencies auditable.
@@ -134,7 +136,7 @@ func CheckFreshness(entry *envelope.Entry, now time.Time, tolerance time.Duratio
 			ErrToleranceTooLarge, tolerance, MaxFreshnessTolerance)
 	}
 
-	eventTime := time.Unix(entry.Header.EventTime, 0).UTC()
+	eventTime := time.UnixMicro(entry.Header.EventTime).UTC()
 	delta := now.Sub(eventTime)
 
 	// Future-skew check: entries from the future beyond clock skew are

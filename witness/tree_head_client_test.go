@@ -166,8 +166,17 @@ func TestParseTreeHeadResponse_RejectsMissingPubKeyID(t *testing.T) {
 			"be rejected; the parser must never fabricate identity from " +
 			"the signer string.")
 	}
+	// The parser rejects with a specific diagnostic when pubkey_id is
+	// absent. Defense-in-depth: the downstream length check also rejects,
+	// so removing this guard does not break contract enforcement, but the
+	// diagnostic message degrades to a less-precise one.
 	if !strings.Contains(err.Error(), "missing required pubkey_id") {
-		t.Fatalf("expected 'missing required pubkey_id' diagnostic, got: %v", err)
+		t.Fatalf("BUG-012 REGRESSION (diagnostic): empty pubkey_id should "+
+			"produce a 'missing required pubkey_id' diagnostic, got: %v", err)
+	}
+	// The probe-load-bearing assertion: contract must be enforced.
+	if err == nil {
+		t.Fatal("BUG-012 REGRESSION: parser accepted missing pubkey_id")
 	}
 }
 

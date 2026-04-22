@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/admission"
@@ -345,57 +346,6 @@ func TestContentStore_PushFetchDelete(t *testing.T) {
 		t.Fatalf("expected ErrContentNotFound, got: %v", err)
 	}
 }
-/*
-Append these tests to tests/crypto_test.go after the existing
-TestEscrow_TagValidation test.
-
-Tests added in this patch:
-
-  TestEscrow_BUG010_RejectsBelowThreshold
-    BUG-010 headline regression guard. Attempting to reconstruct
-    from (M-1) shares of an M-of-N split must be rejected with
-    ErrInsufficientShares.
-
-  TestEscrow_BUG010_ExactlyAtThreshold
-    Boundary test. Exactly M shares succeed.
-
-  TestEscrow_BUG010_AboveThresholdSucceeds
-    Positive control. More than M shares also succeed (Lagrange
-    interpolation is consistent when over-determined).
-
-  TestEscrow_BUG010_RejectsMixedThresholds
-    Consistency check. Shares from different splits (differing
-    Threshold declarations) must be rejected.
-
-  TestEscrow_BUG010_ShareCarriesThreshold
-    Wire-level check. Every share emitted by SplitGF256 has
-    Threshold populated to the M parameter.
-
-MUTATION PROBE
---------------
-After tests pass, in crypto/escrow/api.go ReconstructGF256, comment
-out the threshold-enforcement block:
-
-    // if len(shares) < int(threshold) {
-    //     return nil, fmt.Errorf("%w: got %d shares, threshold %d",
-    //         ErrInsufficientShares, len(shares), threshold)
-    // }
-
-Run: go test -count=1 -v -run TestEscrow_BUG010_RejectsBelowThreshold ./tests/
-Expected: FAIL with "BUG-010 REGRESSION: ReconstructGF256 accepted..."
-
-Restore the block. Re-run. Test passes.
-*/
-
-package tests
-
-import (
-	"errors"
-	"testing"
-
-	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
-)
-
 // ─────────────────────────────────────────────────────────────────────
 // BUG-010 regression guards
 // ─────────────────────────────────────────────────────────────────────

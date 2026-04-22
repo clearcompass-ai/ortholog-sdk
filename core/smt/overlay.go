@@ -247,3 +247,81 @@ func (o *OverlayLeafStore) Reset() {
 	o.buffer = make(map[[32]byte]types.SMTLeaf)
 	o.deleted = make(map[[32]byte]struct{})
 }
+
+// OverlayNodeCache wraps a backing NodeCache and traps writes in memory.
+//
+// Reads consult the buffer first; on miss they fall through to the
+// backing cache. Writes go to the buffer only — the backing cache is
+// never modified.
+//
+// The verifier uses this so that interior-node hashes computed during
+// a candidate replay never pollute the monitor's persistent NodeCache:
+// if the candidate commitment turns out to be fraudulent, the overlay
+// is discarded and the persistent cache is unchanged. For valid
+// commitments, callers may inspect Mutations and selectively promote
+// entries to the backing cache.
+type OverlayNodeCache struct {
+	mu      sync.RWMutex
+	backing NodeCache
+	buffer  map[[32]byte][]byte
+}
+
+// NewOverlayNodeCache wraps a backing NodeCache in a write-buffering overlay.
+// The backing cache is not modified by any operation on the overlay.
+func NewOverlayNodeCache(backing NodeCache) *OverlayNodeCache {
+	if backing == nil {
+		panic("smt: NewOverlayNodeCache called with nil backing cache")
+	}
+	return &OverlayNodeCache{
+		backing: backing,
+		buffer:  make(map[[32]byte][]byte),
+	}
+}
+
+// Get returns the cached value for key. The buffer wins over backing.
+// The returned slice is a deep copy — callers may mutate it without
+// affecting cache state.
+func (o *OverlayNodeCache) Get(key [32]byte) ([]byte, bool) {
+	o.mu.RLock()
+	if v, ok := o.buffer[key]; ok {
+		cp := make([]byte, len(v))
+		copy(cp, v)
+		o.mu.RUnlock()
+		return cp, true
+	}
+	o.mu.RUnlock()
+	return o.backing.Get(key)
+}
+
+// Set stores a value in the overlay buffer. The backing cache is not modified.
+// The value is copied; subsequent caller mutation does not affect the buffer.
+func (o *OverlayNodeCache) Set(key [32]byte, value []byte) {
+	cp := make([]byte, len(value))
+	copy(cp, value)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.buffer[key] = cp
+}
+
+// Mutations returns a copy of the buffered writes. Callers that want to
+// promote a successful replay's interior nodes into the persistent cache
+// iterate this map and call backing.Set on each entry inside their own
+// commit block.
+func (o *OverlayNodeCache) Mutations() map[[32]byte][]byte {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+	out := make(map[[32]byte][]byte, len(o.buffer))
+	for k, v := range o.buffer {
+		cp := make([]byte, len(v))
+		copy(cp, v)
+		out[k] = cp
+	}
+	return out
+}
+
+// Reset empties the overlay buffer. The backing cache is not modified.
+func (o *OverlayNodeCache) Reset() {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.buffer = make(map[[32]byte][]byte)
+}

@@ -190,18 +190,48 @@ func (t *Tree) Root() ([32]byte, error) {
 }
 
 func (t *Tree) computeRoot() ([32]byte, error) {
-	store, ok := t.leaves.(*InMemoryLeafStore)
+	leafHashes, ok := collectLeafHashes(t.leaves)
 	if !ok {
 		return defaultHashes[TreeDepth], nil
 	}
-	if len(store.store) == 0 {
+	if len(leafHashes) == 0 {
 		return defaultHashes[TreeDepth], nil
 	}
-	leafHashes := make(map[[32]byte][32]byte)
-	for key, leaf := range store.store {
-		leafHashes[key] = hashLeaf(leaf)
+	return computeSparseRootCached(leafHashes, TreeDepth, [32]byte{}, t.nodeCache), nil
+}
+
+// collectLeafHashes returns the effective leaf hashes for a LeafStore that
+// the SMT can iterate. It recognizes *InMemoryLeafStore directly and
+// *OverlayLeafStore over an enumerable backing. For any other store type
+// the second return value is false and the caller should fall back to the
+// empty-tree hash (matching pre-existing behavior).
+func collectLeafHashes(store LeafStore) (map[[32]byte][32]byte, bool) {
+	switch s := store.(type) {
+	case *InMemoryLeafStore:
+		s.mu.RLock()
+		out := make(map[[32]byte][32]byte, len(s.store))
+		for key, leaf := range s.store {
+			out[key] = hashLeaf(leaf)
+		}
+		s.mu.RUnlock()
+		return out, true
+	case *OverlayLeafStore:
+		base, ok := collectLeafHashes(s.backing)
+		if !ok {
+			return nil, false
+		}
+		s.mu.RLock()
+		for key, leaf := range s.buffer {
+			base[key] = hashLeaf(leaf)
+		}
+		for key := range s.deleted {
+			delete(base, key)
+		}
+		s.mu.RUnlock()
+		return base, true
+	default:
+		return nil, false
 	}
-	return computeSparseRoot(leafHashes, TreeDepth), nil
 }
 
 func hashLeaf(leaf types.SMTLeaf) [32]byte {
@@ -257,6 +287,159 @@ func computeSparseRoot(leafHashes map[[32]byte][32]byte, depth int) [32]byte {
 	copy(combined[0:32], leftHash[:])
 	copy(combined[32:64], rightHash[:])
 	return sha256.Sum256(combined[:])
+}
+
+// nodeCacheKey returns a stable cache key identifying the interior SMT
+// node at (depth, prefix). Only the top (TreeDepth - depth) bits of
+// prefix are significant; lower bits MUST be zero. The depth is encoded
+// in the leading byte to disambiguate nodes that share a prefix at
+// different levels.
+//
+// Encoding: sha256(depth_be16 || prefix_32B). The hash gives a uniform
+// 32-byte cache key suited to NodeCache's interface, and the depth-prefix
+// composition is collision-free because depth is encoded explicitly.
+func nodeCacheKey(depth int, prefix [32]byte) [32]byte {
+	var raw [34]byte
+	raw[0] = byte(depth >> 8)
+	raw[1] = byte(depth)
+	copy(raw[2:], prefix[:])
+	return sha256.Sum256(raw[:])
+}
+
+// computeSparseRootCached is computeSparseRoot that additionally records
+// each interior node hash into cache, keyed by (depth, prefix). Subsequent
+// ComputeDirtyRoot calls consult this cache to avoid descending into clean
+// subtrees, achieving O(M log N) rather than O(N) per batch.
+func computeSparseRootCached(leafHashes map[[32]byte][32]byte, depth int, prefix [32]byte, cache NodeCache) [32]byte {
+	if depth == 0 {
+		if len(leafHashes) == 0 {
+			return defaultHashes[0]
+		}
+		for _, h := range leafHashes {
+			cache.Set(nodeCacheKey(0, prefix), h[:])
+			return h
+		}
+	}
+	bitIdx := uint(TreeDepth - depth)
+	byteIdx := bitIdx / 8
+	bitMask := byte(0x80 >> (bitIdx % 8))
+
+	left := make(map[[32]byte][32]byte)
+	right := make(map[[32]byte][32]byte)
+	for key, hash := range leafHashes {
+		if key[byteIdx]&bitMask == 0 {
+			left[key] = hash
+		} else {
+			right[key] = hash
+		}
+	}
+
+	leftPrefix := prefix
+	rightPrefix := prefix
+	rightPrefix[byteIdx] |= bitMask
+
+	var leftHash, rightHash [32]byte
+	if len(left) == 0 {
+		leftHash = defaultHashes[depth-1]
+	} else {
+		leftHash = computeSparseRootCached(left, depth-1, leftPrefix, cache)
+	}
+	if len(right) == 0 {
+		rightHash = defaultHashes[depth-1]
+	} else {
+		rightHash = computeSparseRootCached(right, depth-1, rightPrefix, cache)
+	}
+	var combined [64]byte
+	copy(combined[0:32], leftHash[:])
+	copy(combined[32:64], rightHash[:])
+	h := sha256.Sum256(combined[:])
+	cache.Set(nodeCacheKey(depth, prefix), h[:])
+	return h
+}
+
+// ComputeDirtyRoot recomputes the SMT root after applying writes against
+// a known prior root, walking only the modified branches.
+//
+// CALLER CONTRACT: the tree's NodeCache must be warm with respect to
+// priorRoot. The required warmth is achieved by calling tree.Root() once
+// against the prior leaf state (the existing computeRoot populates the
+// cache as it descends). Subsequent ComputeDirtyRoot calls reuse those
+// cached hashes for any subtree containing no dirty leaves.
+//
+// Cold-cache behavior: if a clean sibling's hash is absent from the cache,
+// the function falls back to the empty-subtree default hash for that depth.
+// This produces a correct root only if the clean subtree is genuinely
+// empty in the prior tree. Callers that cannot guarantee a warm cache
+// should use tree.Root() for full recomputation instead.
+//
+// Cost: O(M log N) where M is len(writes) and N is the leaf count, given
+// a warm cache.
+func (t *Tree) ComputeDirtyRoot(priorRoot [32]byte, writes map[[32]byte]types.SMTLeaf) ([32]byte, error) {
+	if len(writes) == 0 {
+		return priorRoot, nil
+	}
+	dirty := make(map[[32]byte][32]byte, len(writes))
+	for key, leaf := range writes {
+		dirty[key] = hashLeaf(leaf)
+	}
+	return computeDirtyRootRec(dirty, TreeDepth, [32]byte{}, t.nodeCache), nil
+}
+
+func computeDirtyRootRec(dirty map[[32]byte][32]byte, depth int, prefix [32]byte, cache NodeCache) [32]byte {
+	if depth == 0 {
+		// Leaf level: return the dirty leaf hash if present, else fall back
+		// to the cached prior leaf hash, else empty-leaf default.
+		if len(dirty) == 1 {
+			for _, h := range dirty {
+				cache.Set(nodeCacheKey(0, prefix), h[:])
+				return h
+			}
+		}
+		if cached, ok := cache.Get(nodeCacheKey(0, prefix)); ok && len(cached) == 32 {
+			var out [32]byte
+			copy(out[:], cached)
+			return out
+		}
+		return defaultHashes[0]
+	}
+
+	if len(dirty) == 0 {
+		// Clean subtree — use cached interior hash, or default if cold.
+		if cached, ok := cache.Get(nodeCacheKey(depth, prefix)); ok && len(cached) == 32 {
+			var out [32]byte
+			copy(out[:], cached)
+			return out
+		}
+		return defaultHashes[depth]
+	}
+
+	bitIdx := uint(TreeDepth - depth)
+	byteIdx := bitIdx / 8
+	bitMask := byte(0x80 >> (bitIdx % 8))
+
+	left := make(map[[32]byte][32]byte)
+	right := make(map[[32]byte][32]byte)
+	for key, hash := range dirty {
+		if key[byteIdx]&bitMask == 0 {
+			left[key] = hash
+		} else {
+			right[key] = hash
+		}
+	}
+
+	leftPrefix := prefix
+	rightPrefix := prefix
+	rightPrefix[byteIdx] |= bitMask
+
+	leftHash := computeDirtyRootRec(left, depth-1, leftPrefix, cache)
+	rightHash := computeDirtyRootRec(right, depth-1, rightPrefix, cache)
+
+	var combined [64]byte
+	copy(combined[0:32], leftHash[:])
+	copy(combined[32:64], rightHash[:])
+	h := sha256.Sum256(combined[:])
+	cache.Set(nodeCacheKey(depth, prefix), h[:])
+	return h
 }
 
 type InMemoryLeafStore struct {

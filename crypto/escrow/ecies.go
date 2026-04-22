@@ -46,6 +46,15 @@ func EncryptForNode(plaintext []byte, nodePubKey *ecdsa.PublicKey) ([]byte, erro
 		return nil, errors.New("escrow/ecies: nil public key")
 	}
 	curve := secp256k1()
+	// Validate the recipient point lies on the curve before it feeds
+	// ScalarMult. An off-curve point yields an undefined ECDH result
+	// and would poison the KDF input.
+	if nodePubKey.X == nil || nodePubKey.Y == nil {
+		return nil, errors.New("escrow/ecies: public key has nil coordinate")
+	}
+	if !curve.IsOnCurve(nodePubKey.X, nodePubKey.Y) {
+		return nil, errors.New("escrow/ecies: public key is not on the secp256k1 curve")
+	}
 
 	// Generate ephemeral key pair. ephPriv.D is secret; we zeroize the
 	// padded-scalar byte slice we derive from it. The big.Int inside
@@ -130,6 +139,12 @@ func DecryptFromNode(ciphertext []byte, nodePrivKey *ecdsa.PrivateKey) ([]byte, 
 	ephX, ephY := elliptic.Unmarshal(curve, ciphertext[:65])
 	if ephX == nil {
 		return nil, errors.New("escrow/ecies: invalid ephemeral public key")
+	}
+	// Third-party curve implementations do not uniformly perform
+	// on-curve validation in Unmarshal; do it explicitly so a crafted
+	// ciphertext cannot smuggle an off-curve point into ScalarMult.
+	if !curve.IsOnCurve(ephX, ephY) {
+		return nil, errors.New("escrow/ecies: ephemeral public key is not on the secp256k1 curve")
 	}
 
 	// ECDH: shared point = nodePriv * ephPub.

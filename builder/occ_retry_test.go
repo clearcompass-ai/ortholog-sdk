@@ -1,6 +1,7 @@
 package builder
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -297,5 +298,110 @@ func TestProcessBatch_RejectedPositionsReported(t *testing.T) {
 	}
 	if len(result.RejectedPositions) != 1 || result.RejectedPositions[0] != 1 {
 		t.Fatalf("want RejectedPositions=[1], got %v", result.RejectedPositions)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// H5 — PathFailureReasons surfaces per-entry structural errors
+// ─────────────────────────────────────────────────────────────────────
+
+// TestProcessBatch_PathFailureReasonsRecordsTipRegression exercises
+// the H5 fix: a Path A amendment whose position would cause a tip
+// regression is classified as PathD, and the concrete ErrTipRegression
+// is surfaced in BatchResult.PathFailureReasons at the failing index.
+// The two flanking valid entries must have nil slots.
+func TestProcessBatch_PathFailureReasonsRecordsTipRegression(t *testing.T) {
+	tree := smt.NewTree(smt.NewInMemoryLeafStore(), smt.NewInMemoryNodeCache())
+	fetcher := retryFetcher{}
+
+	// Seed a target entity with a high-sequence OriginTip so a later
+	// Path A amendment at a lower sequence triggers assertMonotonic.
+	entityPos := retryPos(500)
+	entity := retryMustEntry(t, envelope.ControlHeader{
+		Destination:   retryTestDestination,
+		SignerDID:     "did:example:alice",
+		AuthorityPath: occSameSigner(),
+	})
+	fetcher.store(t, entityPos, entity)
+	ekey := smt.DeriveKey(entityPos)
+	if err := tree.SetLeaves([]types.SMTLeaf{{Key: ekey, OriginTip: entityPos, AuthorityTip: entityPos}}); err != nil {
+		t.Fatalf("seed leaf: %v", err)
+	}
+
+	// A valid new-leaf entry that will succeed — its PathFailureReasons
+	// slot must remain nil.
+	okA := buildRootNewLeafEntry(t, "did:example:b")
+
+	// A Path A amendment at pos(10) targeting entityPos (pos 500).
+	// assertMonotonic will fire ErrTipRegression (10 <= 500, same log).
+	regressing := retryMustEntry(t, envelope.ControlHeader{
+		Destination:   retryTestDestination,
+		SignerDID:     "did:example:alice",
+		TargetRoot:    ptrTo(entityPos),
+		AuthorityPath: occSameSigner(),
+	})
+
+	okB := buildRootNewLeafEntry(t, "did:example:c")
+
+	entries := []*envelope.Entry{okA, regressing, okB}
+	positions := []types.LogPosition{retryPos(1), retryPos(10), retryPos(11)}
+
+	result, err := ProcessBatch(tree, entries, positions, fetcher, nil, retryTestLogDID, NewDeltaWindowBuffer(10))
+	if err != nil {
+		t.Fatalf("ProcessBatch: %v", err)
+	}
+
+	if got := len(result.PathFailureReasons); got != len(entries) {
+		t.Fatalf("PathFailureReasons length: want %d, got %d", len(entries), got)
+	}
+	if result.PathFailureReasons[0] != nil {
+		t.Fatalf("index 0 (valid entry): want nil reason, got %v", result.PathFailureReasons[0])
+	}
+	if result.PathFailureReasons[1] == nil {
+		t.Fatal("index 1 (regressing entry): want non-nil reason, got nil")
+	}
+	if !errors.Is(result.PathFailureReasons[1], ErrTipRegression) {
+		t.Fatalf("index 1: want ErrTipRegression, got %v", result.PathFailureReasons[1])
+	}
+	if result.PathFailureReasons[2] != nil {
+		t.Fatalf("index 2 (valid entry): want nil reason, got %v", result.PathFailureReasons[2])
+	}
+	if result.PathDCounts != 1 {
+		t.Fatalf("PathDCounts: want 1, got %d", result.PathDCounts)
+	}
+}
+
+// TestProcessBatch_PathFailureReasonsNilForLegitimatePathD asserts
+// the other side of the H5 contract: an entry legitimately routed to
+// PathD without an error (e.g., foreign-log target, evidence-cap
+// snapshot shape) leaves its PathFailureReasons slot nil. This is
+// what lets operators distinguish "genuine PathD" from "structural
+// failure the builder absorbed."
+func TestProcessBatch_PathFailureReasonsNilForLegitimatePathD(t *testing.T) {
+	tree := smt.NewTree(smt.NewInMemoryLeafStore(), smt.NewInMemoryNodeCache())
+	fetcher := retryFetcher{}
+
+	// A Path A entry whose TargetRoot references a foreign log ⇒
+	// processEntry returns PathResultPathD with nil error (Decision 47
+	// locality enforcement).
+	foreign := retryMustEntry(t, envelope.ControlHeader{
+		Destination:   retryTestDestination,
+		SignerDID:     "did:example:bob",
+		TargetRoot:    &types.LogPosition{LogDID: "did:ortholog:foreign", Sequence: 1},
+		AuthorityPath: occSameSigner(),
+	})
+
+	entries := []*envelope.Entry{foreign}
+	positions := []types.LogPosition{retryPos(1)}
+
+	result, err := ProcessBatch(tree, entries, positions, fetcher, nil, retryTestLogDID, NewDeltaWindowBuffer(10))
+	if err != nil {
+		t.Fatalf("ProcessBatch: %v", err)
+	}
+	if result.PathDCounts != 1 {
+		t.Fatalf("PathDCounts: want 1, got %d", result.PathDCounts)
+	}
+	if result.PathFailureReasons[0] != nil {
+		t.Fatalf("legitimate PathD: want nil reason, got %v", result.PathFailureReasons[0])
 	}
 }

@@ -112,6 +112,19 @@ type EvaluateConditionsParams struct {
 	// OperatorQueryAPI.QueryByCosignatureOf(pendingPos).
 	Cosignatures []types.EntryWithMetadata
 
+	// AuthorizedSet is the set of DIDs whose cosignatures count toward
+	// CosignatureThreshold. Any cosignature whose signer is not a
+	// member is discarded as spoofed — a Sybil defense. Derived by the
+	// caller from the governing scope entry's AuthoritySet (typically
+	// the scope referenced by the pending entry's Scope_Pointer).
+	//
+	// Nil is legal and preserves prior behaviour: every cosignature
+	// entry that binds to pendingPos counts. Callers exposed to the
+	// Sybil vector MUST populate this field; leaving it nil in
+	// production is a policy choice that accepts counterfeit
+	// cosignatures as valid.
+	AuthorizedSet map[string]struct{}
+
 	// Now is the evaluation time. Pass time.Now().UTC() for live
 	// evaluation or a fixed time for deterministic testing.
 	Now time.Time
@@ -173,8 +186,10 @@ func EvaluateConditions(p EvaluateConditionsParams) (*ConditionResult, error) {
 	// Condition 2: Cosignature threshold.
 	// BUG-015 fix: pass p.PendingPos explicitly so countValidCosignatures
 	// can bind each cosignature to the correct position.
-	cosigDetail := evaluateCosignatureThreshold(params, p.Cosignatures, pendingEntry, p.PendingPos)
-	result.CosignatureCount = countValidCosignatures(p.Cosignatures, pendingEntry, p.PendingPos)
+	// Sybil fix: pass p.AuthorizedSet so cosignatures from signers
+	// outside the governing scope are discarded.
+	cosigDetail := evaluateCosignatureThreshold(params, p.Cosignatures, pendingEntry, p.PendingPos, p.AuthorizedSet)
+	result.CosignatureCount = countValidCosignatures(p.Cosignatures, pendingEntry, p.PendingPos, p.AuthorizedSet)
 	result.Conditions = append(result.Conditions, cosigDetail)
 
 	// Condition 3: Maturation epoch.
@@ -258,11 +273,14 @@ func evaluateActivationDelay(params *types.SchemaParameters, entryTime time.Time
 //
 // BUG-015 fix: accepts pendingPos explicitly so the underlying count
 // binds each cosignature to the pending operation's position.
+// Sybil fix: accepts authorizedSet so cosignatures from signers outside
+// the governing scope are discarded before counting.
 func evaluateCosignatureThreshold(
 	params *types.SchemaParameters,
 	cosignatures []types.EntryWithMetadata,
 	pendingEntry *envelope.Entry,
 	pendingPos types.LogPosition,
+	authorizedSet map[string]struct{},
 ) ConditionDetail {
 	if params == nil || params.CosignatureThreshold <= 0 {
 		return ConditionDetail{
@@ -272,7 +290,7 @@ func evaluateCosignatureThreshold(
 		}
 	}
 
-	validCount := countValidCosignatures(cosignatures, pendingEntry, pendingPos)
+	validCount := countValidCosignatures(cosignatures, pendingEntry, pendingPos, authorizedSet)
 	threshold := params.CosignatureThreshold
 
 	if validCount >= threshold {
@@ -358,6 +376,17 @@ func evaluateCredentialValidity(params *types.SchemaParameters, entryTime time.T
 // The fix routes the binding check through verifier.IsCosignatureOf,
 // which requires the cosignature to explicitly reference pendingPos.
 //
+// # SYBIL FIX
+//
+// authorizedSet names the DIDs whose cosignatures count. Signers
+// outside this set are discarded even when the cosignature entry
+// binds to pendingPos — otherwise an attacker operating an unrelated
+// DID could satisfy the threshold by cosigning a victim's operation.
+// A nil authorizedSet preserves prior behaviour (every bound
+// cosignature counts) and is intentionally legal for callers that
+// have no scope to authorise against, but production callers SHOULD
+// pass the governing scope's AuthoritySet.
+//
 // The pendingPos parameter is passed explicitly by the caller because
 // *envelope.Entry does not carry position — position lives on the
 // EntryWithMetadata wrapper. EvaluateConditions has p.PendingPos on
@@ -366,6 +395,7 @@ func countValidCosignatures(
 	cosignatures []types.EntryWithMetadata,
 	pendingEntry *envelope.Entry,
 	pendingPos types.LogPosition,
+	authorizedSet map[string]struct{},
 ) int {
 	seen := make(map[string]bool)
 	count := 0
@@ -383,6 +413,13 @@ func countValidCosignatures(
 		// Exclude self-cosignature (signer cosigning their own entry).
 		if entry.Header.SignerDID == pendingEntry.Header.SignerDID {
 			continue
+		}
+		// Sybil defence: signer must be in the authorised set, when
+		// one is provided. A nil authorizedSet disables this check.
+		if authorizedSet != nil {
+			if _, ok := authorizedSet[entry.Header.SignerDID]; !ok {
+				continue
+			}
 		}
 		if seen[entry.Header.SignerDID] {
 			continue

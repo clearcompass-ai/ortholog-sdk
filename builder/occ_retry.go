@@ -146,9 +146,14 @@ func ProcessWithRetry(p ProcessWithRetryParams) (*RetryResult, error) {
 	}
 
 	var (
-		totalDelay  time.Duration
-		aggregate   *BatchResult // accumulates accepted-entry state across attempts
-		pending     = make([]int, len(p.Entries))
+		totalDelay time.Duration
+		// aggregate accumulates accepted-entry state across attempts.
+		// PathFailureReasons is sized to the full batch up front so
+		// mergeAttempt can write per-original-index failure records.
+		aggregate = &BatchResult{
+			PathFailureReasons: make([]error, len(p.Entries)),
+		}
+		pending = make([]int, len(p.Entries))
 	)
 	for i := range pending {
 		pending[i] = i
@@ -230,9 +235,16 @@ func ProcessWithRetry(p ProcessWithRetryParams) (*RetryResult, error) {
 // into the original batch's index space via the pending slice.
 // Mutations and counts are concatenated/accumulated. NewRoot and
 // UpdatedBuffer always reflect the most recent attempt.
+//
+// PathFailureReasons are written at the ORIGINAL batch index so the
+// final aggregate's slice is consumable by callers that hold the
+// original entries slice. A later attempt's non-nil error for a
+// retried index overwrites the earlier error (latest attempt wins).
 func mergeAttempt(agg, attempt *BatchResult, pending []int) *BatchResult {
 	if agg == nil {
-		agg = &BatchResult{}
+		agg = &BatchResult{
+			PathFailureReasons: make([]error, len(pending)),
+		}
 	}
 	agg.PathACounts += attempt.PathACounts
 	agg.PathBCounts += attempt.PathBCounts
@@ -241,6 +253,17 @@ func mergeAttempt(agg, attempt *BatchResult, pending []int) *BatchResult {
 	agg.CommentaryCounts += attempt.CommentaryCounts
 	agg.NewLeafCounts += attempt.NewLeafCounts
 	agg.Mutations = append(agg.Mutations, attempt.Mutations...)
+
+	// Fold per-entry failure reasons into the original index space.
+	for subIdx, reason := range attempt.PathFailureReasons {
+		if reason == nil {
+			continue
+		}
+		origIdx := pending[subIdx]
+		if origIdx < len(agg.PathFailureReasons) {
+			agg.PathFailureReasons[origIdx] = reason
+		}
+	}
 
 	// Rejections are the indices still not applied after this attempt,
 	// remapped to the original batch's index space.

@@ -69,14 +69,48 @@ var ErrHGeneratorExhausted = errors.New("vss: h-generator try-and-increment exha
 //
 // # Security argument that log_G(H) is unknown
 //
-// G is the standard secp256k1 generator with publicly-known
-// coordinates. H is derived from a public seed via a deterministic
-// procedure that does not reference G's coordinates. Computing
-// log_G(H) — finding k such that k·G = H — is precisely the
-// secp256k1 discrete log problem on a uniformly-distributed point.
-// Under the standard ECDLP assumption on secp256k1, no party
-// (including the dealer, the SDK authors, and a future auditor)
-// can compute this k.
+// Claim: Under the ECDLP assumption on secp256k1 and under the
+// random oracle model for SHA-256, log_G(H) is uniformly distributed
+// in [1, n-1] and uncomputable by any polynomial-time adversary —
+// including the author of the HGeneratorSeed constant.
+//
+// Argument in four steps:
+//
+//  1. The seed "ortholog/core/vss/pedersen/h-generator/v1" is a
+//     public ASCII string with no special structure. It is
+//     human-readable text chosen for domain separation, not for any
+//     numerical property. A malicious author who wanted H = k·G for
+//     some known k would need to search for a seed such that, when
+//     hashed with some counter, produces x = (k·G).x. That search
+//     is a second-preimage attack on SHA-256 — assumed infeasible
+//     at the 256-bit security level.
+//
+//  2. The try-and-increment derivation reads only the seed and the
+//     counter as inputs. It never consults G's coordinates, n, or
+//     any pre-existing curve point. The derivation is therefore
+//     G-independent: a correlated seed choice cannot encode a
+//     target discrete log.
+//
+//  3. Under the random oracle model for SHA-256, each candidate
+//     x-coordinate is a uniformly random element of F_p (after the
+//     mod-p reduction). For secp256k1, approximately half of F_p
+//     elements are x-coordinates of curve points; the first
+//     surviving candidate yields H. By the uniformity of the random
+//     oracle, H is a uniformly random point in the secp256k1
+//     subgroup.
+//
+//  4. Computing log_G(H) for a uniformly random H in the secp256k1
+//     subgroup is the elliptic-curve discrete logarithm problem.
+//     Under the standard ECDLP assumption on secp256k1, no
+//     polynomial-time adversary can compute this k.
+//
+// Step 1 is the load-bearing one. The review discipline it imposes:
+// the seed MUST be committed to git at the same time as the
+// derivation code and BEFORE any golden test vector is computed
+// for H. A reviewer can verify this from the git history
+// (HGeneratorSeed and the frozen digest in
+// TestHGenerator_FrozenSeed landed in the same commit). Any
+// future seed rotation must follow the same discipline.
 //
 // # Versioning policy
 //

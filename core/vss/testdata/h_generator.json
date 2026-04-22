@@ -1,0 +1,18 @@
+{
+  "description": "Pedersen second-generator H derivation golden vector. Phase A close-out (v7.75). Cross-implementation anchor: any port of core/vss to another language MUST reproduce these bytes exactly.",
+  "seed": "ortholog/core/vss/pedersen/h-generator/v1",
+  "procedure": "try-and-increment: counter := 0; loop { digest := SHA-256(seed || BE_uint32(counter)); x := digest mod p; if liftable(x): return (x, smaller_y); counter++ }",
+  "curve": "secp256k1",
+  "expected": {
+    "terminating_counter": 1,
+    "x_hex": "fecbefd586833f44a20dba0f7537f3bdef6a369ffdc6596002838ce3e7e54cd1",
+    "y_hex": "2b18176d2854000313ad9fdcd1de41fb0fdc68c2e7ea3e282dc7c55ae53d9c60",
+    "xy_sha256_hex": "48be341b5b443243fe774d74b829b8c64598d288d2999f386b4130643eb2ab09"
+  },
+  "notes": [
+    "The terminating_counter MUST be 1 for this seed. Counter 0 yields an x-coordinate whose x^3 + 7 is a non-residue mod p (no curve point); counter 1 yields a liftable x.",
+    "The y-coordinate is the smaller of the two valid roots of y^2 = x^3 + 7 mod p (canonical tie-break).",
+    "xy_sha256_hex is locked in TestHGenerator_FrozenSeed and is the authoritative change-detector for either coordinate.",
+    "Rotating the seed invalidates every Pedersen commitment ever produced. A rotation is a v1 -> v2 migration with an explicit plan; it is NOT a routine change."
+  ]
+}

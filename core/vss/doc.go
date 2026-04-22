@@ -76,6 +76,51 @@
 //     share's (Value, BlindingFactor) satisfies the commitment
 //     equation at the share's Index. No probabilistic error.
 //
+// # Primitive-only boundary
+//
+// core/vss is the low-level Pedersen primitive. It deliberately
+// exposes only the minimum each consumer actually needs:
+//
+//   - Split / Verify / VerifyPoints / Reconstruct over secp256k1.
+//   - Share and Commitments value types that carry only the fields
+//     the commitment equation uses (Index, Value, BlindingFactor,
+//     CommitmentHash; Points).
+//
+// Everything else belongs to the consuming package:
+//
+//   - SplitID derivation — domain-separated, dealer- and
+//     context-dependent. Escrow splits derive SplitID from
+//     dealer DID + nonce; PRE grants derive it from
+//     (grantor, recipient, artifact). The primitive takes no
+//     opinion on SplitID construction; it's the consumer's
+//     cryptographic responsibility and lives in crypto/escrow
+//     and crypto/artifact.
+//
+//   - Wire format — the 132-byte Share layout (Version, Threshold,
+//     Index, Value, BlindingFactor, CommitmentHash, SplitID,
+//     FieldTag) is defined in crypto/escrow/share_format.go. The
+//     primitive's Share has no notion of a version byte, a
+//     threshold byte, a SplitID, or a scheme FieldTag — those are
+//     wire-format concerns.
+//
+//   - Scheme discriminators — the FieldTag that identifies which
+//     secret-sharing scheme produced a share at rest (0x01 =
+//     GF(256) Shamir, 0x02 = V2 Pedersen) lives in crypto/escrow
+//     because it only makes sense relative to that package's
+//     unified Share struct.
+//
+//   - On-log commentary entries — the escrow-split-commitment-v1
+//     and pre-grant-commitment-v1 schemas (their payload shape,
+//     their builder paths, their equivocation-detection logic) are
+//     Phase D concerns. The primitive emits nothing; consumers
+//     publish.
+//
+// The boundary is not cosmetic: every new dependency would expand
+// the audit surface. Keeping the primitive free of SplitID, wire,
+// and log-entry concerns means the external cryptographic review
+// can sign off core/vss in isolation without needing to read
+// crypto/escrow or builder/* as prerequisites.
+//
 // # Out of scope
 //
 // This package does NOT:
@@ -90,24 +135,28 @@
 // # Threat model
 //
 // Honest dealer, M-of-N reconstruction:
-//   Standard Shamir guarantees apply. Pedersen VSS adds nothing
-//   here beyond the per-share verification convenience.
+//
+//	Standard Shamir guarantees apply. Pedersen VSS adds nothing
+//	here beyond the per-share verification convenience.
 //
 // Faulty dealer, honest shareholders:
-//   Any shareholder can call Verify on their own share and detect
-//   a malformed share without coordinating with anyone. The faulty
-//   dealer cannot construct a share that passes Verify but
-//   reconstructs to a different secret (binding).
+//
+//	Any shareholder can call Verify on their own share and detect
+//	a malformed share without coordinating with anyone. The faulty
+//	dealer cannot construct a share that passes Verify but
+//	reconstructs to a different secret (binding).
 //
 // Faulty shareholder, honest dealer + others:
-//   The faulty shareholder's contribution is detected at
-//   reconstruction time via Verify. The remaining honest
-//   shareholders can complete reconstruction without the bad
-//   share, provided the threshold is still met.
+//
+//	The faulty shareholder's contribution is detected at
+//	reconstruction time via Verify. The remaining honest
+//	shareholders can complete reconstruction without the bad
+//	share, provided the threshold is still met.
 //
 // Adversary observing the commitments:
-//   Learns nothing computationally about the secret beyond what
-//   M-1 shares would reveal (which under Shamir is nothing). The
-//   commitments hide the secret polynomial under the blinding
-//   polynomial.
+//
+//	Learns nothing computationally about the secret beyond what
+//	M-1 shares would reveal (which under Shamir is nothing). The
+//	commitments hide the secret polynomial under the blinding
+//	polynomial.
 package vss

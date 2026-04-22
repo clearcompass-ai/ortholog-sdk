@@ -120,7 +120,7 @@ func TestCountValidCosignatures_RejectsUnboundCosignature(t *testing.T) {
 		buildCosigMetaBug015(t, "did:web:attacker-witness", &unrelatedPos),
 	}
 
-	count := countValidCosignatures(cosigs, pendingEntry, pendingPos)
+	count := countValidCosignatures(cosigs, pendingEntry, pendingPos, nil)
 
 	if count != 0 {
 		t.Fatalf("BUG-015 REGRESSION: counted %d cosignatures bound to "+
@@ -141,7 +141,7 @@ func TestCountValidCosignatures_AcceptsBoundCosignature(t *testing.T) {
 		buildCosigMetaBug015(t, "did:web:witness-1", &pendingPos),
 	}
 
-	count := countValidCosignatures(cosigs, pendingEntry, pendingPos)
+	count := countValidCosignatures(cosigs, pendingEntry, pendingPos, nil)
 
 	if count != 1 {
 		t.Fatalf("expected 1 valid cosignature, got %d. The binding "+
@@ -163,7 +163,7 @@ func TestCountValidCosignatures_ExcludesSelfCosignature(t *testing.T) {
 		buildCosigMetaBug015(t, issuerDID, &pendingPos),
 	}
 
-	count := countValidCosignatures(cosigs, pendingEntry, pendingPos)
+	count := countValidCosignatures(cosigs, pendingEntry, pendingPos, nil)
 
 	if count != 0 {
 		t.Fatalf("self-cosignature exclusion broken: count = %d, want 0", count)
@@ -183,7 +183,7 @@ func TestCountValidCosignatures_DeduplicatesSameSigner(t *testing.T) {
 		buildCosigMetaBug015(t, "did:web:witness-1", &pendingPos),
 	}
 
-	count := countValidCosignatures(cosigs, pendingEntry, pendingPos)
+	count := countValidCosignatures(cosigs, pendingEntry, pendingPos, nil)
 
 	if count != 1 {
 		t.Fatalf("dedup semantics broken: count = %d, want 1", count)

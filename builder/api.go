@@ -185,6 +185,15 @@ type BatchResult struct {
 	// a "rejected counts" scalar should use len(result.RejectedPositions).
 	RejectedPositions []int
 
+	// PathFailureReasons is a parallel slice to the input entries: index
+	// i holds the per-entry error that pushed entries[i] into PathD, or
+	// nil when the entry was accepted or was a legitimate non-error
+	// PathD (e.g., foreign log, missing target). This distinguishes
+	// structural failures (tip regression, missing intermediate, foreign
+	// intermediate) from entries that simply did not qualify for an
+	// authority path. Length always equals len(entries).
+	PathFailureReasons []error
+
 	// UpdatedBuffer is the DeltaWindowBuffer after all Path C
 	// authority-tip advances have been recorded. The operator persists
 	// this between batches so commutative OCC can detect Δ-window
@@ -290,7 +299,9 @@ func ProcessBatch(
 	// and corrupt fraud-proof replay.
 	tree.StartTracking()
 
-	result := &BatchResult{}
+	result := &BatchResult{
+		PathFailureReasons: make([]error, len(entries)),
+	}
 
 	// ─── Per-entry processing loop ─────────────────────────────────
 	//
@@ -315,8 +326,13 @@ func ProcessBatch(
 		if err != nil {
 			// Structural validation error — count as PathD. The tree
 			// mutation pipeline guarantees no partial SMT state from
-			// this entry (compute-then-apply semantics).
+			// this entry (compute-then-apply semantics). Preserve the
+			// concrete error in PathFailureReasons so operators can
+			// distinguish a legitimate PathD (foreign log, missing
+			// target) from a structural failure (tip regression,
+			// foreign intermediate, missing intermediate).
 			pathResult = PathResultPathD
+			result.PathFailureReasons[i] = err
 		}
 
 		switch pathResult {

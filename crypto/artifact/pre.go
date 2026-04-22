@@ -21,6 +21,20 @@
 //   ~200 bytes per CFrag (DLEQ proof overhead)
 //   ~50ms per CFrag verification
 //   KFrag generation touches sk_owner (exchange HSM or enclave)
+//
+// Memory zeroization limits:
+//   The Go runtime makes no guarantee that secret bytes are erased from
+//   heap memory after a variable goes out of scope. Callers explicitly
+//   zero 32-byte scalar / coordinate slices on the best-effort path,
+//   but intermediate *big.Int allocations — scalars, coordinates,
+//   polynomial coefficients — are opaque to user code and may persist
+//   in memory until a subsequent garbage-collection pass reclaims them,
+//   at which point the bytes may or may not be overwritten. Process
+//   memory dumps, swap partitions, and shared-tenant hypervisor
+//   snapshots can therefore capture residual secret material.
+//   Deployments with strict zeroization requirements MUST run
+//   sk_owner operations inside a hardware enclave (HSM or TEE) where
+//   the secret never enters Go-managed memory.
 package artifact
 
 import (
@@ -95,6 +109,9 @@ func PRE_Encrypt(pk []byte, plaintext []byte) (*Capsule, []byte, error) {
 	pkX, pkY := elliptic.Unmarshal(c, pk)
 	if pkX == nil {
 		return nil, nil, errors.New("pre: invalid public key")
+	}
+	if !c.IsOnCurve(pkX, pkY) {
+		return nil, nil, errors.New("pre: owner public key is not on the secp256k1 curve")
 	}
 
 	// r ← random scalar
@@ -178,6 +195,9 @@ func PRE_GenerateKFrags(skOwner, pkRecipient []byte, M, N int) ([]KFrag, error) 
 	rxX, rxY := elliptic.Unmarshal(c, pkRecipient)
 	if rxX == nil {
 		return nil, errors.New("pre: invalid recipient public key")
+	}
+	if !c.IsOnCurve(rxX, rxY) {
+		return nil, errors.New("pre: recipient public key is not on the secp256k1 curve")
 	}
 
 	// sk_owner as big.Int
@@ -303,6 +323,9 @@ func PRE_DecryptFrags(skRecipient []byte, cfrags []*CFrag, capsule *Capsule, cip
 	ownerX, ownerY := elliptic.Unmarshal(c, pkOwner)
 	if ownerX == nil {
 		return nil, errors.New("pre: invalid owner public key")
+	}
+	if !c.IsOnCurve(ownerX, ownerY) {
+		return nil, errors.New("pre: owner public key is not on the secp256k1 curve")
 	}
 
 	// Combine CFrags via Lagrange interpolation in the scalar field.

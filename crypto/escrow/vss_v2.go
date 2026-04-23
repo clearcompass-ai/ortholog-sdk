@@ -29,51 +29,54 @@
 package escrow
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 
 	"github.com/clearcompass-ai/ortholog-sdk/core/vss"
+	"github.com/clearcompass-ai/ortholog-sdk/crypto"
 )
 
-// EscrowSplitDST is the domain separation tag that prefixes every
-// escrow SplitID computation, per ADR-005 §6.1. Changing this
-// string invalidates every escrow SplitID ever produced and requires
-// a protocol version bump — not a routine change.
-const EscrowSplitDST = "ORTHOLOG-V7.75-ESCROW-SPLIT"
+// escrowSplitIDDST is the domain-separation tag for the escrow
+// SplitID derivation, pinned by ADR-005 §2. The DST is unversioned
+// because the derivation's input domain — (dealerDID, nonce) — is a
+// minimal tuple with no foreseeable evolution path; if the escrow
+// construction ever changes substantively enough to warrant a new
+// DST, the new construction is a different primitive and earns a
+// new unversioned DST at that time.
+//
+// Any implementation emitting or verifying escrow SplitIDs under a
+// different DST is non-conforming.
+const escrowSplitIDDST = "ORTHOLOG-V7.75-ESCROW-SPLIT"
 
 // ComputeEscrowSplitID derives the escrow SplitID for a given
-// dealer DID and nonce, per ADR-005 §6.1:
+// dealer DID and nonce, per ADR-005 §2:
 //
-//	SplitID = SHA-256(
-//	    "ORTHOLOG-V7.75-ESCROW-SPLIT"   (27 bytes ASCII)
-//	    || BE_uint16(len(dealerDID))    (2 bytes)
-//	    || dealerDID                    (caller-normalised UTF-8)
-//	    || nonce                        (32 bytes)
+//	SplitID = LengthPrefixed(
+//	    "ORTHOLOG-V7.75-ESCROW-SPLIT",
+//	    dealerDID,
+//	    nonce[:],
 //	)
 //
-// Exposed as a public helper so Phase D builders can compute SplitID
-// without re-implementing the derivation. Tests and auditors also
-// use it to reproduce fixtures.
+// The 32-byte nonce is length-prefixed uniformly with the rule even
+// though it is a fixed-size field at the type level. Applying the
+// rule uniformly beats case-by-case reasoning about "truly fixed"
+// fields: the marginal byte cost is trivial and the invariant that
+// every hashed component is length-framed becomes mechanical rather
+// than conditional.
+//
+// Exposed as a public helper so builders, verifiers, and recovery
+// clients can reproduce the derivation without re-implementing it.
+//
+// # Caller-normalizes contract
 //
 // NFC normalisation of dealerDID is the CALLER's responsibility.
-// Phase B does not force normalisation (would pull in golang.org/x/text
-// for a property SDK-produced DIDs already satisfy). Production
-// callers that accept DIDs from external input MUST normalise before
-// calling; ADR-005 §6.5 documents the discipline.
+// The SDK does not force normalisation (it would require pulling in
+// golang.org/x/text for a property SDK-produced DIDs already
+// satisfy). Production callers that accept DIDs from external input
+// MUST normalise before calling; ADR-005 §2 documents the discipline.
 func ComputeEscrowSplitID(dealerDID string, nonce [32]byte) [32]byte {
-	h := sha256.New()
-	h.Write([]byte(EscrowSplitDST))
-	var didLen [2]byte
-	binary.BigEndian.PutUint16(didLen[:], uint16(len(dealerDID)))
-	h.Write(didLen[:])
-	h.Write([]byte(dealerDID))
-	h.Write(nonce[:])
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
+	return crypto.LengthPrefixed(escrowSplitIDDST, []byte(dealerDID), nonce[:])
 }
 
 // SplitV2 produces N Pedersen-verifiable shares of a 32-byte secret

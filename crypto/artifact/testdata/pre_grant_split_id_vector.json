@@ -1,0 +1,9 @@
+{
+  "description": "Golden vector for ComputePREGrantSplitID per ADR-005 §2. The SplitID is LengthPrefixed(\"ORTHOLOG-V7.75-PRE-GRANT-SPLIT-ID-v1\", grantorDID_bytes, recipientDID_bytes, artifactCID.Bytes()). Any deviation from this digest is a cross-implementation compatibility break.",
+  "dst": "ORTHOLOG-V7.75-PRE-GRANT-SPLIT-ID-v1",
+  "grantor_did": "did:web:example.com:grantor",
+  "recipient_did": "did:web:example.com:recipient",
+  "artifact_cid_source_bytes_utf8": "artifact/1",
+  "artifact_cid_bytes_hex": "1225cc5b41c940d5bc98c1afc98a179ff109f871138808f9311d9ca5e037110ab9",
+  "expected_split_id_hex": "c700139613f359d253e95b2a47cbdb566a89412df785e4cb2cb7a32239610879"
+}

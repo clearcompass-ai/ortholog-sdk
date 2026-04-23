@@ -1,0 +1,7 @@
+{
+  "description": "Golden vector for ComputeEscrowSplitID per ADR-005 §2 (v7.75 migration). The SplitID is LengthPrefixed(\"ORTHOLOG-V7.75-ESCROW-SPLIT\", dealerDID_bytes, nonce[:]). The 32-byte nonce is length-prefixed uniformly with the rule even though it is a fixed-size field — applying the rule uniformly beats case-by-case reasoning about truly-fixed fields. Any deviation from this digest is a cross-implementation compatibility break.",
+  "dst": "ORTHOLOG-V7.75-ESCROW-SPLIT",
+  "dealer_did": "did:web:example.com:dealer1",
+  "nonce_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "expected_split_id_hex": "4313d8d491e6e2ddfbe60c5aeb898dabbc8bd449b10c04eeb1c4cdde73039128"
+}

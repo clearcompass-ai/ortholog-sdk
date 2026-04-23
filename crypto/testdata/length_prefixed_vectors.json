@@ -1,0 +1,32 @@
+{
+  "description": "Golden vectors for crypto.LengthPrefixed per ADR-005 §2. Each vector pins the SHA-256 digest of the length-prefixed encoding of (DST, fields...). Any change to the encoding rule or to the digest values is a compatibility break.",
+  "vectors": [
+    {
+      "name": "empty_dst_empty_field",
+      "dst": "",
+      "fields_hex": [""],
+      "expected_hex": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119"
+    },
+    {
+      "name": "empty_dst_standard_field",
+      "dst": "",
+      "fields_hex": ["68656c6c6f"],
+      "expected_hex": "9c015ac18bb70481f467bb1fadb4f9e6ee93a1c093f15839bb55b425d7cea994"
+    },
+    {
+      "name": "standard_dst_empty_field",
+      "dst": "ORTHOLOG-TEST",
+      "fields_hex": [""],
+      "expected_hex": "d0fed582fbc777a21946f1f09081f36295bc8f3dc3572d92cb01004258cae389"
+    },
+    {
+      "name": "pre_grant_canonical",
+      "description": "Canonical PRE Grant SplitID case: grantor DID, recipient DID, and CID.Bytes() (algo byte 0x12 || SHA-256(\"artifact-content\")).",
+      "dst": "ORTHOLOG-V7.75-PRE-GRANT-SPLIT-ID-v1",
+      "grantor_did": "did:web:example.com:grantor",
+      "recipient_did": "did:web:example.com:recipient",
+      "artifact_cid_hex": "12e7ba55ec4b1cbb1e2a7f7c8a959e545f4db0230bf1e0a84396990601a1cd63ed",
+      "expected_hex": "5b67547015a6af4413b9f2e9fe9cbffa435c27584f334642a82e207173b66416"
+    }
+  ]
+}

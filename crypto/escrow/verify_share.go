@@ -119,10 +119,16 @@ func validateShareFormatV2(s Share) error {
 			ErrV2FieldEmpty, s.Index,
 		)
 	}
-	if s.FieldTag != 0 && s.FieldTag != SchemePedersenTag {
+	if s.FieldTag != SchemePedersenTag {
+		// V2 is a new scheme — no legacy unstamped shares exist
+		// in the wild. The V1 path tolerates FieldTag == 0 for
+		// pre-discriminator shares produced before the field was
+		// added; V2 has no such history. Require SchemePedersenTag
+		// strictly so that a future scheme V3 with its own tag is
+		// not silently accepted at the V2 gate.
 		return fmt.Errorf(
-			"%w: V2 share with non-Pedersen field tag 0x%02x",
-			ErrUnknownFieldTag, s.FieldTag,
+			"%w: V2 share requires FieldTag 0x%02x (Pedersen), got 0x%02x",
+			ErrUnknownFieldTag, SchemePedersenTag, s.FieldTag,
 		)
 	}
 	return nil

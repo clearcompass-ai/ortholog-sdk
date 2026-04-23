@@ -225,8 +225,13 @@ func ReconstructV2(shares []Share, commitments vss.Commitments) ([]byte, error) 
 	// into a Pedersen "must produce right secret or loud error".
 	// Every share is checked; the first failure aborts with an
 	// index-tagged error so operators can attribute.
+	//
+	// We skip the structural ValidateShareFormat call here because
+	// VerifyShareSet (above) already ran it on every share. The
+	// crypto-only path verifyShareCryptoOnly does just the Pedersen
+	// equation check + commitment-hash match.
 	for i, s := range shares {
-		if err := VerifyShareAgainstCommitments(s, commitments); err != nil {
+		if err := verifyShareCryptoOnly(s, commitments); err != nil {
 			return nil, fmt.Errorf(
 				"escrow/reconstruct_v2: share at slot %d (index %d): %w",
 				i, s.Index, err,
@@ -292,13 +297,27 @@ func VerifyShareAgainstCommitments(s Share, commitments vss.Commitments) error {
 	if err := ValidateShareFormat(s); err != nil {
 		return err
 	}
+	return verifyShareCryptoOnly(s, commitments)
+}
+
+// verifyShareCryptoOnly runs ONLY the cryptographic check —
+// CommitmentHash match + Pedersen polynomial-consistency equation.
+// The caller is responsible for ensuring the share has already been
+// structurally validated (Version, Index, SplitID, non-zero V2
+// fields). This is the function ReconstructV2 uses after
+// VerifyShareSet to avoid running ValidateShareFormat twice per
+// share.
+//
+// Public callers should use VerifyShareAgainstCommitments instead;
+// this internal entry point exists only to skip redundant work
+// inside the package's own pipeline.
+func verifyShareCryptoOnly(s Share, commitments vss.Commitments) error {
 	if commitments.Threshold() == 0 {
 		return fmt.Errorf("escrow/verify_share: empty commitment set")
 	}
-
 	// Delegate the actual Pedersen check to the primitive. The
 	// primitive already performs CommitmentHash match, on-curve
-	// point validation, and the g^f(i)·h^r(i) == Σ i^j·C_j equation.
+	// point validation, and the f(i)·G + r(i)·H == Σ i^j·C_j equation.
 	coreShare := vss.Share{
 		Index:          s.Index,
 		Value:          s.Value,
@@ -317,11 +336,23 @@ func VerifyShareAgainstCommitments(s Share, commitments vss.Commitments) error {
 // as an early filter at distribution time when a node has the hash
 // cached but not yet the full commitment set.
 //
-// Returns nil iff share.CommitmentHash == commitments.Hash(). Does
-// NOT imply the share is a valid Pedersen share — callers MUST
+// Returns nil iff share.Version == V2 AND share.CommitmentHash ==
+// commitments.Hash(). A V1 share fails the version gate immediately
+// (its CommitmentHash is always zero by V1 contract — comparing zero
+// against a real hash would also fail, but failing on version first
+// gives a clearer error and prevents accidental V1-via-zero-hash
+// confusion).
+//
+// Does NOT imply the share is a valid Pedersen share — callers MUST
 // follow up with VerifyShareAgainstCommitments for the cryptographic
 // check.
 func VerifyShareAgainstCommitmentHash(s Share, commitments vss.Commitments) error {
+	if s.Version != VersionV2 {
+		return fmt.Errorf(
+			"%w: VerifyShareAgainstCommitmentHash requires V2, got 0x%02x",
+			ErrUnsupportedVersion, s.Version,
+		)
+	}
 	expected := commitments.Hash()
 	if s.CommitmentHash != expected {
 		return fmt.Errorf(

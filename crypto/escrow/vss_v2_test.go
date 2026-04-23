@@ -677,6 +677,67 @@ func TestVerifyShareAgainstCommitmentHash_MatchAndMismatch(t *testing.T) {
 	}
 }
 
+// TestVerifyShareAgainstCommitmentHash_RejectsV1 locks the Version
+// gate added in Phase B polish: a V1 share is rejected at the
+// version check, never reaching the hash comparison. This
+// prevents accidental V1-via-zero-hash confusion if a real
+// commitments.Hash() ever happened to equal the all-zero V1
+// CommitmentHash (astronomically unlikely, but worth gating).
+func TestVerifyShareAgainstCommitmentHash_RejectsV1(t *testing.T) {
+	secret := v2TestSecret()
+	_, commits, _, err := SplitV2(secret, 3, 5, v2TestDealerDID, v2TestNonce())
+	if err != nil {
+		t.Fatalf("SplitV2: %v", err)
+	}
+	v1 := validV1Share(1, 3)
+	err = VerifyShareAgainstCommitmentHash(v1, commits)
+	if !errors.Is(err, ErrUnsupportedVersion) {
+		t.Fatalf("V1 share at hash-only path: want ErrUnsupportedVersion, got %v", err)
+	}
+}
+
+// TestValidateShareFormatV2_RejectsZeroFieldTag locks the strict
+// FieldTag check added in Phase B polish. V2 has no legacy unstamped
+// shares (it's a new scheme), so FieldTag == 0 is malformed even
+// though the V1 path tolerates it.
+//
+// Mutation discipline: if the FieldTag check is loosened back to
+// `s.FieldTag != 0 && s.FieldTag != SchemePedersenTag`, this test
+// fails — the strict gate is the only thing rejecting FieldTag=0
+// shares.
+func TestValidateShareFormatV2_RejectsZeroFieldTag(t *testing.T) {
+	secret := v2TestSecret()
+	shares, _, _, err := SplitV2(secret, 3, 5, v2TestDealerDID, v2TestNonce())
+	if err != nil {
+		t.Fatalf("SplitV2: %v", err)
+	}
+	bad := shares[0]
+	bad.FieldTag = 0
+	err = ValidateShareFormat(bad)
+	if !errors.Is(err, ErrUnknownFieldTag) {
+		t.Fatalf("V2 share with FieldTag=0: want ErrUnknownFieldTag, got %v", err)
+	}
+}
+
+// TestValidateShareFormatV2_RejectsForeignFieldTag covers the other
+// half of the strict gate: a tag that is neither 0 nor
+// SchemePedersenTag is rejected. Specifically defends against a
+// V3 (or any future scheme) share being silently accepted by the
+// V2 path because its tag is non-zero and "looks valid enough."
+func TestValidateShareFormatV2_RejectsForeignFieldTag(t *testing.T) {
+	secret := v2TestSecret()
+	shares, _, _, err := SplitV2(secret, 3, 5, v2TestDealerDID, v2TestNonce())
+	if err != nil {
+		t.Fatalf("SplitV2: %v", err)
+	}
+	bad := shares[0]
+	bad.FieldTag = 0xEE
+	err = ValidateShareFormat(bad)
+	if !errors.Is(err, ErrUnknownFieldTag) {
+		t.Fatalf("V2 share with foreign FieldTag: want ErrUnknownFieldTag, got %v", err)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Input-validation edges
 // ─────────────────────────────────────────────────────────────────

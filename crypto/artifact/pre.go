@@ -1,8 +1,5 @@
-// Package artifact — pre.go implements Umbral Threshold Proxy Re-Encryption
-// on secp256k1 with Pedersen VSS binding (v7.75, ADR-005 Draft 3).
-//
-// Pure crypto functions. Stateless. No DID resolution needed.
-// Callers resolve DIDs to public keys before calling these.
+// Package artifact implements Umbral Threshold Proxy Re-Encryption
+// on secp256k1 with Pedersen VSS binding (ADR-005).
 //
 // Relationship to AES-256-GCM (api.go):
 //
@@ -11,7 +8,7 @@
 //	Composable: Umbral wraps/transforms the AES key
 //	Schemas declare which access model: aes_gcm | umbral_pre
 //
-// v7.75 cryptographic binding (ADR-005 §3.5):
+// Cryptographic binding (ADR-005 §3.5):
 //
 //	KFrags and CFrags carry a Pedersen commitment BK_i = b_i·H.
 //	CFrag verification gates on two independent checks:
@@ -30,19 +27,18 @@
 //	(a proxy could present a valid (VK, BK) pair without having
 //	used rk_i for re-encryption).
 //
-// Combine-before-verify defense (ADR-005 §3.5, G2):
+// Combine-before-verify defense (ADR-005 §3.5):
 //
 //	PRE_DecryptFrags verifies every CFrag against the commitment
 //	set BEFORE Lagrange combination. Combination of unverified
 //	CFrags is the substitution vulnerability this package closes.
 //	The verification gate lives in the primitive, not in callers;
 //	a caller that forgets verification cannot reintroduce the
-//	v7.5 attack window.
+//	attack window.
 //
 // Wire format (ADR-005 §8.3):
 //
-//	v7.5  CFrag: 163 bytes, no Pedersen binding.
-//	v7.75 CFrag: 196 bytes.
+//	CFrag: 196 bytes.
 //
 //	Offset  Length  Field
 //	   0      33    E'       (compressed)
@@ -52,9 +48,6 @@
 //	 100      32    ProofE   (DLEQ challenge, F_n)
 //	 132      32    ProofZ   (DLEQ response,  F_n)
 //	 164      32    Reserved (MUST be zero)
-//
-//	A v7.5 verifier handed a v7.75 CFrag rejects at length;
-//	and vice versa. Length is the version discriminator.
 //
 // Blinding scalar isolation (ADR-005 §3.5.1):
 //
@@ -72,12 +65,16 @@
 //	effort path, but intermediate *big.Int allocations are opaque
 //	to user code and may persist in memory until a subsequent GC
 //	pass reclaims them, at which point the bytes may or may not be
-//	overwritten. Process memory dumps, swap partitions, and shared-
-//	tenant hypervisor snapshots can therefore capture residual
-//	secret material. Deployments with strict zeroization
-//	requirements MUST run sk_owner operations inside a hardware
-//	enclave (HSM or TEE) where the secret never enters Go-managed
-//	memory.
+//	overwritten. Deployments with strict zeroization requirements
+//	MUST run sk_owner operations inside a hardware enclave (HSM or
+//	TEE) where the secret never enters Go-managed memory.
+//
+// Mutation audit switches (see muEnable* constants below):
+//
+//	Each security gate reads a boolean compile-time constant to
+//	determine whether to enforce. Set all constants to true for
+//	production; flip one to false and rerun tests to audit the
+//	corresponding test suite's coverage of that gate.
 package artifact
 
 import (
@@ -95,15 +92,156 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/core/vss"
 )
 
+// ═════════════════════════════════════════════════════════════════════
+//
+//                    ⚠️  MUTATION AUDIT SWITCHES  ⚠️
+//
+//    ┌────────────────────────────────────────────────────────────┐
+//    │                                                            │
+//    │  STOP. READ THIS BEFORE MODIFYING ANY muEnable* CONSTANT.  │
+//    │                                                            │
+//    └────────────────────────────────────────────────────────────┘
+//
+// Setting any of these constants to `false` DISABLES a production
+// security gate. The SDK becomes exploitable. Never commit a value
+// of `false`. Never deploy a build produced with `false`. Never
+// release a tag with `false`. Any `false` you see below is a merge
+// blocker and a release blocker.
+//
+// These exist solely to satisfy the mutation discipline audit
+// required by ADR-005 §9.2. Each switch maps to specific tests
+// that MUST fail when the gate is disabled. If the tests pass
+// with a gate disabled, the tests are fake and the SDK is
+// provably untested — a finding that must be fixed before Phase C
+// closes.
+//
+// Mutation audit procedure (run once before every release):
+//
+//	for each muEnable* constant:
+//	   1. set the constant to false
+//	   2. run the "Tests that MUST fail" listed in its comment
+//	   3. verify those tests fail
+//	   4. set the constant back to true
+//	   5. rerun those tests and verify they pass
+//	   6. stage the change in git — if the diff is anything other
+//	      than `true` on both endpoints, STOP and investigate
+//
+// A pre-commit hook or CI check SHOULD grep for `muEnable.*= false`
+// and fail the build if any match is found. (See scripts/ci-check.sh)
+//
+// ═════════════════════════════════════════════════════════════════════
+
+const (
+	// muEnableCommitmentsGate controls the empty-commitments gate
+	// shared by PRE_VerifyCFrag and PRE_DecryptFrags.
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: PRE_* accepts empty/zero-threshold commitments and
+	// proceeds into verification. Rejection still happens deeper
+	// (vss package detects empty commitments and errors on transcript
+	// construction), but with a wrong error shape and no early bail.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestDecryptFrags_RequiresCommitments
+	//   - TestPRE_EmptyCommitments_Rejected
+	muEnableCommitmentsGate = true
+
+	// muEnableOnCurveGate controls the on-curve check for VK, E',
+	// and capsule.E in PRE_VerifyCFrag.
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: malformed points that happen to deserialize can
+	// reach the subsequent cryptographic arithmetic. Most paths will
+	// still fail deeper (decompressPoint validates y²=x³+7), but
+	// this gate is the first defense and the fastest rejection.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestPRE_VerifyCFrag_NilCFrag (indirectly)
+	//   - Tests that construct off-curve points explicitly
+	muEnableOnCurveGate = true
+
+	// muEnableDLEQCheck controls ADR-005 §3.5 CHECK 1: DLEQ proof
+	// verification.
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: a malicious proxy can forge E' without using a
+	// consistent rk_i. Substituting ProofE, ProofZ, VK, or E' is
+	// accepted. Pedersen check still catches some of these via
+	// independent defense-in-depth, but proof-value tamper (ProofE,
+	// ProofZ) and some E' substitutions pass silently.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestPRE_SubstitutedEPrime_Rejected
+	//   - TestPRE_SubstitutedProofE_Rejected
+	//   - TestPRE_SubstitutedProofZ_Rejected
+	//
+	// Tests that may still pass (due to Pedersen defense-in-depth):
+	//   - TestPRE_SubstitutedVK_Rejected
+	//   - TestPRE_AdaptiveBK_Rejected
+	muEnableDLEQCheck = true
+
+	// muEnablePedersenCheck controls ADR-005 §3.5 CHECK 2: Pedersen
+	// polynomial-consistency binding.
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: the SDK regresses to the v7.5 coalition-attack
+	// vulnerability. A coalition of M compromised proxies can agree
+	// on a forged rk', produce internally-consistent DLEQ proofs,
+	// and decrypt any capsule granted through them. This is the
+	// headline attack ADR-005 exists to prevent.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestPRE_SubstitutedRKShare_Rejected
+	//   - TestPRE_CoalitionAttack_Rejected
+	//   - TestPRE_WrongCommitments_Rejected
+	muEnablePedersenCheck = true
+
+	// muEnableSufficientCFragsGate controls the threshold-sufficiency
+	// check in PRE_DecryptFrags.
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: PRE_DecryptFrags accepts fewer than M CFrags and
+	// proceeds to verify-then-combine. The subsequent Lagrange
+	// interpolation produces a mathematically-meaningless result
+	// (not the intended secret), AES-GCM decryption fails, and the
+	// caller gets a cryptic decrypt error instead of a clean
+	// insufficient-CFrags rejection.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestDecryptFrags_InsufficientCFrags
+	muEnableSufficientCFragsGate = true
+
+	// muEnableVerifyBeforeCombine controls the per-CFrag verification
+	// loop in PRE_DecryptFrags (the gateAllCFragsVerify gate).
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: Lagrange combination proceeds over UNVERIFIED
+	// CFrags. This reintroduces the v7.5 substitution attack window
+	// at the decrypt layer: attacker-chosen CFrags combine into an
+	// attacker-chosen re-encryption key, and decryption succeeds
+	// with attacker-controlled output. The ADR-005 §3.5 "combine-
+	// before-verify" invariant is broken.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestDecryptFrags_VerifiesEveryFrag
+	//   - TestDecryptFrags_NilCFragRejected
+	muEnableVerifyBeforeCombine = true
+)
+
+// ═════════════════════════════════════════════════════════════════════
+// END MUTATION AUDIT SWITCHES
+// ═════════════════════════════════════════════════════════════════════
+
 // ─────────────────────────────────────────────────────────────────────
 // Curve helpers
 // ─────────────────────────────────────────────────────────────────────
 
-// curve returns the secp256k1 curve as an elliptic.Curve.
-// v7.75 Phase A′ migrated this package from github.com/dustinxie/ecc
-// to github.com/decred/dcrd/dcrec/secp256k1/v4. Wire formats are
-// unchanged — the curve math is identical; only the backing library
-// differs.
 func curve() elliptic.Curve { return secp256k1.S256() }
 func curveN() *big.Int      { return curve().Params().N }
 func curveP() *big.Int      { return curve().Params().P }
@@ -133,9 +271,12 @@ var (
 	ErrInvalidKFragFormat = errors.New("pre: KFrag wire format invalid")
 
 	// ErrEmptyCommitments is returned when a verifier is handed an
-	// empty commitment set, or when PRE_GenerateKFrags produces one
-	// (defensive; should not occur in correct flows).
+	// empty commitment set.
 	ErrEmptyCommitments = errors.New("pre: empty commitment set")
+
+	// ErrInsufficientCFrags is returned when fewer CFrags than the
+	// threshold M are supplied to PRE_DecryptFrags.
+	ErrInsufficientCFrags = errors.New("pre: insufficient cfrags for threshold")
 
 	// ErrInvalidPoint is returned when a point argument is nil or
 	// off-curve.
@@ -143,9 +284,7 @@ var (
 
 	// ErrReservedBytesNonZero is returned by DeserializeCFrag when
 	// the 32-byte reserved zone (offset 164..195) contains any
-	// non-zero byte. Reserved bytes are forward-compatibility space
-	// for v8; v7.75 deserializers reject non-zero to prevent silent
-	// acceptance of future CFrag extensions.
+	// non-zero byte.
 	ErrReservedBytesNonZero = errors.New("pre: CFrag reserved bytes must be zero")
 )
 
@@ -153,14 +292,11 @@ var (
 // Wire constants (ADR-005 §8.3)
 // ─────────────────────────────────────────────────────────────────────
 
-// CFragWireLen is the fixed on-wire size of a v7.75 serialized CFrag
-// per ADR-005 §8.3. 196 bytes: 132 bytes of point content (E', VK, BK),
+// CFragWireLen is the fixed on-wire size of a serialized CFrag per
+// ADR-005 §8.3. 196 bytes: 132 bytes of point content (E', VK, BK),
 // 1 byte ID, 64 bytes DLEQ proof (ProofE, ProofZ), 32 bytes reserved.
 const CFragWireLen = 196
 
-// cfragOffsetEPrime and friends locate each field in the wire buffer.
-// These are the canonical offsets per ADR-005 §8.3. Serializer and
-// deserializer MUST use these constants; inlining them risks drift.
 const (
 	cfragOffsetEPrime   = 0
 	cfragOffsetVK       = 33
@@ -180,78 +316,60 @@ const KFragBKLen = 33
 // ─────────────────────────────────────────────────────────────────────
 
 // Capsule is the curve point pair produced during encryption.
-// Contains the ephemeral point E and verification point V.
-// Capsule contains only curve points — no private material.
-// Stored in Domain Payload permanently. Any party with capsule +
-// M cfrags + sk_recipient can decrypt.
+// Contains the ephemeral point E and verification point V. Capsule
+// contains only curve points — no private material. Stored in Domain
+// Payload permanently. Any party with capsule + M cfrags +
+// sk_recipient can decrypt.
 //
-// SECURITY: V = r * U where U = hashToPoint(pk_owner). V is NOT the
-// DH shared secret (r * pk_owner). The DH shared secret is computed
-// internally during encryption and NEVER stored in the capsule. V
-// serves only as a binding proof that E was generated for a specific
-// pk_owner.
+// V = r * U where U = hashToPoint(pk_owner). V is NOT the DH shared
+// secret (r * pk_owner). The DH shared secret is computed internally
+// during encryption and NEVER stored in the capsule. V serves only
+// as a binding proof that E was generated for a specific pk_owner.
 type Capsule struct {
-	EX, EY   *big.Int // E = r * G (ephemeral public key)
-	VX, VY   *big.Int // V = r * U where U = hashToPoint(pk_owner)
-	CheckVal [32]byte // H(E || V) for capsule integrity
+	EX, EY   *big.Int
+	VX, VY   *big.Int
+	CheckVal [32]byte
 }
 
-// KFrag is a re-encryption key fragment (v7.75 wire format).
-// M-of-N threshold; each KFrag is independently verifiable.
-//
-// Fields populated by the OWNER at PRE_GenerateKFrags:
-//   - ID, RKShare, VKX/VKY  — Umbral re-encryption share
-//   - BK                    — Pedersen commitment to the blinding scalar
+// KFrag is a re-encryption key fragment. M-of-N threshold; each
+// KFrag is independently verifiable.
 //
 // The blinding scalar b_i is owner-local (ADR-005 §3.5.1): computed
 // inside PRE_GenerateKFrags, used once to compute BK = b_i·H, then
 // zeroized. It does NOT appear in this struct. The proxy receives BK
 // as opaque bytes and relays it to the verifier via the CFrag.
 //
-// Proxies holding KFrags should call ZeroizeKFrag on end-of-life to
-// clear the RKShare scalar (the proxy's secret material).
+// Proxies should call ZeroizeKFrag on end-of-life to clear the
+// RKShare scalar.
 type KFrag struct {
-	ID       byte             // Share index (1-based, 1..255)
-	RKShare  *big.Int         // Shamir share of the re-encryption key (scalar)
-	VKX, VKY *big.Int         // Verification key VK_i = RKShare * G
-	BK       [KFragBKLen]byte // Pedersen commitment BK_i = b_i·H (compressed).
-	// Opaque to the proxy. Relayed verbatim to CFrag for verifier consumption.
+	ID       byte
+	RKShare  *big.Int
+	VKX, VKY *big.Int
+	BK       [KFragBKLen]byte
 }
 
 // CFrag is a ciphertext fragment produced by re-encrypting with one
-// KFrag. v7.75 extends the v7.5 CFrag with BK_i; wire length grows
-// from 163 to 196 bytes (ADR-005 §8.3).
+// KFrag. Wire length 196 bytes (ADR-005 §8.3).
 //
 // ProofE and ProofZ together are the Schnorr-style DLEQ proof. The
 // challenge ProofE is on the wire so the verifier can reconstruct R
 // and R' from the response; the locked transcript (vss.DLEQChallenge)
 // then gates the challenge against adaptive BK selection.
 type CFrag struct {
-	EPrimeX, EPrimeY *big.Int         // E' = rk_i * capsule.E
-	ID               byte             // KFrag ID this came from
-	VKX, VKY         *big.Int         // VK_i = rk_i·G, carried for verifier convenience
-	BK               [KFragBKLen]byte // Pedersen commitment BK_i (compressed), copied from KFrag
-	ProofE           *big.Int         // DLEQ challenge, mod n
-	ProofZ           *big.Int         // DLEQ response z = t + e·rk_i mod n
+	EPrimeX, EPrimeY *big.Int
+	ID               byte
+	VKX, VKY         *big.Int
+	BK               [KFragBKLen]byte
+	ProofE           *big.Int
+	ProofZ           *big.Int
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // ZeroizeKFrag — lifecycle-end zeroization helper
 // ─────────────────────────────────────────────────────────────────────
 
-// ZeroizeKFrag zeros the secret material in a KFrag after the proxy
-// no longer needs it. Best-effort on *big.Int per the package-level
-// zeroization note. Safe to call on nil (no-op).
-//
-// Fields zeroed:
-//   - RKShare (secret scalar — proxy's re-encryption share)
-//   - BK (not secret, but cleared for consistency and to prevent stale
-//     KFrag reuse by a confused caller)
-//   - ID (reset to 0)
-//
-// VKX/VKY are not zeroed — they are public curve points; clearing them
-// adds no security and may cause nil-pointer panics if the caller
-// accidentally references them post-zeroize.
+// ZeroizeKFrag zeros the secret material in a KFrag. Best-effort on
+// *big.Int per the package-level zeroization note. Safe on nil.
 func ZeroizeKFrag(kf *KFrag) {
 	if kf == nil {
 		return
@@ -266,20 +384,17 @@ func ZeroizeKFrag(kf *KFrag) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// PRE_Encrypt — unchanged from v7.5
+// PRE_Encrypt
 // ─────────────────────────────────────────────────────────────────────
 
 // PRE_Encrypt encrypts plaintext for pk_owner using an ephemeral DH
 // key exchange. Returns a Capsule (public, storable in Domain
 // Payload) and ciphertext.
 //
-// pk is the master public key (secp256k1 uncompressed, 65 bytes).
-//
-// SECURITY: The DH shared secret (r * pk_owner) is used to derive the
-// DEM key but is NEVER stored in the capsule. The capsule's V field
-// is r * U where U = hashToPoint(pk_owner) — a secondary generator
-// that binds the capsule to pk_owner without leaking the shared
-// secret.
+// The DH shared secret (r * pk_owner) is used to derive the DEM key
+// but is NEVER stored in the capsule. The capsule's V field is
+// r * U where U = hashToPoint(pk_owner) — a secondary generator that
+// binds the capsule to pk_owner without leaking the shared secret.
 func PRE_Encrypt(pk []byte, plaintext []byte) (*Capsule, []byte, error) {
 	c := curve()
 	pkX, pkY := elliptic.Unmarshal(c, pk)
@@ -290,30 +405,23 @@ func PRE_Encrypt(pk []byte, plaintext []byte) (*Capsule, []byte, error) {
 		return nil, nil, errors.New("pre: owner public key is not on the secp256k1 curve")
 	}
 
-	// r ← random scalar in [1, n-1]
 	r, err := rand.Int(rand.Reader, curveN())
 	if err != nil {
 		return nil, nil, fmt.Errorf("pre: generating random: %w", err)
 	}
 
-	// E = r * G
 	eX, eY := c.ScalarBaseMult(padBigInt(r))
-
-	// Shared secret = r * pk_owner (used for DEM key, NEVER stored)
 	sharedX, sharedY := c.ScalarMult(pkX, pkY, padBigInt(r))
 	demKey := kdf(sharedX, sharedY)
 
-	// V = r * U where U = hashToPoint(pk_owner)
 	uX, uY := hashToPoint(pk)
 	vX, vY := c.ScalarMult(uX, uY, padBigInt(r))
 
-	// Encrypt plaintext with AES-256-GCM
 	ct, err := aesGCMEncrypt(demKey[:], plaintext)
 	if err != nil {
 		return nil, nil, fmt.Errorf("pre: encrypting: %w", err)
 	}
 
-	// Check value for capsule integrity
 	check := hashPoints(eX, eY, vX, vY)
 
 	return &Capsule{
@@ -324,49 +432,32 @@ func PRE_Encrypt(pk []byte, plaintext []byte) (*Capsule, []byte, error) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// PRE_Decrypt — unchanged from v7.5
+// PRE_Decrypt
 // ─────────────────────────────────────────────────────────────────────
 
 // PRE_Decrypt decrypts ciphertext using sk_owner and the capsule.
-// Direct decryption — no re-encryption involved. sk is the private
-// key scalar as 32 bytes (big-endian).
+// Direct decryption — no re-encryption involved.
 func PRE_Decrypt(sk []byte, capsule *Capsule, ciphertext []byte) ([]byte, error) {
 	if capsule == nil {
 		return nil, errors.New("pre: nil capsule")
 	}
 	c := curve()
-
-	// V' = sk_owner * E
 	vX, vY := c.ScalarMult(capsule.EX, capsule.EY, sk)
-
-	// DEM key = KDF(V')
 	demKey := kdf(vX, vY)
-
 	return aesGCMDecrypt(demKey[:], ciphertext)
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// PRE_GenerateKFrags (v7.75) — returns Pedersen commitments
+// PRE_GenerateKFrags
 // ─────────────────────────────────────────────────────────────────────
 
 // PRE_GenerateKFrags generates N threshold re-encryption key
 // fragments plus the Pedersen commitment set that Phase D consumers
-// MUST publish on-log before distributing KFrags to proxies.
-//
-// BREAKING CHANGE vs v7.5: adds vss.Commitments as a return value.
-// Callers in v7.5 captured two return values (kfrags, err); v7.75
-// callers capture three (kfrags, commitments, err).
-//
-// The commitment set is the grant's cryptographic anchor. Any party
-// holding (CFrag, commitments, pkOwner, pkRecipient) can verify the
-// CFrag without interaction with the owner or proxy. Phase D
-// publishes the commitment set via the pre-grant-commitment-v1
-// schema before the first KFrag is distributed to any proxy.
+// publish on-log before distributing KFrags to proxies.
 //
 // Blinding scalar isolation (ADR-005 §3.5.1): b_i is consumed on the
-// iteration that produces BK_i, then zeroized in the source vss.Share
-// before the next iteration. b_i never leaves this function and never
-// enters a KFrag.
+// iteration that produces BK_i, then zeroized. b_i never leaves this
+// function and never enters a KFrag.
 //
 // sk_owner: 32-byte private key scalar (big-endian).
 // pk_recipient: 65-byte uncompressed secp256k1 public key.
@@ -376,14 +467,11 @@ func PRE_GenerateKFrags(
 ) ([]KFrag, vss.Commitments, error) {
 	if M < 2 || N < M || N > 255 {
 		return nil, vss.Commitments{}, fmt.Errorf(
-			"pre: invalid M=%d, N=%d (require 2<=M<=N<=255)",
-			M, N,
-		)
+			"pre: invalid M=%d, N=%d (require 2<=M<=N<=255)", M, N)
 	}
 	c := curve()
 	n := curveN()
 
-	// Parse recipient public key.
 	rxX, rxY := elliptic.Unmarshal(c, pkRecipient)
 	if rxX == nil {
 		return nil, vss.Commitments{}, errors.New("pre: invalid recipient public key")
@@ -392,23 +480,17 @@ func PRE_GenerateKFrags(
 		return nil, vss.Commitments{}, errors.New("pre: recipient public key is not on the secp256k1 curve")
 	}
 
-	// sk_owner as big.Int.
 	skA := new(big.Int).SetBytes(skOwner)
 	if skA.Sign() == 0 || skA.Cmp(n) >= 0 {
 		return nil, vss.Commitments{}, errors.New("pre: invalid owner private key")
 	}
 
-	// ECDH shared secret.
 	dhX, dhY := c.ScalarMult(rxX, rxY, padBigInt(skA))
-
-	// d = H_scalar(dh_point) — deterministic blinding scalar derived
-	// from the shared secret.
 	d := hashToScalar(dhX, dhY, n)
 	if d.Sign() == 0 {
 		return nil, vss.Commitments{}, errors.New("pre: degenerate blinding scalar")
 	}
 
-	// rk = sk_owner * inv(d) mod n.
 	dInv := new(big.Int).ModInverse(d, n)
 	if dInv == nil {
 		return nil, vss.Commitments{}, errors.New("pre: d has no inverse")
@@ -416,38 +498,30 @@ func PRE_GenerateKFrags(
 	rk := new(big.Int).Mul(skA, dInv)
 	rk.Mod(rk, n)
 
-	// Pack rk into 32 bytes for the vss primitive.
 	var rkBytes [vss.SecretSize]byte
 	copy(rkBytes[:], padBigInt(rk))
 
-	// Zero the intermediate scalars we no longer need.
 	skA.SetInt64(0)
 	d.SetInt64(0)
 	dInv.SetInt64(0)
 
-	// Pedersen VSS split:
-	//   - N shares, each with Index, Value=f(i), BlindingFactor=r(i),
-	//     CommitmentHash
-	//   - Commitment set {C_j = a_j·G + b_j·H : j=0..M-1}
 	vssShares, commitments, err := vss.Split(rkBytes, M, N)
 	if err != nil {
 		return nil, vss.Commitments{}, fmt.Errorf("pre: Pedersen VSS split: %w", err)
 	}
 
-	// rk has been split into shares; zero the byte form and the scalar.
 	rk.SetInt64(0)
 	zero32(&rkBytes)
 
-	// Fetch H (cached after first call). Owner-side only.
 	hX, hY, err := vss.HGenerator()
 	if err != nil {
 		return nil, vss.Commitments{}, fmt.Errorf("pre: H generator: %w", err)
 	}
 
-	// Build KFrags. Per-iteration (ADR-005 §3.5.2):
+	// Per-iteration (ADR-005 §3.5.2):
 	//   1. Extract rk_i and b_i from the vss share.
 	//   2. Compute VK_i = rk_i·G and BK_i = b_i·H.
-	//   3. Assemble KFrag (BK as compressed bytes; b_i scalar NOT stored).
+	//   3. Assemble KFrag (BK as compressed bytes; b_i NOT stored).
 	//   4. Zeroize b_i in the source share before the next iteration.
 	kfrags := make([]KFrag, N)
 	for i := range vssShares {
@@ -458,7 +532,6 @@ func PRE_GenerateKFrags(
 
 		vkX, vkY := c.ScalarBaseMult(padBigInt(rkI))
 
-		// BK_i = b_i · H  (owner-side computation; b_i never leaves this loop)
 		bi := new(big.Int).SetBytes(s.BlindingFactor[:])
 		bi.Mod(bi, n)
 		bkX, bkY := c.ScalarMult(hX, hY, padBigInt(bi))
@@ -474,9 +547,6 @@ func PRE_GenerateKFrags(
 			BK:      bkCompressed,
 		}
 
-		// Zero b_i — it has served its purpose. The source share's
-		// BlindingFactor byte array is zeroed so that a subsequent
-		// memory dump cannot recover it.
 		bi.SetInt64(0)
 		zero32(&s.BlindingFactor)
 	}
@@ -485,30 +555,19 @@ func PRE_GenerateKFrags(
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// PRE_ReEncrypt (v7.75) — produces CFrag with locked DLEQ transcript
+// PRE_ReEncrypt
 // ─────────────────────────────────────────────────────────────────────
 
-// PRE_ReEncrypt re-encrypts a capsule using a single KFrag. Produces
-// a CFrag carrying the DLEQ proof AND the KFrag's BK (copied
-// verbatim). The proxy performs no Pedersen arithmetic — it relays
-// BK as opaque bytes from the KFrag into the CFrag (ADR-005 §3.5.1).
+// PRE_ReEncrypt re-encrypts a capsule using a single KFrag. The
+// proxy performs no Pedersen arithmetic — it relays BK as opaque
+// bytes from the KFrag into the CFrag (ADR-005 §3.5.1).
 //
-// BREAKING CHANGE vs v7.5: the DLEQ challenge is computed via
-// vss.DLEQChallenge over the locked transcript (ADR-005 §5.2), which
-// absorbs the commitment set and BK_i before the standard DLEQ
-// inputs. The commitments argument must match the grant's published
-// commitment set; the proxy retains it alongside the KFrag.
-//
-// The returned CFrag carries ProofE (challenge) and ProofZ (response)
-// per ADR-005 §8.3.2. On verification, the verifier reconstructs R
-// and R' from (ProofZ, ProofE, VK, E, E'), then re-derives the
-// challenge over the transcript and compares.
+// The DLEQ challenge is computed via vss.DLEQChallenge over the
+// locked transcript (ADR-005 §5.2), which absorbs the commitment
+// set and BK_i before the standard DLEQ inputs.
 func PRE_ReEncrypt(kfrag KFrag, capsule *Capsule, commitments vss.Commitments) (*CFrag, error) {
 	if capsule == nil {
 		return nil, errors.New("pre: nil capsule")
-	}
-	if commitments.Threshold() == 0 {
-		return nil, ErrEmptyCommitments
 	}
 	if kfrag.RKShare == nil || kfrag.VKX == nil || kfrag.VKY == nil {
 		return nil, fmt.Errorf("%w: kfrag has nil fields", ErrInvalidKFragFormat)
@@ -516,34 +575,27 @@ func PRE_ReEncrypt(kfrag KFrag, capsule *Capsule, commitments vss.Commitments) (
 	c := curve()
 	n := curveN()
 
-	// E' = rk_i * capsule.E
 	epX, epY := c.ScalarMult(capsule.EX, capsule.EY, padBigInt(kfrag.RKShare))
 
-	// Decompress BK to (x, y) for the transcript.
 	bkX, bkY, err := decompressPoint(kfrag.BK[:])
 	if err != nil {
 		return nil, fmt.Errorf("%w: BK: %v", ErrInvalidKFragFormat, err)
 	}
 
-	// Sample DLEQ nonce t ∈ F_n \ {0}.
 	t, err := rand.Int(rand.Reader, n)
 	if err != nil {
 		return nil, fmt.Errorf("pre: generating DLEQ nonce: %w", err)
 	}
 	if t.Sign() == 0 {
-		// rand.Int returns [0, n); re-roll is astronomically unlikely
-		// but not impossible over a weak reader.
 		t, err = rand.Int(rand.Reader, n)
 		if err != nil {
 			return nil, fmt.Errorf("pre: generating DLEQ nonce (retry): %w", err)
 		}
 	}
 
-	// R = t·G, R' = t·E
 	rX, rY := c.ScalarBaseMult(padBigInt(t))
 	rPrimeX, rPrimeY := c.ScalarMult(capsule.EX, capsule.EY, padBigInt(t))
 
-	// Challenge e = DLEQChallenge(transcript), transcript per ADR-005 §5.2.
 	challengeBytes, err := vss.DLEQChallenge(
 		commitments,
 		bkX, bkY,
@@ -560,12 +612,10 @@ func PRE_ReEncrypt(kfrag KFrag, capsule *Capsule, commitments vss.Commitments) (
 	e := new(big.Int).SetBytes(challengeBytes[:])
 	e.Mod(e, n)
 
-	// z = t + e · rk_i mod n
 	z := new(big.Int).Mul(e, kfrag.RKShare)
 	z.Add(z, t)
 	z.Mod(z, n)
 
-	// Zero the DLEQ nonce.
 	t.SetInt64(0)
 
 	return &CFrag{
@@ -579,51 +629,41 @@ func PRE_ReEncrypt(kfrag KFrag, capsule *Capsule, commitments vss.Commitments) (
 	}, nil
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// PRE_VerifyCFrag (v7.75) — dual check: DLEQ + Pedersen
-// ─────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════
+// Security gates — factored for mutation audit
+// ═════════════════════════════════════════════════════════════════════
+//
+// Each gate is a single-purpose function with a clear name and reads
+// its corresponding muEnable* constant. Setting the constant to false
+// short-circuits the gate, simulating the attack path the gate exists
+// to close.
+//
+// PRE_VerifyCFrag gate order:
+//
+//	gateCFragStructural          — nil checks, ID != 0, proof fields present
+//	gateCommitmentsPresent       — commitments.Threshold() > 0
+//	gateCFragOnCurve             — VK, E', capsule.E on-curve
+//	gateBKDecompress             — BK decompresses to valid on-curve point
+//	checkDLEQ                    — CHECK 1: DLEQ proof verifies
+//	checkPedersen                — CHECK 2: Pedersen polynomial holds
+//
+// PRE_DecryptFrags gate order:
+//
+//	gateDecryptInputs            — capsule non-nil, cfrags non-empty
+//	gateCommitmentsPresent       — commitments.Threshold() > 0 (shared)
+//	gateSufficientCFrags         — len(cfrags) >= threshold
+//	gateAllCFragsVerify          — every cfrag passes PRE_VerifyCFrag
+//	gateOwnerKeyValid            — pkOwner parses and is on-curve
+//
+// ═════════════════════════════════════════════════════════════════════
 
-// PRE_VerifyCFrag gates CFrag acceptance on two independent
-// cryptographic checks (ADR-005 §3.5):
-//
-//  1. DLEQ — the proxy used a consistent rk_i for both
-//     VK_i = rk_i·G and E' = rk_i·E. Establishes that the proxy did
-//     not lie about its own key pair.
-//
-//  2. Pedersen — the (VK_i, BK_i) pair lies on the polynomial
-//     committed at grant time:  VK_i + BK_i = Σ i^j · C_j.
-//     Establishes that the proxy's key pair corresponds to a
-//     legitimate split of the re-encryption key, not an attacker-
-//     chosen forgery.
-//
-// Either failing rejects the CFrag. Both checks are mandatory.
-//
-// BREAKING CHANGE vs v7.5: new commitments parameter. Phase D
-// callers fetch commitments from the on-log pre-grant-commitment-v1
-// entry before calling this function.
-//
-// Returns nil on success. On failure returns one of:
-//   - ErrInvalidCFragFormat — parse or on-curve failure
-//   - ErrDLEQVerificationFailed — DLEQ check failed
-//   - ErrPedersenVerificationFailed — Pedersen check failed
-//   - ErrEmptyCommitments — empty commitment set
-//
-// The function is side-effect-free and safe to call from multiple
-// goroutines in parallel.
-func PRE_VerifyCFrag(
-	cfrag *CFrag,
-	capsule *Capsule,
-	commitments vss.Commitments,
-) error {
-	// Input structural validation.
+// gateCFragStructural verifies the CFrag struct has all required
+// non-nil fields and a valid ID. Always enforced — structural
+// validation is not a security gate in the sense the audit covers
+// (it prevents panics, not attacks).
+func gateCFragStructural(cfrag *CFrag) error {
 	if cfrag == nil {
 		return fmt.Errorf("%w: nil cfrag", ErrInvalidCFragFormat)
-	}
-	if capsule == nil {
-		return fmt.Errorf("%w: nil capsule", ErrInvalidCFragFormat)
-	}
-	if commitments.Threshold() == 0 {
-		return ErrEmptyCommitments
 	}
 	if cfrag.ProofE == nil || cfrag.ProofZ == nil {
 		return fmt.Errorf("%w: missing DLEQ proof fields", ErrInvalidCFragFormat)
@@ -637,12 +677,32 @@ func PRE_VerifyCFrag(
 	if cfrag.ID == 0 {
 		return fmt.Errorf("%w: index 0 is reserved", ErrInvalidCFragFormat)
 	}
+	return nil
+}
 
+// gateCommitmentsPresent verifies the commitment set is non-empty.
+// Controlled by muEnableCommitmentsGate.
+func gateCommitmentsPresent(commitments vss.Commitments) error {
+	if !muEnableCommitmentsGate {
+		return nil
+	}
+	if commitments.Threshold() == 0 {
+		return ErrEmptyCommitments
+	}
+	return nil
+}
+
+// gateCFragOnCurve verifies the CFrag's curve points lie on secp256k1.
+// Expects gateCFragStructural to have passed. Controlled by
+// muEnableOnCurveGate.
+func gateCFragOnCurve(cfrag *CFrag, capsule *Capsule) error {
+	if capsule == nil {
+		return fmt.Errorf("%w: nil capsule", ErrInvalidCFragFormat)
+	}
+	if !muEnableOnCurveGate {
+		return nil
+	}
 	c := curve()
-	n := curveN()
-	p := curveP()
-
-	// On-curve validation for all point inputs.
 	if !c.IsOnCurve(cfrag.VKX, cfrag.VKY) {
 		return fmt.Errorf("%w: VK not on curve", ErrInvalidCFragFormat)
 	}
@@ -652,36 +712,51 @@ func PRE_VerifyCFrag(
 	if !c.IsOnCurve(capsule.EX, capsule.EY) {
 		return fmt.Errorf("%w: capsule E not on curve", ErrInvalidCFragFormat)
 	}
+	return nil
+}
 
-	// Decompress and validate BK.
+// gateBKDecompress decompresses and validates BK. Returns the
+// decompressed coordinates for use in subsequent checks. Always
+// enforced — checkDLEQ and checkPedersen require (bkX, bkY).
+func gateBKDecompress(cfrag *CFrag) (*big.Int, *big.Int, error) {
 	bkX, bkY, err := decompressPoint(cfrag.BK[:])
 	if err != nil {
-		return fmt.Errorf("%w: BK decompress: %v", ErrInvalidCFragFormat, err)
+		return nil, nil, fmt.Errorf("%w: BK decompress: %v", ErrInvalidCFragFormat, err)
 	}
-	if !c.IsOnCurve(bkX, bkY) {
-		return fmt.Errorf("%w: BK not on curve", ErrInvalidCFragFormat)
+	if !curve().IsOnCurve(bkX, bkY) {
+		return nil, nil, fmt.Errorf("%w: BK not on curve", ErrInvalidCFragFormat)
 	}
+	return bkX, bkY, nil
+}
 
-	// Scalar canonicalization. ProofE and ProofZ may arrive from
-	// wire bytes; reduce mod n before using in curve operations.
+// checkDLEQ is ADR-005 §3.5 CHECK 1: DLEQ proof verification.
+//
+// Reconstructs R = z·G - e·VK and R' = z·E - e·E' from (z, e, VK, E, E'),
+// then recomputes the challenge via the locked transcript and compares.
+//
+// Controlled by muEnableDLEQCheck.
+func checkDLEQ(
+	cfrag *CFrag,
+	capsule *Capsule,
+	commitments vss.Commitments,
+	bkX, bkY *big.Int,
+) error {
+	if !muEnableDLEQCheck {
+		return nil
+	}
+	c := curve()
+	n := curveN()
+	p := curveP()
+
 	eCanon := new(big.Int).Set(cfrag.ProofE)
 	eCanon.Mod(eCanon, n)
 	zCanon := new(big.Int).Set(cfrag.ProofZ)
 	zCanon.Mod(zCanon, n)
 
-	// CHECK 1: DLEQ verification.
-	//
-	// Reconstruct R and R' from (z, e, VK, E, E'):
-	//   R  = z·G - e·VK
-	//   R' = z·E - e·E'
-	//
-	// Then recompute the challenge via the locked transcript and
-	// compare.
-
 	// R = z·G - e·VK
 	zGx, zGy := c.ScalarBaseMult(padBigInt(zCanon))
 	eVKx, eVKy := c.ScalarMult(cfrag.VKX, cfrag.VKY, padBigInt(eCanon))
-	eVKyNeg := new(big.Int).Sub(p, eVKy) // -eVK on the curve = (x, p-y)
+	eVKyNeg := new(big.Int).Sub(p, eVKy)
 	eVKyNeg.Mod(eVKyNeg, p)
 	rX, rY := c.Add(zGx, zGy, eVKx, eVKyNeg)
 
@@ -692,7 +767,6 @@ func PRE_VerifyCFrag(
 	eEPyNeg.Mod(eEPyNeg, p)
 	rPrimeX, rPrimeY := c.Add(zEx, zEy, eEPx, eEPyNeg)
 
-	// Recompute the challenge over the transcript.
 	expectedBytes, err := vss.DLEQChallenge(
 		commitments,
 		bkX, bkY,
@@ -712,11 +786,24 @@ func PRE_VerifyCFrag(
 	if expected.Cmp(eCanon) != 0 {
 		return ErrDLEQVerificationFailed
 	}
+	return nil
+}
 
-	// CHECK 2: Pedersen binding.
-	//
-	// Delegate to vss.VerifyPoints, which performs the polynomial-
-	// consistency check:  VK + BK = Σ i^j · C_j
+// checkPedersen is ADR-005 §3.5 CHECK 2: Pedersen binding.
+//
+// Delegates to vss.VerifyPoints for the polynomial-consistency check:
+//
+//	VK + BK = Σ i^j · C_j
+//
+// Controlled by muEnablePedersenCheck.
+func checkPedersen(
+	cfrag *CFrag,
+	commitments vss.Commitments,
+	bkX, bkY *big.Int,
+) error {
+	if !muEnablePedersenCheck {
+		return nil
+	}
 	if err := vss.VerifyPoints(
 		cfrag.ID,
 		cfrag.VKX, cfrag.VKY,
@@ -725,39 +812,135 @@ func PRE_VerifyCFrag(
 	); err != nil {
 		return fmt.Errorf("%w: %v", ErrPedersenVerificationFailed, err)
 	}
+	return nil
+}
 
+// gateDecryptInputs verifies the capsule and cfrag slice are usable.
+// Always enforced — prevents nil-pointer panics.
+func gateDecryptInputs(capsule *Capsule, cfrags []*CFrag) error {
+	if capsule == nil {
+		return errors.New("pre: nil capsule")
+	}
+	if len(cfrags) == 0 {
+		return errors.New("pre: no cfrags provided")
+	}
+	return nil
+}
+
+// gateSufficientCFrags verifies at least threshold cfrags were
+// supplied. Called after gateCommitmentsPresent so threshold > 0
+// (under normal execution). Controlled by muEnableSufficientCFragsGate.
+func gateSufficientCFrags(cfrags []*CFrag, commitments vss.Commitments) error {
+	if !muEnableSufficientCFragsGate {
+		return nil
+	}
+	if len(cfrags) < commitments.Threshold() {
+		return fmt.Errorf("%w: have %d, need threshold %d",
+			ErrInsufficientCFrags, len(cfrags), commitments.Threshold())
+	}
+	return nil
+}
+
+// gateAllCFragsVerify verifies every CFrag in the slice passes
+// PRE_VerifyCFrag. This is the verify-before-combine gate (ADR-005
+// §3.5). Controlled by muEnableVerifyBeforeCombine.
+func gateAllCFragsVerify(
+	cfrags []*CFrag,
+	capsule *Capsule,
+	commitments vss.Commitments,
+) error {
+	if !muEnableVerifyBeforeCombine {
+		return nil
+	}
+	for i, cf := range cfrags {
+		if cf == nil {
+			return fmt.Errorf("pre: cfrag[%d]: %w", i, ErrInvalidCFragFormat)
+		}
+		if err := PRE_VerifyCFrag(cf, capsule, commitments); err != nil {
+			return fmt.Errorf("pre: cfrag[%d] verification: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// gateOwnerKeyValid verifies pkOwner parses as a valid on-curve
+// secp256k1 point. Returns the decoded coordinates. Always enforced
+// — subsequent ScalarMult would produce garbage on invalid input.
+func gateOwnerKeyValid(pkOwner []byte) (*big.Int, *big.Int, error) {
+	c := curve()
+	ownerX, ownerY := elliptic.Unmarshal(c, pkOwner)
+	if ownerX == nil {
+		return nil, nil, errors.New("pre: invalid owner public key")
+	}
+	if !c.IsOnCurve(ownerX, ownerY) {
+		return nil, nil, errors.New("pre: owner public key is not on the secp256k1 curve")
+	}
+	return ownerX, ownerY, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// PRE_VerifyCFrag — dual check: DLEQ + Pedersen
+// ─────────────────────────────────────────────────────────────────────
+
+// PRE_VerifyCFrag gates CFrag acceptance on two independent
+// cryptographic checks (ADR-005 §3.5):
+//
+//  1. DLEQ — the proxy used a consistent rk_i for both
+//     VK_i = rk_i·G and E' = rk_i·E.
+//
+//  2. Pedersen — the (VK_i, BK_i) pair lies on the polynomial
+//     committed at grant time:  VK_i + BK_i = Σ i^j · C_j.
+//
+// Either failing rejects the CFrag. Both checks are mandatory.
+//
+// Returns nil on success. On failure returns one of:
+//   - ErrInvalidCFragFormat — parse or on-curve failure
+//   - ErrDLEQVerificationFailed — DLEQ check failed
+//   - ErrPedersenVerificationFailed — Pedersen check failed
+//   - ErrEmptyCommitments — empty commitment set
+//
+// Side-effect-free and safe to call from multiple goroutines.
+func PRE_VerifyCFrag(
+	cfrag *CFrag,
+	capsule *Capsule,
+	commitments vss.Commitments,
+) error {
+	if err := gateCFragStructural(cfrag); err != nil {
+		return err
+	}
+	if err := gateCommitmentsPresent(commitments); err != nil {
+		return err
+	}
+	if err := gateCFragOnCurve(cfrag, capsule); err != nil {
+		return err
+	}
+	bkX, bkY, err := gateBKDecompress(cfrag)
+	if err != nil {
+		return err
+	}
+	if err := checkDLEQ(cfrag, capsule, commitments, bkX, bkY); err != nil {
+		return err
+	}
+	if err := checkPedersen(cfrag, commitments, bkX, bkY); err != nil {
+		return err
+	}
 	return nil
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// PRE_DecryptFrags (v7.75, G2) — verify-then-combine-then-decrypt
+// PRE_DecryptFrags — verify-then-combine-then-decrypt
 // ─────────────────────────────────────────────────────────────────────
 
 // PRE_DecryptFrags combines M CFrags and decrypts using the
 // recipient's private key. Per ADR-005 §3.5, this primitive verifies
 // every CFrag against the commitment set BEFORE Lagrange combination.
 // Combination of unverified CFrags is the substitution vulnerability
-// v7.75 is written to close; the verification gate lives here, in
-// the primitive.
-//
-// BREAKING CHANGE vs v7.5: adds commitments and capsule verification.
-// v7.5 signature was
-//
-//	PRE_DecryptFrags(skRecipient, cfrags, capsule, ciphertext, pkOwner)
-//
-// v7.75 signature is
-//
-//	PRE_DecryptFrags(skRecipient, cfrags, capsule, ciphertext, pkOwner, commitments)
+// this package closes; the verification gate lives here, in the
+// primitive.
 //
 // On any CFrag verification failure, returns the typed verification
 // error with an annotation identifying the failing CFrag index.
 // Lagrange combination and decryption are NOT attempted.
-//
-// sk_recipient: 32-byte private key scalar.
-// pk_owner: 65-byte uncompressed public key of the capsule creator.
-// commitments: the grant's on-log commitment set (from
-//
-//	pre-grant-commitment-v1 schema).
 func PRE_DecryptFrags(
 	skRecipient []byte,
 	cfrags []*CFrag,
@@ -766,66 +949,38 @@ func PRE_DecryptFrags(
 	pkOwner []byte,
 	commitments vss.Commitments,
 ) ([]byte, error) {
-	if capsule == nil {
-		return nil, errors.New("pre: nil capsule")
+	if err := gateDecryptInputs(capsule, cfrags); err != nil {
+		return nil, err
 	}
-	if len(cfrags) == 0 {
-		return nil, errors.New("pre: no cfrags provided")
+	if err := gateCommitmentsPresent(commitments); err != nil {
+		return nil, err
 	}
-	if commitments.Threshold() == 0 {
-		return nil, ErrEmptyCommitments
+	if err := gateSufficientCFrags(cfrags, commitments); err != nil {
+		return nil, err
 	}
-	if len(cfrags) < commitments.Threshold() {
-		return nil, fmt.Errorf(
-			"pre: insufficient cfrags: have %d, need threshold %d",
-			len(cfrags), commitments.Threshold(),
-		)
+	if err := gateAllCFragsVerify(cfrags, capsule, commitments); err != nil {
+		return nil, err
 	}
 
-	// VERIFY-BEFORE-COMBINE (ADR-005 §3.5, G2).
-	// Every CFrag must pass both DLEQ and Pedersen checks before any
-	// combination arithmetic. A single failing CFrag aborts decryption.
-	for i, cf := range cfrags {
-		if cf == nil {
-			return nil, fmt.Errorf(
-				"pre: cfrag[%d]: %w", i, ErrInvalidCFragFormat,
-			)
-		}
-		if err := PRE_VerifyCFrag(cf, capsule, commitments); err != nil {
-			return nil, fmt.Errorf("pre: cfrag[%d] verification: %w", i, err)
-		}
+	ownerX, ownerY, err := gateOwnerKeyValid(pkOwner)
+	if err != nil {
+		return nil, err
 	}
 
 	c := curve()
 	n := curveN()
 
-	// Parse owner public key for ECDH.
-	ownerX, ownerY := elliptic.Unmarshal(c, pkOwner)
-	if ownerX == nil {
-		return nil, errors.New("pre: invalid owner public key")
-	}
-	if !c.IsOnCurve(ownerX, ownerY) {
-		return nil, errors.New("pre: owner public key is not on the secp256k1 curve")
-	}
-
-	// Combine CFrags via Lagrange interpolation on curve points.
-	// At this point every CFrag has been verified; combination is safe.
 	combinedX, combinedY, err := lagrangeCombinePoints(cfrags, n, c)
 	if err != nil {
 		return nil, fmt.Errorf("pre: combining cfrags: %w", err)
 	}
 
-	// d = H_scalar(ECDH(sk_recipient, pk_owner)).
 	dhX, dhY := c.ScalarMult(ownerX, ownerY, skRecipient)
 	d := hashToScalar(dhX, dhY, n)
 
-	// key_point = d * E'_combined.
 	keyX, keyY := c.ScalarMult(combinedX, combinedY, padBigInt(d))
-
-	// DEM key = KDF(key_point).
 	demKey := kdf(keyX, keyY)
 
-	// Zero the ephemeral scalars.
 	d.SetInt64(0)
 
 	return aesGCMDecrypt(demKey[:], ciphertext)
@@ -835,22 +990,9 @@ func PRE_DecryptFrags(
 // CFrag wire-format (de)serialization (ADR-005 §8.3)
 // ─────────────────────────────────────────────────────────────────────
 
-// SerializeCFrag encodes a CFrag into the fixed 196-byte v7.75 wire
-// format per ADR-005 §8.3:
-//
-//	offset  len  field
-//	  0      33  E'        (compressed)
-//	 33      33  VK        (compressed)
-//	 66      33  BK        (compressed, copied verbatim from KFrag)
-//	 99       1  ID
-//	100      32  ProofE    (challenge, mod n, padded BE)
-//	132      32  ProofZ    (response, mod n, padded BE)
-//	164      32  Reserved  (MUST be zero; rejected if non-zero on deserialize)
-//	Total:  196 bytes
-//
-// The encoding is unambiguous: every field is fixed-width and the
-// overall length is a compile-time constant. A v7.5 CFrag (163 bytes)
-// fed to DeserializeCFrag rejects at the length check.
+// SerializeCFrag encodes a CFrag into the fixed 196-byte wire format
+// per ADR-005 §8.3. Every field is fixed-width; the overall length
+// is a compile-time constant.
 func SerializeCFrag(cf *CFrag) ([]byte, error) {
 	if cf == nil {
 		return nil, fmt.Errorf("%w: nil cfrag", ErrInvalidCFragFormat)
@@ -870,26 +1012,13 @@ func SerializeCFrag(cf *CFrag) ([]byte, error) {
 
 	out := make([]byte, CFragWireLen)
 
-	// E' at offset 0.
-	epComp := compressedPoint(cf.EPrimeX, cf.EPrimeY)
-	copy(out[cfragOffsetEPrime:cfragOffsetEPrime+33], epComp)
-
-	// VK at offset 33.
-	vkComp := compressedPoint(cf.VKX, cf.VKY)
-	copy(out[cfragOffsetVK:cfragOffsetVK+33], vkComp)
-
-	// BK at offset 66 (already compressed in the struct).
+	copy(out[cfragOffsetEPrime:cfragOffsetEPrime+33], compressedPoint(cf.EPrimeX, cf.EPrimeY))
+	copy(out[cfragOffsetVK:cfragOffsetVK+33], compressedPoint(cf.VKX, cf.VKY))
 	copy(out[cfragOffsetBK:cfragOffsetBK+33], cf.BK[:])
-
-	// ID at offset 99.
 	out[cfragOffsetID] = cf.ID
-
-	// ProofE at offset 100, ProofZ at offset 132.
 	copy(out[cfragOffsetProofE:cfragOffsetProofE+32], padBigInt(cf.ProofE))
 	copy(out[cfragOffsetProofZ:cfragOffsetProofZ+32], padBigInt(cf.ProofZ))
-
 	// Reserved bytes at offset 164..195 are already zero from make().
-	// This is asserted implicitly and verified on deserialize.
 
 	return out, nil
 }
@@ -897,9 +1026,6 @@ func SerializeCFrag(cf *CFrag) ([]byte, error) {
 // DeserializeCFrag decodes a 196-byte wire buffer into a CFrag.
 // Performs on-curve and structural validation at ingress, and
 // rejects non-zero reserved bytes per ADR-005 §8.3.
-//
-// A v7.5 CFrag (163 bytes) rejects at length check. A v7.75 CFrag
-// with non-zero reserved bytes rejects with ErrReservedBytesNonZero.
 //
 // The returned CFrag is structurally valid but NOT cryptographically
 // verified. Callers must pass it to PRE_VerifyCFrag (or call
@@ -925,7 +1051,6 @@ func DeserializeCFrag(data []byte) (*CFrag, error) {
 
 	c := curve()
 
-	// E' at offset 0.
 	epX, epY, err := decompressPoint(data[cfragOffsetEPrime : cfragOffsetEPrime+33])
 	if err != nil {
 		return nil, fmt.Errorf("%w: E': %v", ErrInvalidCFragFormat, err)
@@ -934,7 +1059,6 @@ func DeserializeCFrag(data []byte) (*CFrag, error) {
 		return nil, fmt.Errorf("%w: E' not on curve", ErrInvalidCFragFormat)
 	}
 
-	// VK at offset 33.
 	vkX, vkY, err := decompressPoint(data[cfragOffsetVK : cfragOffsetVK+33])
 	if err != nil {
 		return nil, fmt.Errorf("%w: VK: %v", ErrInvalidCFragFormat, err)
@@ -943,9 +1067,6 @@ func DeserializeCFrag(data []byte) (*CFrag, error) {
 		return nil, fmt.Errorf("%w: VK not on curve", ErrInvalidCFragFormat)
 	}
 
-	// BK at offset 66: validate the encoding but preserve the original
-	// bytes — the wire-identical form is what vss.DLEQChallenge
-	// re-absorbs at the verifier.
 	var bk [KFragBKLen]byte
 	copy(bk[:], data[cfragOffsetBK:cfragOffsetBK+33])
 	bkX, bkY, err := decompressPoint(bk[:])
@@ -956,13 +1077,11 @@ func DeserializeCFrag(data []byte) (*CFrag, error) {
 		return nil, fmt.Errorf("%w: BK not on curve", ErrInvalidCFragFormat)
 	}
 
-	// ID at offset 99.
 	id := data[cfragOffsetID]
 	if id == 0 {
 		return nil, fmt.Errorf("%w: index 0 is reserved", ErrInvalidCFragFormat)
 	}
 
-	// ProofE, ProofZ at offsets 100, 132.
 	proofE := new(big.Int).SetBytes(data[cfragOffsetProofE : cfragOffsetProofE+32])
 	proofZ := new(big.Int).SetBytes(data[cfragOffsetProofZ : cfragOffsetProofZ+32])
 
@@ -987,9 +1106,8 @@ func DeserializeCFrag(data []byte) (*CFrag, error) {
 // Callers MUST have verified every CFrag before invoking this
 // function (PRE_DecryptFrags does this). Unverified inputs produce
 // a mathematically-correct combination of attacker-chosen values,
-// which is the substitution vulnerability v7.75 closes.
+// which is the substitution vulnerability this package closes.
 func lagrangeCombinePoints(cfrags []*CFrag, n *big.Int, c elliptic.Curve) (*big.Int, *big.Int, error) {
-	// Collect share IDs and validate.
 	xs := make([]*big.Int, len(cfrags))
 	seen := make(map[byte]bool, len(cfrags))
 	for i, cf := range cfrags {
@@ -998,15 +1116,12 @@ func lagrangeCombinePoints(cfrags []*CFrag, n *big.Int, c elliptic.Curve) (*big.
 		}
 		if seen[cf.ID] {
 			return nil, nil, fmt.Errorf(
-				"%w: duplicate share ID %d",
-				ErrInvalidCFragFormat, cf.ID,
-			)
+				"%w: duplicate share ID %d", ErrInvalidCFragFormat, cf.ID)
 		}
 		seen[cf.ID] = true
 		xs[i] = big.NewInt(int64(cf.ID))
 	}
 
-	// Compute Lagrange coefficients at x=0.
 	lambdas := make([]*big.Int, len(cfrags))
 	for i := range cfrags {
 		num := big.NewInt(1)
@@ -1015,12 +1130,10 @@ func lagrangeCombinePoints(cfrags []*CFrag, n *big.Int, c elliptic.Curve) (*big.
 			if i == j {
 				continue
 			}
-			// num *= -xs[j] mod n
 			neg := new(big.Int).Neg(xs[j])
 			neg.Mod(neg, n)
 			num.Mul(num, neg)
 			num.Mod(num, n)
-			// den *= (xs[i] - xs[j]) mod n
 			diff := new(big.Int).Sub(xs[i], xs[j])
 			diff.Mod(diff, n)
 			den.Mul(den, diff)
@@ -1034,7 +1147,6 @@ func lagrangeCombinePoints(cfrags []*CFrag, n *big.Int, c elliptic.Curve) (*big.
 		lambdas[i].Mod(lambdas[i], n)
 	}
 
-	// Combined = sum_i λ_i · E'_i
 	var sumX, sumY *big.Int
 	for i, cf := range cfrags {
 		px, py := c.ScalarMult(cf.EPrimeX, cf.EPrimeY, padBigInt(lambdas[i]))
@@ -1056,9 +1168,6 @@ func lagrangeCombinePoints(cfrags []*CFrag, n *big.Int, c elliptic.Curve) (*big.
 
 // compressedPoint returns the 33-byte SEC 1 compressed encoding of
 // (x, y) on secp256k1. Prefix 0x02 for even y, 0x03 for odd.
-//
-// This matches the encoding used by core/vss/transcript.go so CFrag
-// BK bytes pass through the transcript without re-encoding.
 func compressedPoint(x, y *big.Int) []byte {
 	out := make([]byte, 33)
 	if y.Bit(0) == 0 {
@@ -1073,12 +1182,7 @@ func compressedPoint(x, y *big.Int) []byte {
 
 // decompressPoint decodes a 33-byte compressed secp256k1 point into
 // (x, y). Validates the prefix byte and reconstructs y from x via
-// y² = x³ + 7 mod p (secp256k1 has a = 0, b = 7).
-//
-// Returns an error for:
-//   - Wrong length
-//   - Invalid prefix byte
-//   - x not on curve (no y exists such that y² = x³ + 7)
+// y² = x³ + 7 mod p.
 func decompressPoint(raw []byte) (*big.Int, *big.Int, error) {
 	if len(raw) != 33 {
 		return nil, nil, fmt.Errorf("compressed point must be 33 bytes, got %d", len(raw))
@@ -1093,24 +1197,20 @@ func decompressPoint(raw []byte) (*big.Int, *big.Int, error) {
 		return nil, nil, errors.New("x coordinate out of field")
 	}
 
-	// y² = x³ + 7 mod p
 	x3 := new(big.Int).Exp(x, big.NewInt(3), p)
 	rhs := new(big.Int).Add(x3, big.NewInt(7))
 	rhs.Mod(rhs, p)
 
-	// Compute y via y = rhs^((p+1)/4) mod p (works because p ≡ 3 mod 4).
 	exp := new(big.Int).Add(p, big.NewInt(1))
 	exp.Rsh(exp, 2)
 	y := new(big.Int).Exp(rhs, exp, p)
 
-	// Verify y² == rhs (otherwise x was not a valid x-coordinate).
 	yCheck := new(big.Int).Mul(y, y)
 	yCheck.Mod(yCheck, p)
 	if yCheck.Cmp(rhs) != 0 {
 		return nil, nil, errors.New("x coordinate is not on curve")
 	}
 
-	// Match parity with the prefix byte.
 	wantOdd := prefix == 0x03
 	isOdd := y.Bit(0) == 1
 	if wantOdd != isOdd {
@@ -1124,17 +1224,12 @@ func decompressPoint(raw []byte) (*big.Int, *big.Int, error) {
 // Helpers — hashing and encoding
 // ─────────────────────────────────────────────────────────────────────
 
-// hashToPoint maps arbitrary bytes to a point on secp256k1 using try-
-// and-increment. Used to derive the secondary generator U =
-// hashToPoint(pk_owner) for the capsule's V component. The output
-// is a valid curve point unrelated to pk_owner as a key.
+// hashToPoint maps arbitrary bytes to a point on secp256k1 using
+// try-and-increment. Used to derive the secondary generator
+// U = hashToPoint(pk_owner) for the capsule's V component.
 //
-// Method: SHA-256(input || counter) → candidate x → compute y² = x³ + 7
-// → check quadratic residue. secp256k1 has p ≡ 3 (mod 4), so
-// sqrt(a) = a^((p+1)/4) mod p.
-//
-// NOTE: This is NOT the same construction as vss.HGenerator's try-
-// and-increment. hashToPoint derives U (capsule-facing); HGenerator
+// This is NOT the same construction as vss.HGenerator's try-and-
+// increment. hashToPoint derives U (capsule-facing); HGenerator
 // derives H (Pedersen-facing). Separate purposes, separate seeds,
 // separate derivations.
 func hashToPoint(input []byte) (*big.Int, *big.Int) {
@@ -1216,9 +1311,9 @@ func hashToScalar(x, y *big.Int, n *big.Int) *big.Int {
 	return result
 }
 
-// padBigInt pads a big.Int to exactly 32 bytes (secp256k1 scalar width).
-// big.Int.Bytes() strips leading zeros; callers of ScalarMult /
-// ScalarBaseMult expect fixed-width inputs.
+// padBigInt pads a big.Int to exactly 32 bytes (secp256k1 scalar
+// width). big.Int.Bytes() strips leading zeros; callers of
+// ScalarMult / ScalarBaseMult expect fixed-width inputs.
 func padBigInt(b *big.Int) []byte {
 	buf := b.Bytes()
 	if len(buf) >= 32 {

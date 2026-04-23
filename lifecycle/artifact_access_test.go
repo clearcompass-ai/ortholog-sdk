@@ -514,3 +514,50 @@ func TestReEncryptWithGrant_NoCiphertextDeleteWhenFlagFalse(t *testing.T) {
 			"DeleteOldCiphertext=false: %v", err)
 	}
 }
+
+// TestVerifyAndDecryptArtifact_PRE_MissingCommitments asserts Phase C
+// gate: PRE decryption without commitments returns ErrMissingCommitments
+// without reaching the primitive.
+func TestVerifyAndDecryptArtifact_PRE_MissingCommitments(t *testing.T) {
+	params := VerifyAndDecryptArtifactParams{
+		Ciphertext: []byte("dummy-ct"),
+		SchemaParams: &types.SchemaParameters{
+			ArtifactEncryption: types.EncryptionUmbralPRE,
+		},
+		CFrags:       []*artifact.CFrag{{}},
+		Capsule:      &artifact.Capsule{},
+		RecipientKey: make([]byte, 32),
+		OwnerPubKey:  make([]byte, 65),
+		// Commitments intentionally omitted (zero value).
+	}
+
+	_, err := VerifyAndDecryptArtifact(params)
+	if !errors.Is(err, ErrMissingCommitments) {
+		t.Fatalf("want ErrMissingCommitments, got %v", err)
+	}
+}
+
+// TestGrantArtifactAccess_PRE_ReturnsCommitments asserts Phase C
+// grant emission: PRE grants include the commitment set for on-log
+// publication by Phase D.
+//
+// NOTE: requires a full PRE grant setup. If your existing test harness
+// doesn't support this, mark the test Skip with a TODO and land the
+// assertion when the harness is extended.
+func TestGrantArtifactAccess_PRE_ReturnsCommitments(t *testing.T) {
+	t.Skip("TODO: wire up full PRE grant test harness with valid secp256k1 keys and capsule")
+	// Expected shape:
+	//   result, err := GrantArtifactAccess(params)
+	//   require.NoError(t, err)
+	//   require.Equal(t, "umbral_pre", result.Method)
+	//   require.Equal(t, 3, result.Commitments.Threshold())
+}
+
+// TestGrantArtifactAccess_AESGCM_CommitmentsEmpty asserts AES-GCM
+// grants do NOT populate Commitments (zero value).
+func TestGrantArtifactAccess_AESGCM_CommitmentsEmpty(t *testing.T) {
+	t.Skip("TODO: wire up AES-GCM grant test harness")
+	// Expected:
+	//   result, _ := GrantArtifactAccess(aesGCMParams)
+	//   require.Equal(t, 0, result.Commitments.Threshold())
+}

@@ -1,0 +1,24 @@
+{
+  "description": "DLEQ + Pedersen Fiat-Shamir transcript golden vector. Phase A close-out (v7.75). ADR-005 §5.2. Cross-implementation anchor: any port must produce identical transcript bytes and challenge digest for these pinned inputs.",
+  "expected": {
+    "challenge_hex": "90f4d13104f8c73ddf212b84b527d8460980efb6e1b89a2c4f41adeec70060b2",
+    "transcript_hex": "4f5254484f4c4f472d56372e37352d444c45512d4348414c4c454e47452d7631000000030279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179802c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee502f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9024139336abec07fce7921e7ed491b5c4dbc4e221359200e621ae94b3bf45ce76503774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa803defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a340000000000000002022b4ea0a797a443d293ef5cff444f4979f06acfebd7e86d277475656138385b6c032fa2104d6b38d11b0230010559879124e42ab8dfeff5ff29dc9cdadd4ecacc3f",
+    "transcript_length": 341
+  },
+  "input": {
+    "bk_compressed_hex": "024139336abec07fce7921e7ed491b5c4dbc4e221359200e621ae94b3bf45ce765",
+    "commitment_set_compressed_hex": [
+      "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5",
+      "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+    ],
+    "e_compressed_hex": "03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa8",
+    "e_prime_compressed_hex": "03defdea4cdb677750a420fee807eacf21eb9898ae79b9768766e4faa04a2d4a34",
+    "index": 2,
+    "r_compressed_hex": "022b4ea0a797a443d293ef5cff444f4979f06acfebd7e86d277475656138385b6c",
+    "r_prime_compressed_hex": "032fa2104d6b38d11b0230010559879124e42ab8dfeff5ff29dc9cdadd4ecacc3f",
+    "threshold_m": 3,
+    "vk_compressed_hex": "03774ae7f858a9411e5ef4246b70c65aac5649980be5c17891bbec17895da008cb"
+  },
+  "procedure": "Inputs are k·G (or k·H for BK) for small k. The transcript is assembled per ADR-005 §5.2 and hashed with SHA-256. Both the raw transcript bytes and the challenge hash are locked here."
+}

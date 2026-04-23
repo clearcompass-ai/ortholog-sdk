@@ -1,0 +1,50 @@
+{
+  "description": "Pedersen VSS 3-of-5 split round-trip golden vector. Phase A close-out (v7.75). Cross-implementation anchor: any port of core/vss MUST reproduce these bytes exactly for the same (secret, M, N, DRBG seed).",
+  "expected": {
+    "commitment_hash_hex": "fd3a30fd272b4d0179805c47edde64f575248d62a0c26f934838a0f91ecfead8",
+    "commitment_set_compressed_hex": [
+      "02029630421c9ed3894f590cc533638cc9d5dcfd69dbfd061baa8efac28ba85f8e",
+      "030f9cf389fde71e565d80aaf2e93e9a5488d54df2af528e4ab32293d8f2594a89",
+      "0367917c49f96b366cace6b691dc36c20191cba8821cde515750886a5ee95c9f97"
+    ],
+    "shares": [
+      {
+        "index": 1,
+        "value_hex": "2c217a3b62aa7f551a161926df6c7be0e28dc7ddd93651a3b37e1c6dc5e836ae",
+        "blinding_factor_hex": "598760292c48201d4e3f1ca5d34fe080b16617a3d95595193aaf4ea7bba4bcc8",
+        "commitment_hash_hex": "fd3a30fd272b4d0179805c47edde64f575248d62a0c26f934838a0f91ecfead8"
+      },
+      {
+        "index": 2,
+        "value_hex": "66a17855c97d8715ca9008ac783e863466dc141e5ba34042a801cc11526fa9d6",
+        "blinding_factor_hex": "03601c769b29c19013628d4258195258082123224218b36a30b1c87ea7a1304f",
+        "commitment_hash_hex": "fd3a30fd272b4d0179805c47edde64f575248d62a0c26f934838a0f91ecfead8"
+      },
+      {
+        "index": 3,
+        "value_hex": "b080fb50357a1843126ecf91cb771ffb8debe5c28847ccddde8c0feba6975a79",
+        "blinding_factor_hex": "d2b50e361abb690c3efa77bfa3341568ad1baa93e3167c0b3d0fbc7f645ef3ce",
+        "commitment_hash_hex": "fd3a30fd272b4d0179805c47edde64f575248d62a0c26f934838a0f91ecfead8"
+      },
+      {
+        "index": 4,
+        "value_hex": "09c0032aa6a032dcf1b26dd6d91649379d0e5fe3afdb5739974a896ff2290756",
+        "blinding_factor_hex": "c7863567aafd1691d106dc1db4a029b52af7f42b5dbdae84e0246d90517184c3",
+        "commitment_hash_hex": "fd3a30fd272b4d0179805c47edde64f575248d62a0c26f934838a0f91ecfead8"
+      },
+      {
+        "index": 5,
+        "value_hex": "725e8fe51cefd6e3685ae37ba11c01e609a13c4f30ef1fcd51e1f5b7d59132ef",
+        "blinding_factor_hex": "e1d3920b4beeca20c987ba5c8c5d8f3c3c64dccf6156eb12d9c23a3e3f0f246f",
+        "commitment_hash_hex": "fd3a30fd272b4d0179805c47edde64f575248d62a0c26f934838a0f91ecfead8"
+      }
+    ]
+  },
+  "input": {
+    "drbg_seed": "ortholog/vss/test/split-vector/v1",
+    "m": 3,
+    "n": 5,
+    "secret_hex": "0101010101010101010101010101010101010101010101010101010101010101"
+  },
+  "procedure": "Reader is SHA-256(seed || BE_uint64(counter)); each rand.Int(r, n) call rejection-samples from n-many 32-byte reads. Coefficients sampled in order: a_1, b_0, a_2, b_1, b_2. Shares produced at indices 1..5."
+}

@@ -136,7 +136,22 @@ func (c Commitments) Threshold() int { return len(c.Points) }
 // mirrors how 32 random bytes from a CSPRNG are typically used as
 // a scalar. Callers that need exact-bytes preservation should
 // derive the scalar themselves and pass a known-good value.
+//
+// Randomness is sourced from crypto/rand. For tests that need
+// byte-reproducible output, splitWithReader is the unexported
+// sibling that accepts an arbitrary io.Reader.
 func Split(secret [SecretSize]byte, M, N int) ([]Share, Commitments, error) {
+	return splitWithReader(secret, M, N, rand.Reader)
+}
+
+// splitWithReader is Split parameterised on the randomness source.
+// Unexported: only tests (and the tests of downstream consumers
+// that pin golden vectors) use this path.
+//
+// The reader must produce at least 16·M·33 bytes before any
+// rejection-sampling draw for n exceeds its budget. In practice a
+// healthy DRBG wrapped as io.Reader suffices.
+func splitWithReader(secret [SecretSize]byte, M, N int, r io.Reader) ([]Share, Commitments, error) {
 	if M < MinThreshold {
 		return nil, Commitments{}, fmt.Errorf("%w: M=%d, minimum is %d", ErrInvalidThreshold, M, MinThreshold)
 	}
@@ -186,13 +201,13 @@ func Split(secret [SecretSize]byte, M, N int) ([]Share, Commitments, error) {
 	a[0] = a0
 	for i := 0; i < M; i++ {
 		if i > 0 {
-			ai, err := randScalar(rand.Reader, n)
+			ai, err := randScalar(r, n)
 			if err != nil {
 				return nil, Commitments{}, fmt.Errorf("vss/split: random a_%d: %w", i, err)
 			}
 			a[i] = ai
 		}
-		bi, err := randScalar(rand.Reader, n)
+		bi, err := randScalar(r, n)
 		if err != nil {
 			return nil, Commitments{}, fmt.Errorf("vss/split: random b_%d: %w", i, err)
 		}

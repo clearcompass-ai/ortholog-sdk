@@ -1,0 +1,35 @@
+tests/mapping_escrow_test.go:107:12: assignment mismatch: 2 variables but me.StoreMapping returns 3 values
+tests/mapping_escrow_test.go:107:28: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:119:12: assignment mismatch: 2 variables but me.StoreMapping returns 3 values
+tests/mapping_escrow_test.go:119:28: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:149:15: assignment mismatch: 2 variables but me.StoreMapping returns 3 values
+tests/mapping_escrow_test.go:149:31: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:182:18: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:198:19: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:211:18: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:215:6: invalid operation: operator ! not defined on me.DeleteMapping(idHash) (value of interface type error)
+tests/mapping_escrow_test.go:225:5: non-boolean condition in if statement
+tests/mapping_escrow_test.go:248:17: assignment mismatch: 2 variables but me.StoreMapping returns 3 values
+tests/mapping_escrow_test.go:248:33: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:266:17: assignment mismatch: 2 variables but me.StoreMapping returns 3 values
+tests/mapping_escrow_test.go:266:33: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:288:16: assignment mismatch: 2 variables but me.StoreMapping returns 3 values
+tests/mapping_escrow_test.go:288:32: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:292:16: assignment mismatch: 2 variables but me.StoreMapping returns 3 values
+tests/mapping_escrow_test.go:292:32: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:319:15: assignment mismatch: 2 variables but me.StoreMapping returns 3 values
+tests/mapping_escrow_test.go:319:31: not enough arguments in call to me.StoreMapping
+tests/mapping_escrow_test.go:65:17: assignment mismatch: 2 variables but me.StoreMapping returns 3 values
+tests/mapping_escrow_test.go:65:33: not enough arguments in call to me.StoreMapping
+tests/phase6_part_b_test.go:43:57: cannot use make([]byte, 32) (value of type []byte) as [32]byte value in struct literal
+tests/phase6_part_b_test.go:44:19: undefined: escrow.VerifyShare
+tests/phase6_part_b_test.go:50:57: cannot use make([]byte, 32) (value of type []byte) as [32]byte value in struct literal
+tests/phase6_part_b_test.go:51:19: undefined: escrow.VerifyShare
+tests/phase6_part_b_test.go:58:37: cannot use make([]byte, 32) (value of type []byte) as [32]byte value in struct literal
+tests/phase6_part_b_test.go:59:37: cannot use make([]byte, 32) (value of type []byte) as [32]byte value in struct literal
+tests/phase6_part_b_test.go:802:60: cannot use make([]byte, 32) (value of type []byte) as [32]byte value in struct literal
+tests/phase6_part_b_test.go:833:3: unknown field ArtifactCIDs in struct literal of type lifecycle.ExecuteRecoveryParams
+tests/phase6_part_b_test.go:834:3: unknown field ContentStore in struct literal of type lifecycle.ExecuteRecoveryParams
+tests/phase6_part_b_test.go:835:3: unknown field KeyStore in struct literal of type lifecycle.ExecuteRecoveryParams
+tests/phase6_part_b_test.go:840:16: result.ReEncryptedArtifacts undefined (type *lifecycle.RecoveryResult has no field or method ReEncryptedArtifacts)
+tests/phase6_part_b_test.go:841:43: result.ReEncryptedArtifacts undefined (type *lifecycle.RecoveryResult has no field or method ReEncryptedArtifacts)

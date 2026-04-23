@@ -397,3 +397,69 @@ func TestPedersen_AllCommitmentPointsOnCurve(t *testing.T) {
 		}
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────
+// Verify / VerifyPoints agreement
+// ─────────────────────────────────────────────────────────────────
+
+// TestVerify_VerifyPoints_Consistency is a regression guard: Verify
+// (scalar-side) and VerifyPoints (point-side) must return the same
+// decision for the same semantic input. Any future divergence — a
+// check added to one path but not mirrored in the other — is caught
+// here. The concrete failure mode being defended against: someone
+// strengthens Verify with an additional scalar validation, forgets
+// to extend VerifyPoints, and the CFrag verification path silently
+// accepts shares the escrow path rejects.
+//
+// For every valid share, we derive the corresponding (VK, BK) point
+// pair (VK = Value·G, BK = BlindingFactor·H) and check that both
+// paths agree the share is valid. For every tampered share, we
+// check that both paths agree the share is invalid.
+func TestVerify_VerifyPoints_Consistency(t *testing.T) {
+	shares, commitments, err := Split(fixedSecret(), 3, 5)
+	if err != nil {
+		t.Fatalf("Split: %v", err)
+	}
+	curve := secp256k1.S256()
+	hX, hY, err := HGenerator()
+	if err != nil {
+		t.Fatalf("HGenerator: %v", err)
+	}
+
+	derivePoints := func(s Share) (vkX, vkY, bkX, bkY *big.Int) {
+		val := new(big.Int).SetBytes(s.Value[:])
+		val.Mod(val, curve.Params().N)
+		blind := new(big.Int).SetBytes(s.BlindingFactor[:])
+		blind.Mod(blind, curve.Params().N)
+		vkX, vkY = curve.ScalarBaseMult(padScalar(val))
+		bkX, bkY = curve.ScalarMult(hX, hY, padScalar(blind))
+		return
+	}
+
+	// Happy path: every valid share yields agreement (both nil).
+	for _, s := range shares {
+		vkX, vkY, bkX, bkY := derivePoints(s)
+		errScalar := Verify(s, commitments)
+		errPoints := VerifyPoints(s.Index, vkX, vkY, bkX, bkY, commitments)
+		if errScalar != nil || errPoints != nil {
+			t.Fatalf("valid share %d: Verify=%v, VerifyPoints=%v (want both nil)",
+				s.Index, errScalar, errPoints)
+		}
+	}
+
+	// Tampered path: a bit-flip in Value must produce a point pair
+	// that ALSO fails VerifyPoints. If one path rejects and the
+	// other accepts, the two checks have diverged.
+	bad := shares[0]
+	bad.Value[0] ^= 0x01
+	vkX, vkY, bkX, bkY := derivePoints(bad)
+	errScalar := Verify(bad, commitments)
+	errPoints := VerifyPoints(bad.Index, vkX, vkY, bkX, bkY, commitments)
+	if (errScalar == nil) != (errPoints == nil) {
+		t.Fatalf("tampered share decision divergence: Verify=%v, VerifyPoints=%v",
+			errScalar, errPoints)
+	}
+	if errScalar == nil {
+		t.Fatal("tampered share accepted by Verify — upstream check is broken")
+	}
+}

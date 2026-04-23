@@ -142,74 +142,15 @@ func DLEQChallenge(
 	rPrimeX, rPrimeY *big.Int,
 ) ([TranscriptChallengeSize]byte, error) {
 	var out [TranscriptChallengeSize]byte
-
-	if len(commitments.Points) == 0 {
-		return out, ErrTranscriptEmptyCommitments
+	buf, err := assembleTranscript(
+		commitments, bkX, bkY, vkX, vkY, eX, eY, ePrimeX, ePrimeY,
+		index, rX, rY, rPrimeX, rPrimeY,
+	)
+	if err != nil {
+		return out, err
 	}
-
-	curve := secp256k1.S256()
-
-	// Prepare commitment-point compressed encodings up front. This
-	// surfaces malformed commitments before any hashing work runs.
-	commitBytes := make([][]byte, len(commitments.Points))
-	for j, raw := range commitments.Points {
-		cx, cy, err := unmarshalOnCurve(curve, raw)
-		if err != nil {
-			return out, fmt.Errorf("%w: commitment %d: %w", ErrTranscriptBadCommitment, j, err)
-		}
-		commitBytes[j] = compressedPoint(cx, cy)
-	}
-
-	// Validate and compress the free point inputs.
-	points := []struct {
-		name string
-		x, y *big.Int
-	}{
-		{"BK", bkX, bkY},
-		{"VK", vkX, vkY},
-		{"E", eX, eY},
-		{"E'", ePrimeX, ePrimeY},
-		{"R", rX, rY},
-		{"R'", rPrimeX, rPrimeY},
-	}
-	pointBytes := make(map[string][]byte, len(points))
-	for _, p := range points {
-		if p.x == nil || p.y == nil {
-			return out, fmt.Errorf("%w: %s", ErrTranscriptNilPoint, p.name)
-		}
-		if !curve.IsOnCurve(p.x, p.y) {
-			return out, fmt.Errorf("%w: %s", ErrTranscriptInvalidPoint, p.name)
-		}
-		pointBytes[p.name] = compressedPoint(p.x, p.y)
-	}
-
-	// Assemble the transcript in-place. Writing into a SHA-256
-	// hash as a writer avoids allocating the full 209+33M buffer;
-	// a test path that wants the raw bytes can reconstruct them
-	// independently (TranscriptBytes is exposed below for that).
-	h := sha256.New()
-	h.Write(TranscriptDST[:])
-
-	var lenBuf [4]byte
-	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(commitments.Points)))
-	h.Write(lenBuf[:])
-
-	for _, cb := range commitBytes {
-		h.Write(cb)
-	}
-	h.Write(pointBytes["BK"])
-	h.Write(pointBytes["VK"])
-	h.Write(pointBytes["E"])
-	h.Write(pointBytes["E'"])
-
-	var idxBuf [8]byte
-	binary.BigEndian.PutUint64(idxBuf[:], index)
-	h.Write(idxBuf[:])
-
-	h.Write(pointBytes["R"])
-	h.Write(pointBytes["R'"])
-
-	copy(out[:], h.Sum(nil))
+	digest := sha256.Sum256(buf)
+	copy(out[:], digest[:])
 	return out, nil
 }
 
@@ -236,11 +177,36 @@ func TranscriptBytes(
 	rX, rY *big.Int,
 	rPrimeX, rPrimeY *big.Int,
 ) ([]byte, error) {
+	return assembleTranscript(
+		commitments, bkX, bkY, vkX, vkY, eX, eY, ePrimeX, ePrimeY,
+		index, rX, rY, rPrimeX, rPrimeY,
+	)
+}
+
+// assembleTranscript is the single canonical implementation of the
+// transcript byte layout. DLEQChallenge and TranscriptBytes are both
+// thin wrappers. Keeping exactly one copy of the byte ordering, the
+// length prefix, the compression rules, and the validation order
+// means the spec can drift in only one place — any regression
+// surfaces uniformly in every test that checks transcript shape.
+func assembleTranscript(
+	commitments Commitments,
+	bkX, bkY *big.Int,
+	vkX, vkY *big.Int,
+	eX, eY *big.Int,
+	ePrimeX, ePrimeY *big.Int,
+	index uint64,
+	rX, rY *big.Int,
+	rPrimeX, rPrimeY *big.Int,
+) ([]byte, error) {
 	if len(commitments.Points) == 0 {
 		return nil, ErrTranscriptEmptyCommitments
 	}
 
 	curve := secp256k1.S256()
+
+	// Validate + compress commitment points up front; a malformed
+	// input aborts before any hashing / buffer allocation.
 	commitBytes := make([][]byte, len(commitments.Points))
 	for j, raw := range commitments.Points {
 		cx, cy, err := unmarshalOnCurve(curve, raw)
@@ -250,44 +216,59 @@ func TranscriptBytes(
 		commitBytes[j] = compressedPoint(cx, cy)
 	}
 
-	points := []struct {
+	// Validate + compress the six free point inputs in the exact
+	// order the transcript absorbs them. Named slots, not a map,
+	// so the order is visible in source and cannot silently drift.
+	freePoints := []struct {
 		name string
 		x, y *big.Int
 	}{
-		{"BK", bkX, bkY}, {"VK", vkX, vkY},
-		{"E", eX, eY}, {"E'", ePrimeX, ePrimeY},
-		{"R", rX, rY}, {"R'", rPrimeX, rPrimeY},
+		{"BK", bkX, bkY},
+		{"VK", vkX, vkY},
+		{"E", eX, eY},
+		{"E'", ePrimeX, ePrimeY},
+		{"R", rX, rY},
+		{"R'", rPrimeX, rPrimeY},
 	}
-	pointBytes := make(map[string][]byte, len(points))
-	for _, p := range points {
+	freeBytes := make([][]byte, len(freePoints))
+	for i, p := range freePoints {
 		if p.x == nil || p.y == nil {
 			return nil, fmt.Errorf("%w: %s", ErrTranscriptNilPoint, p.name)
 		}
 		if !curve.IsOnCurve(p.x, p.y) {
 			return nil, fmt.Errorf("%w: %s", ErrTranscriptInvalidPoint, p.name)
 		}
-		pointBytes[p.name] = compressedPoint(p.x, p.y)
+		freeBytes[i] = compressedPoint(p.x, p.y)
 	}
 
+	// Assemble the byte sequence in one pass. The exact layout
+	// (ADR-005 §5.2):
+	//
+	//   DST (32) || BE_uint32(M) (4) || C_0..C_{M-1} (33·M)
+	//   || BK || VK || E || E' (each 33)
+	//   || BE_uint64(index) (8)
+	//   || R || R' (each 33)
 	total := 32 + 4 + 33*len(commitBytes) + 33*4 + 8 + 33*2
-	out := make([]byte, 0, total)
-	out = append(out, TranscriptDST[:]...)
+	buf := make([]byte, 0, total)
+	buf = append(buf, TranscriptDST[:]...)
 	var lenBuf [4]byte
 	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(commitBytes)))
-	out = append(out, lenBuf[:]...)
+	buf = append(buf, lenBuf[:]...)
 	for _, cb := range commitBytes {
-		out = append(out, cb...)
+		buf = append(buf, cb...)
 	}
-	out = append(out, pointBytes["BK"]...)
-	out = append(out, pointBytes["VK"]...)
-	out = append(out, pointBytes["E"]...)
-	out = append(out, pointBytes["E'"]...)
+	// freeBytes order is [BK, VK, E, E', R, R']; the transcript
+	// absorbs BK..E' first, then the index, then R and R'.
+	buf = append(buf, freeBytes[0]...) // BK
+	buf = append(buf, freeBytes[1]...) // VK
+	buf = append(buf, freeBytes[2]...) // E
+	buf = append(buf, freeBytes[3]...) // E'
 	var idxBuf [8]byte
 	binary.BigEndian.PutUint64(idxBuf[:], index)
-	out = append(out, idxBuf[:]...)
-	out = append(out, pointBytes["R"]...)
-	out = append(out, pointBytes["R'"]...)
-	return out, nil
+	buf = append(buf, idxBuf[:]...)
+	buf = append(buf, freeBytes[4]...) // R
+	buf = append(buf, freeBytes[5]...) // R'
+	return buf, nil
 }
 
 // compressedPoint returns the 33-byte SEC 1 compressed encoding

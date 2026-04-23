@@ -182,8 +182,19 @@ func TestShareFormat_DeserializeRejectsUnsupportedVersion(t *testing.T) {
 	}
 }
 
-func TestShareFormat_DeserializeRejectsV2(t *testing.T) {
-	// V1 readers reject V2 until V2 ships.
+// TestShareFormat_DeserializeRejectsMalformedV2 locks the V2
+// branch's rejection of shares that have the V2 Version byte but
+// zero BlindingFactor / CommitmentHash. A raw wire filled only
+// with Version=V2 + non-zero SplitID is the canonical "malformed
+// V2" shape (e.g., a V1 share whose Version byte flipped).
+// Phase B's ValidateShareFormat must catch this with ErrV2FieldEmpty.
+//
+// Note: before Phase B this test was "RejectsV2" and asserted
+// ErrUnsupportedVersion. V2 is now shipped and accepted when the
+// required fields are populated; this test still asserts rejection
+// but for the correct reason (empty V2 fields, not unsupported
+// version).
+func TestShareFormat_DeserializeRejectsMalformedV2(t *testing.T) {
 	wire := make([]byte, ShareWireLen)
 	wire[offsetVersion] = VersionV2
 	wire[offsetThreshold] = 3
@@ -192,8 +203,8 @@ func TestShareFormat_DeserializeRejectsV2(t *testing.T) {
 		wire[offsetSplitID+i] = 0xCD
 	}
 	_, err := DeserializeShare(wire)
-	if !errors.Is(err, ErrUnsupportedVersion) {
-		t.Fatalf("expected ErrUnsupportedVersion for V2 share, got: %v", err)
+	if !errors.Is(err, ErrV2FieldEmpty) {
+		t.Fatalf("expected ErrV2FieldEmpty for malformed V2 share, got: %v", err)
 	}
 }
 

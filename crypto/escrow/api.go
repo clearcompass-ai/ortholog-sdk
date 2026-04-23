@@ -1,30 +1,56 @@
-// Package escrow — api.go implements the public Split / Reconstruct API
-// for V1 (GF(256) Shamir secret sharing), with:
+// Package escrow provides threshold secret sharing for Ortholog
+// escrow records. Two schemes coexist.
 //
-//   - Threshold enforcement at the reconstruction boundary (closes BUG-010).
-//   - SplitID binding: every share carries a random 256-bit identifier
-//     that ties it to a specific split. Reconstruct rejects share sets
-//     whose SplitIDs do not match, preventing cross-split share mixing.
-//   - Threshold stamping: every share carries the M it was split under.
-//     Reconstruct rejects shares with inconsistent thresholds.
-//   - Constant-time GF(256) multiplication (no early-terminating loop,
-//     no data-dependent branches in the inner loop).
+// # V1 — GF(256) Shamir (this file)
 //
-// This file is also the home of the package's authoritative zeroization
-// primitives (ZeroBytes, ZeroArray32). Every file in the escrow package
-// — and the consumers outside it — must route secret-buffer clearing
-// through these functions rather than writing ad-hoc clearing loops. The
-// functions use runtime.KeepAlive and are marked go:noinline to resist
-// dead-store elimination by the Go compiler.
+//   - Split via Split; reconstruct via Reconstruct (also SplitGF256 /
+//     ReconstructGF256 for explicit-scheme callers).
+//   - Threshold enforcement at the reconstruction boundary
+//     (closes BUG-010).
+//   - SplitID binding: every share carries a random 256-bit
+//     identifier that ties it to a specific split. Reconstruct
+//     rejects share sets whose SplitIDs do not match, preventing
+//     cross-split share mixing.
+//   - Threshold stamping: every share carries the M it was split
+//     under; Reconstruct rejects shares with inconsistent
+//     thresholds.
+//   - Constant-time GF(256) multiplication (no early-terminating
+//     loop, no data-dependent branches in the inner loop).
+//   - No cryptographic substitution detection. A substituted share
+//     produces a silently-wrong reconstructed secret; detection
+//     happens at application-layer use time (AES-GCM tag failure)
+//     with no attribution.
 //
-// V1 operates on fixed 32-byte secrets. Callers with larger payloads must
-// AES-wrap the payload and Split the 32-byte key (see mapping_escrow.go
-// for the canonical pattern).
+// # V2 — Pedersen VSS over secp256k1 (vss_v2.go)
 //
-// V2 (future) will swap the GF(256) math for Pedersen VSS over secp256k1
-// without changing this file's public API shape or the Share wire format.
-// The V2 code will populate BlindingFactor and CommitmentHash; it will
-// use the same ZeroBytes/ZeroArray32 primitives defined here.
+//   - Split via SplitV2; reconstruct via ReconstructV2; verify at
+//     distribution time via VerifyShareAgainstCommitments.
+//   - Cryptographic substitution detection: a tampered share fails
+//     Pedersen verification against the dealer's published
+//     commitment set, producing a typed error instead of a
+//     silently-wrong secret.
+//   - Deterministic SplitID derived from dealer DID + nonce
+//     (ADR-005 §6.1). Publishable on-log via Phase D's
+//     escrow-split-commitment-v1 schema.
+//   - Built on the core/vss primitive; polynomial isolation is
+//     structurally enforced.
+//
+// # API stability
+//
+// V1 API (Split, Reconstruct, SplitGF256, ReconstructGF256) is
+// frozen. Existing v7.5 consumers continue to work unchanged.
+// New callers SHOULD use V2; existing callers MAY migrate at their
+// own cadence.
+//
+// # Zeroization primitives
+//
+// This file is also the home of the package's authoritative
+// zeroization primitives (ZeroBytes, ZeroArray32). Every file in
+// the escrow package and its external consumers must route
+// secret-buffer clearing through these functions rather than
+// writing ad-hoc clearing loops. The functions use runtime.KeepAlive
+// and are marked go:noinline to resist dead-store elimination by
+// the Go compiler.
 package escrow
 
 import (

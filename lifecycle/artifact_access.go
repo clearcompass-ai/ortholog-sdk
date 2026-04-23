@@ -17,7 +17,7 @@ Four responsibilities:
 
  3. KEY MATERIAL PRODUCTION: GrantArtifactAccess routes to AES-GCM
     (ECIES key wrapping via escrow.EncryptForNode) or Umbral PRE
-    (threshold re-encryption with DLEQ proofs).
+    (threshold re-encryption with DLEQ proofs + Pedersen binding).
 
  4. CONTENT VERIFICATION: VerifyAndDecryptArtifact decrypts and verifies
     ciphertext integrity (ArtifactCID) and plaintext integrity
@@ -34,6 +34,13 @@ Destination binding: GrantArtifactAccessParams carries a Destination
 field (DID of the target exchange). When a grant audit entry is
 produced, it is bound to this destination via the canonical hash —
 cross-exchange replay of a grant entry is cryptographically impossible.
+
+v7.75 Phase C (ADR-005): PRE mode produces a Pedersen commitment set
+alongside KFrags and CFrags. The commitment set is returned on
+GrantArtifactAccessResult for Phase D on-log publication under the
+pre-grant-commitment-v1 schema. Phase D callers emit this commitment
+entry atomically with the grant so downstream verifiers can fetch
+commitments from the log and gate decryption on polynomial consistency.
 
 TRUST BOUNDARY (AuthorizedRecipients in sealed mode):
 
@@ -73,6 +80,7 @@ import (
 	"github.com/clearcompass-ai/ortholog-sdk/builder"
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
+	"github.com/clearcompass-ai/ortholog-sdk/core/vss"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/artifact"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
@@ -103,6 +111,17 @@ var (
 	// deleted or treat the rotation as having not happened.
 	ErrCryptographicErasureFailed = errors.New(
 		"lifecycle/artifact: cryptographic erasure failed (old key still present)",
+	)
+
+	// ErrMissingCommitments is returned by VerifyAndDecryptArtifact in
+	// PRE mode when the caller did not supply the Pedersen commitment
+	// set. v7.75 Phase C requires commitments at decrypt time — the
+	// primitive verifies every CFrag against the commitments before
+	// Lagrange combination (ADR-005 §3.5). Callers fetch the
+	// commitment set from the on-log pre-grant-commitment-v1 entry
+	// before invoking VerifyAndDecryptArtifact.
+	ErrMissingCommitments = errors.New(
+		"lifecycle/artifact: PRE decryption requires commitments (from pre-grant-commitment-v1)",
 	)
 )
 
@@ -386,6 +405,20 @@ type GrantArtifactAccessResult struct {
 	GrantEntry *envelope.Entry              // Nil if no audit entry required.
 	CFrags     []*artifact.CFrag            // PRE mode only.
 	Capsule    *artifact.Capsule            // PRE mode only.
+
+	// Commitments is the Pedersen commitment set produced by
+	// PRE_GenerateKFrags during umbral_pre grants. v7.75 Phase C
+	// (ADR-005 §3.5). Empty for aes_gcm grants.
+	//
+	// Phase D REQUIREMENT: the domain layer MUST publish this
+	// commitment set on-log via the pre-grant-commitment-v1 schema
+	// BEFORE distributing CFrags to proxies. Verifiers fetch the
+	// commitment set from the log (via the grant's deterministic
+	// SplitID — see ADR-005 §6.2) and pass it to
+	// VerifyAndDecryptArtifact at decryption time. The primitive
+	// rejects any CFrag that fails the polynomial consistency check
+	// against this commitment set.
+	Commitments vss.Commitments
 }
 
 // GrantArtifactAccess composes a grant for artifact access.
@@ -394,7 +427,8 @@ type GrantArtifactAccessResult struct {
 // gates all subsequent work. Denied → error, no key material produced.
 //
 // Phase 2 — Key material: AES-GCM wraps via ECIES (KeyStore → wrap).
-// PRE generates KFrags and CFrags (OwnerSecretKey → KFrags → CFrags).
+// PRE generates KFrags, Pedersen commitments, and CFrags
+// (OwnerSecretKey → KFrags + Commitments → CFrags).
 //
 // Phase 3 — Retrieval + audit: resolve retrieval credential, optionally
 // build a commentary entry recording the grant.
@@ -489,8 +523,18 @@ func grantAESGCM(params GrantArtifactAccessParams, result *GrantArtifactAccessRe
 	return nil
 }
 
-// grantUmbralPRE: OwnerSecretKey → KFrags → CFrags with DLEQ proofs.
-// The private key scalar (sk_del) comes from params, already unwrapped by the caller.
+// grantUmbralPRE: OwnerSecretKey → KFrags + Pedersen commitments → CFrags.
+//
+// v7.75 Phase C (ADR-005 §3.5): PRE_GenerateKFrags produces a Pedersen
+// commitment set alongside the KFrags. The commitment set is captured
+// on the result for Phase D on-log publication via the
+// pre-grant-commitment-v1 schema. Each CFrag's DLEQ challenge is
+// computed over a transcript that absorbs the commitments and BK_i
+// (ADR-005 §5.2), binding the proxy's re-encryption to the committed
+// polynomial.
+//
+// The private key scalar (sk_del) comes from params, already unwrapped
+// by the caller.
 func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAccessResult) error {
 	if params.Capsule == nil {
 		return fmt.Errorf("lifecycle/artifact: capsule required for PRE mode")
@@ -505,15 +549,20 @@ func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAcces
 		n = params.SchemaParams.ReEncryptionThreshold.N
 	}
 
-	// Generate KFrags using the provided secret key (which should be the artifact-scoped sk_del)
-	kfrags, err := artifact.PRE_GenerateKFrags(params.OwnerSecretKey, params.RecipientPubKey, m, n)
+	// Generate KFrags + Pedersen commitment set (v7.75 breaking change
+	// vs v7.5 — three return values).
+	kfrags, commitments, err := artifact.PRE_GenerateKFrags(
+		params.OwnerSecretKey, params.RecipientPubKey, m, n,
+	)
 	if err != nil {
 		return fmt.Errorf("lifecycle/artifact: generate kfrags: %w", err)
 	}
 
+	// Produce CFrags. Each re-encryption threads the commitment set
+	// into the DLEQ transcript (ADR-005 §5.2).
 	cfrags := make([]*artifact.CFrag, len(kfrags))
 	for i, kf := range kfrags {
-		cf, reErr := artifact.PRE_ReEncrypt(kf, params.Capsule)
+		cf, reErr := artifact.PRE_ReEncrypt(kf, params.Capsule, commitments)
 		if reErr != nil {
 			return fmt.Errorf("lifecycle/artifact: re-encrypt kfrag %d: %w", i, reErr)
 		}
@@ -523,6 +572,7 @@ func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAcces
 	result.Method = "umbral_pre"
 	result.CFrags = cfrags
 	result.Capsule = params.Capsule
+	result.Commitments = commitments
 	return nil
 }
 
@@ -568,6 +618,21 @@ type VerifyAndDecryptArtifactParams struct {
 	Capsule      *artifact.Capsule
 	RecipientKey []byte // 32-byte private key scalar.
 	OwnerPubKey  []byte // 65-byte uncompressed public key.
+
+	// Commitments is the Pedersen commitment set for the grant,
+	// fetched from the on-log pre-grant-commitment-v1 entry using
+	// the grant's deterministic SplitID (ADR-005 §6.2).
+	//
+	// REQUIRED for PRE mode (v7.75 Phase C). Empty/zero-threshold
+	// commitments return ErrMissingCommitments.
+	//
+	// The primitive (artifact.PRE_DecryptFrags) verifies every CFrag
+	// against this commitment set BEFORE Lagrange combination.
+	// Unverified CFrags entering combination is the substitution
+	// vulnerability ADR-005 closes (§3.5).
+	//
+	// Ignored in AES-GCM mode.
+	Commitments vss.Commitments
 }
 
 // VerifyAndDecryptArtifact decrypts artifact content and verifies
@@ -575,9 +640,13 @@ type VerifyAndDecryptArtifactParams struct {
 //
 //  1. Ciphertext integrity: ArtifactCID must match the ciphertext.
 //  2. Decrypt via schema's ArtifactEncryption scheme.
+//     - AES-GCM: direct decryption with artifact key.
+//     - PRE: verify every CFrag against commitments (DLEQ + Pedersen),
+//     combine via Lagrange, decrypt.
 //  3. Plaintext integrity: ContentDigest must match the plaintext.
 //
-// Returns the verified plaintext.
+// Returns the verified plaintext. Returns ErrMissingCommitments in
+// PRE mode if the caller did not supply the Pedersen commitment set.
 func VerifyAndDecryptArtifact(params VerifyAndDecryptArtifactParams) ([]byte, error) {
 	if params.SchemaParams == nil {
 		return nil, fmt.Errorf("lifecycle/artifact: nil schema params")
@@ -597,14 +666,21 @@ func VerifyAndDecryptArtifact(params VerifyAndDecryptArtifactParams) ([]byte, er
 			return nil, fmt.Errorf("lifecycle/artifact: nil AES key")
 		}
 		plaintext, err = artifact.DecryptArtifact(params.Ciphertext, *params.Key)
+
 	case types.EncryptionUmbralPRE:
 		if params.Capsule == nil || len(params.CFrags) == 0 {
 			return nil, fmt.Errorf("lifecycle/artifact: capsule and cfrags required for PRE")
 		}
+		// v7.75 Phase C: commitments are required at decrypt time so
+		// PRE_DecryptFrags can verify every CFrag before combination.
+		if params.Commitments.Threshold() == 0 {
+			return nil, ErrMissingCommitments
+		}
 		plaintext, err = artifact.PRE_DecryptFrags(
 			params.RecipientKey, params.CFrags, params.Capsule,
-			params.Ciphertext, params.OwnerPubKey,
+			params.Ciphertext, params.OwnerPubKey, params.Commitments,
 		)
+
 	default:
 		return nil, fmt.Errorf("lifecycle/artifact: unknown scheme %d",
 			params.SchemaParams.ArtifactEncryption)

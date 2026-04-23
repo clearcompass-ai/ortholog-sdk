@@ -349,7 +349,21 @@ func isASCII(s string) bool {
 // TargetRoot + PriorAuthority). Snapshots are exempt from the evidence
 // cap.
 func isAuthoritySnapshotShape(h *ControlHeader) bool {
-	if h.AuthorityPath == nil || *h.AuthorityPath != AuthorityScopeAuthority {
+	return IsAuthoritySnapshotShape(h)
+}
+
+// IsAuthoritySnapshotShape is the exported form of isAuthoritySnapshotShape.
+// Authority snapshots are Path C entries that carry a TargetRoot and a
+// PriorAuthority and (by convention) compress a range of prior enforcement
+// actions into EvidencePointers. Callers that need to classify an entry
+// without importing builder/ use this predicate.
+//
+// The predicate is shape-only: it identifies snapshot-eligible entries but
+// does not assert that Evidence_Pointers is non-empty. Verifiers that treat
+// a snapshot as an authority-chain shortcut should additionally require
+// len(EvidencePointers) > 0 (see verifier/authority_evaluator.go).
+func IsAuthoritySnapshotShape(h *ControlHeader) bool {
+	if h == nil || h.AuthorityPath == nil || *h.AuthorityPath != AuthorityScopeAuthority {
 		return false
 	}
 	return h.TargetRoot != nil && h.PriorAuthority != nil

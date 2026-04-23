@@ -144,13 +144,25 @@ func Split(secret [SecretSize]byte, M, N int) ([]Share, Commitments, error) {
 	return splitWithReader(secret, M, N, rand.Reader)
 }
 
-// splitWithReader is Split parameterised on the randomness source.
-// Unexported: only tests (and the tests of downstream consumers
-// that pin golden vectors) use this path.
+// SplitWithReader is Split parameterised on the randomness source.
+// Intended for deterministic test-vector reproduction by the vss
+// package AND by downstream consumers (crypto/escrow/vss_v2_test.go
+// pins SplitV2 golden output this way). Production flows MUST use
+// Split with crypto/rand; SplitWithReader accepting a caller-chosen
+// reader lets a malicious caller substitute a biased stream and
+// leak information about the polynomial coefficients.
 //
-// The reader must produce at least 16·M·33 bytes before any
-// rejection-sampling draw for n exceeds its budget. In practice a
-// healthy DRBG wrapped as io.Reader suffices.
+// The reader must yield an effectively unlimited stream; realistic
+// usage pulls well under 1KB but rejection-sampling means the exact
+// consumption is non-deterministic in isolation.
+func SplitWithReader(secret [SecretSize]byte, M, N int, r io.Reader) ([]Share, Commitments, error) {
+	return splitWithReader(secret, M, N, r)
+}
+
+// splitWithReader is the package-internal implementation. Kept
+// unexported to prevent accidental use by new callers who should
+// pick Split. SplitWithReader is the explicit "I know what I'm
+// doing" entry point that delegates here.
 func splitWithReader(secret [SecretSize]byte, M, N int, r io.Reader) ([]Share, Commitments, error) {
 	if M < MinThreshold {
 		return nil, Commitments{}, fmt.Errorf("%w: M=%d, minimum is %d", ErrInvalidThreshold, M, MinThreshold)

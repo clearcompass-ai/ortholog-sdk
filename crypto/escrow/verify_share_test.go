@@ -31,14 +31,39 @@ func TestValidateShareFormat_RejectsUnsupportedVersion(t *testing.T) {
 	}
 }
 
-func TestValidateShareFormat_RejectsV2(t *testing.T) {
-	// V1 readers MUST reject V2 until V2 ships. This is the forward-
-	// compatibility gate documented in share_format.go.
+// TestValidateShareFormat_RejectsMalformedV2 asserts that a share
+// carrying the V2 Version byte but V1-shaped contents (zero
+// BlindingFactor, zero CommitmentHash) is hard-rejected.
+//
+// V2 is now shipped and accepted when well-formed — this test locks
+// the V2 branch's empty-field gate. Pre-Phase-B this test was
+// "RejectsV2" and asserted ErrUnsupportedVersion.
+func TestValidateShareFormat_RejectsMalformedV2(t *testing.T) {
 	s := validV1Share(1, 3)
 	s.Version = VersionV2
+	// BlindingFactor and CommitmentHash are still [32]byte{} from
+	// validV1Share; this is exactly the malformed V2 shape.
 	err := ValidateShareFormat(s)
-	if !errors.Is(err, ErrUnsupportedVersion) {
-		t.Fatalf("got %v, want ErrUnsupportedVersion for V2", err)
+	if !errors.Is(err, ErrV2FieldEmpty) {
+		t.Fatalf("got %v, want ErrV2FieldEmpty for malformed V2", err)
+	}
+}
+
+// TestValidateShareFormat_AcceptsWellFormedV2 locks the positive
+// V2 path: a share with populated BlindingFactor, CommitmentHash,
+// and SchemePedersenTag is accepted.
+func TestValidateShareFormat_AcceptsWellFormedV2(t *testing.T) {
+	s := validV1Share(1, 3)
+	s.Version = VersionV2
+	s.FieldTag = SchemePedersenTag
+	for i := range s.BlindingFactor {
+		s.BlindingFactor[i] = byte(i) + 1
+	}
+	for i := range s.CommitmentHash {
+		s.CommitmentHash[i] = byte(i) ^ 0xAA
+	}
+	if err := ValidateShareFormat(s); err != nil {
+		t.Fatalf("well-formed V2 share rejected: %v", err)
 	}
 }
 

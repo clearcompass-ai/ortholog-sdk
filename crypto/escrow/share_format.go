@@ -46,8 +46,15 @@ const (
 	VersionV1 byte = 0x01
 
 	// VersionV2 is Pedersen Verifiable Secret Sharing over secp256k1.
-	// Reserved; V1 readers reject it.
+	// A V2 share MUST populate BlindingFactor and CommitmentHash;
+	// Value is a secp256k1 scalar (f(i) mod n) instead of GF(256) bytes.
 	VersionV2 byte = 0x02
+
+	// ShareVersionV2 is an alias for VersionV2 under the Phase B
+	// naming convention (matches SplitV2/ReconstructV2/VerifyShareAgainstCommitments).
+	// Prefer VersionV2 in new code; the alias exists so API docs and
+	// plan documents can reference either name interchangeably.
+	ShareVersionV2 = VersionV2
 )
 
 // ShareWireLen is the fixed on-wire size of a serialized Share.
@@ -115,6 +122,13 @@ type Share struct {
 // Populated by Split / SplitGF256; verified by Reconstruct and
 // ReconstructGF256.
 const SchemeGF256Tag byte = 0x01
+
+// SchemePedersenTag marks a share as produced by Pedersen VSS (V2).
+// Populated by SplitV2; verified by ReconstructV2 and
+// VerifyShareAgainstCommitments. Distinct from SchemeGF256Tag so
+// that a V1 reconstruction path rejects V2 shares at the FieldTag
+// gate even if the Version byte was confused elsewhere.
+const SchemePedersenTag byte = 0x02
 
 // SerializeShare encodes a Share into its 131-byte wire form.
 //
@@ -208,4 +222,19 @@ var (
 	// confused-deputy attacks where a caller submits a share from a
 	// future scheme (V2 Pedersen) into a V1-only reconstructor.
 	ErrUnknownFieldTag = errors.New("escrow: unknown share field tag")
+
+	// ErrV2FieldEmpty is returned when a V2 share carries a zero
+	// value in BlindingFactor or CommitmentHash. Populated V2 fields
+	// are mandatory — a zero blinding factor or zero commitment hash
+	// indicates either corruption or a V1 share with its Version byte
+	// flipped to V2.
+	ErrV2FieldEmpty = errors.New("escrow: V2 share has zero V2-required field")
+
+	// ErrCommitmentMismatch is returned when a V2 share fails Pedersen
+	// verification against the supplied commitment set. Wraps the
+	// core/vss layer's equivalent sentinel so callers matching on
+	// either succeed. This is the load-bearing substitution-detection
+	// error: if ReconstructV2 returns this, an attacker attempted to
+	// feed a tampered share and the cryptographic check caught it.
+	ErrCommitmentMismatch = errors.New("escrow: share fails Pedersen verification against commitment set")
 )

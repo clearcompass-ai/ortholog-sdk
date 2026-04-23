@@ -27,23 +27,38 @@ import "fmt"
 // Returns nil if the share is well-formed. Returns a typed error (see
 // share_format.go for sentinels) identifying the first failure.
 //
-// Checks:
-//   - Version == VersionV1 (rejects V2 and unknown versions).
-//   - Threshold >= 2 (rejects degenerate 1-of-N and zero).
-//   - Index != 0 (index 0 is reserved; evaluating f(0) would reveal the secret).
-//   - SplitID != [32]byte{} (every share must be bound to a split).
-//   - BlindingFactor is zero (V1 must not populate V2-only fields).
-//   - CommitmentHash is zero (V1 must not populate V2-only fields).
+// Dispatches on Version:
 //
-// Does not validate the share's cryptographic validity — that requires
-// Pedersen VSS (V2).
+//   - VersionV1: V2-only fields (BlindingFactor, CommitmentHash) MUST
+//     be zero. FieldTag MUST be 0 (legacy) or SchemeGF256Tag.
+//   - VersionV2: V2-only fields MUST be non-zero. FieldTag MUST be
+//     0 (legacy tolerance) or SchemePedersenTag.
+//   - any other value: ErrUnsupportedVersion.
+//
+// Common gates apply to both versions: Threshold >= 2, Index != 0,
+// SplitID != zero.
+//
+// Does NOT validate the share's cryptographic validity. For V1,
+// no such check exists by design. For V2, call
+// VerifyShareAgainstCommitments with the published commitment set.
 func ValidateShareFormat(s Share) error {
-	if s.Version != VersionV1 {
+	switch s.Version {
+	case VersionV1:
+		return validateShareFormatV1(s)
+	case VersionV2:
+		return validateShareFormatV2(s)
+	default:
 		return fmt.Errorf(
-			"%w: got 0x%02x, expected 0x%02x (V1 GF(256))",
-			ErrUnsupportedVersion, s.Version, VersionV1,
+			"%w: got 0x%02x, expected 0x%02x (V1) or 0x%02x (V2)",
+			ErrUnsupportedVersion, s.Version, VersionV1, VersionV2,
 		)
 	}
+}
+
+// validateShareFormatV1 implements the pre-Phase-B validation contract.
+// Kept byte-identical to the v7.5 behaviour; any change here is a V1
+// regression and is a merge-blocker.
+func validateShareFormatV1(s Share) error {
 	if s.Threshold < 2 {
 		return fmt.Errorf(
 			"%w: share threshold is %d, minimum is 2",
@@ -69,6 +84,46 @@ func ValidateShareFormat(s Share) error {
 	// from a future scheme being fed into V1 code — both rejected.
 	if s.FieldTag != 0 && s.FieldTag != SchemeGF256Tag {
 		return fmt.Errorf("%w: 0x%02x", ErrUnknownFieldTag, s.FieldTag)
+	}
+	return nil
+}
+
+// validateShareFormatV2 enforces the Phase B V2 structural contract.
+// A V2 share carries a populated blinding factor and a commitment
+// hash; both are required for Pedersen verification to succeed
+// downstream. A zero value here indicates either a V1 share with a
+// Version-byte forgery, or a genuinely corrupted V2 share — both
+// cases are hard-rejected here before the cryptographic check runs.
+func validateShareFormatV2(s Share) error {
+	if s.Threshold < 2 {
+		return fmt.Errorf(
+			"%w: V2 share threshold is %d, minimum is 2",
+			ErrInvalidThreshold, s.Threshold,
+		)
+	}
+	if s.Index == 0 {
+		return fmt.Errorf("%w: index 0 is reserved", ErrInvalidIndex)
+	}
+	if zeroArray32(s.SplitID) {
+		return fmt.Errorf("%w", ErrSplitIDMissing)
+	}
+	if zeroArray32(s.BlindingFactor) {
+		return fmt.Errorf(
+			"%w: BlindingFactor is zero for V2 share index %d",
+			ErrV2FieldEmpty, s.Index,
+		)
+	}
+	if zeroArray32(s.CommitmentHash) {
+		return fmt.Errorf(
+			"%w: CommitmentHash is zero for V2 share index %d",
+			ErrV2FieldEmpty, s.Index,
+		)
+	}
+	if s.FieldTag != 0 && s.FieldTag != SchemePedersenTag {
+		return fmt.Errorf(
+			"%w: V2 share with non-Pedersen field tag 0x%02x",
+			ErrUnknownFieldTag, s.FieldTag,
+		)
 	}
 	return nil
 }

@@ -639,21 +639,47 @@ func TestSplitV2_SplitIDDeterministic(t *testing.T) {
 	}
 }
 
-// TestComputeEscrowSplitID_Golden locks the exact DST + length-
-// prefix encoding for the escrow SplitID construction. The
-// expected bytes below match ADR-005 §17.2 (with the correction
-// that the real-implementation dealer DID and nonce used here
-// match the Phase A fixture).
+// TestComputeEscrowSplitID_Golden locks the exact DST + universal
+// length-prefix encoding for the escrow SplitID construction per
+// ADR-005 §2 (v7.75 migration). The fixture at
+// testdata/split_id_vector.json is the authoritative cross-
+// implementation anchor; this test reads it and asserts the
+// in-process derivation matches byte-for-byte.
+//
+// The v7.75 migration is a hard break: every SplitID produced by
+// pre-migration raw-concat code differs from the LengthPrefixed
+// output. Any implementation still emitting the old bytes fails
+// this test, which is the intended behaviour.
 func TestComputeEscrowSplitID_Golden(t *testing.T) {
-	dealerDID := "did:web:example.com:dealer1"
-	var nonce [32]byte
-	for i := 0; i < 32; i++ {
-		nonce[i] = byte(i)
+	raw, err := os.ReadFile(filepath.Join("testdata", "split_id_vector.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
 	}
-	got := ComputeEscrowSplitID(dealerDID, nonce)
-	want := "d8ae82c27447458d01f946f300decd03981e0b79761ebc4cf38c84742fb589e7"
-	if hex.EncodeToString(got[:]) != want {
-		t.Fatalf("escrow SplitID mismatch:\n got %x\nwant %s", got[:], want)
+	var fx struct {
+		DST                string `json:"dst"`
+		DealerDID          string `json:"dealer_did"`
+		NonceHex           string `json:"nonce_hex"`
+		ExpectedSplitIDHex string `json:"expected_split_id_hex"`
+	}
+	if err := json.Unmarshal(raw, &fx); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if fx.DST != escrowSplitIDDST {
+		t.Fatalf("fixture DST %q != package DST %q", fx.DST, escrowSplitIDDST)
+	}
+	nonceBytes, err := hex.DecodeString(fx.NonceHex)
+	if err != nil {
+		t.Fatalf("decode nonce: %v", err)
+	}
+	if len(nonceBytes) != 32 {
+		t.Fatalf("nonce length = %d, want 32", len(nonceBytes))
+	}
+	var nonce [32]byte
+	copy(nonce[:], nonceBytes)
+
+	got := ComputeEscrowSplitID(fx.DealerDID, nonce)
+	if hex.EncodeToString(got[:]) != fx.ExpectedSplitIDHex {
+		t.Fatalf("escrow SplitID mismatch:\n got  %x\n want %s", got[:], fx.ExpectedSplitIDHex)
 	}
 }
 

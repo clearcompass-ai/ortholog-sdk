@@ -58,6 +58,10 @@ func ValidateShareFormat(s Share) error {
 // validateShareFormatV1 implements the pre-Phase-B validation contract.
 // Kept byte-identical to the v7.5 behaviour; any change here is a V1
 // regression and is a merge-blocker.
+//
+// Each check is gated by a mutation-audit switch so the audit runner
+// can flip it and confirm the listed binding test fires. See
+// verify_share_mutation_switches.go.
 func validateShareFormatV1(s Share) error {
 	if s.Threshold < 2 {
 		return fmt.Errorf(
@@ -65,25 +69,33 @@ func validateShareFormatV1(s Share) error {
 			ErrInvalidThreshold, s.Threshold,
 		)
 	}
-	if s.Index == 0 {
-		return fmt.Errorf("%w: index 0 is reserved", ErrInvalidIndex)
+	if muEnableShareIndexNonZero {
+		if s.Index == 0 {
+			return fmt.Errorf("%w: index 0 is reserved", ErrInvalidIndex)
+		}
 	}
-	if zeroArray32(s.SplitID) {
-		return fmt.Errorf("%w", ErrSplitIDMissing)
+	if muEnableSplitIDPresent {
+		if zeroArray32(s.SplitID) {
+			return fmt.Errorf("%w", ErrSplitIDMissing)
+		}
 	}
-	if !zeroArray32(s.BlindingFactor) {
-		return fmt.Errorf("%w: BlindingFactor must be zero in V1", ErrV1FieldNotEmpty)
-	}
-	if !zeroArray32(s.CommitmentHash) {
-		return fmt.Errorf("%w: CommitmentHash must be zero in V1", ErrV1FieldNotEmpty)
+	if muEnableV1FieldEmptyCheck {
+		if !zeroArray32(s.BlindingFactor) {
+			return fmt.Errorf("%w: BlindingFactor must be zero in V1", ErrV1FieldNotEmpty)
+		}
+		if !zeroArray32(s.CommitmentHash) {
+			return fmt.Errorf("%w: CommitmentHash must be zero in V1", ErrV1FieldNotEmpty)
+		}
 	}
 	// FieldTag discriminates which scheme produced this share. Zero
 	// is tolerated for legacy shares that predate the field; any
 	// explicit non-zero value MUST equal SchemeGF256Tag (V1 GF(256)).
 	// Unknown non-zero values indicate either a forgery or a share
 	// from a future scheme being fed into V1 code — both rejected.
-	if s.FieldTag != 0 && s.FieldTag != SchemeGF256Tag {
-		return fmt.Errorf("%w: 0x%02x", ErrUnknownFieldTag, s.FieldTag)
+	if muEnableFieldTagDiscrimination {
+		if s.FieldTag != 0 && s.FieldTag != SchemeGF256Tag {
+			return fmt.Errorf("%w: 0x%02x", ErrUnknownFieldTag, s.FieldTag)
+		}
 	}
 	return nil
 }
@@ -101,29 +113,37 @@ func validateShareFormatV2(s Share) error {
 			ErrInvalidThreshold, s.Threshold,
 		)
 	}
-	if s.Index == 0 {
-		return fmt.Errorf("%w: index 0 is reserved", ErrInvalidIndex)
+	if muEnableShareIndexNonZero {
+		if s.Index == 0 {
+			return fmt.Errorf("%w: index 0 is reserved", ErrInvalidIndex)
+		}
 	}
-	if zeroArray32(s.SplitID) {
-		return fmt.Errorf("%w", ErrSplitIDMissing)
+	if muEnableSplitIDPresent {
+		if zeroArray32(s.SplitID) {
+			return fmt.Errorf("%w", ErrSplitIDMissing)
+		}
 	}
-	if zeroArray32(s.BlindingFactor) {
-		return fmt.Errorf(
-			"%w: BlindingFactor is zero for V2 share index %d",
-			ErrV2FieldEmpty, s.Index,
-		)
+	if muEnableV2FieldPopulatedCheck {
+		if zeroArray32(s.BlindingFactor) {
+			return fmt.Errorf(
+				"%w: BlindingFactor is zero for V2 share index %d",
+				ErrV2FieldEmpty, s.Index,
+			)
+		}
+		if zeroArray32(s.CommitmentHash) {
+			return fmt.Errorf(
+				"%w: CommitmentHash is zero for V2 share index %d",
+				ErrV2FieldEmpty, s.Index,
+			)
+		}
 	}
-	if zeroArray32(s.CommitmentHash) {
-		return fmt.Errorf(
-			"%w: CommitmentHash is zero for V2 share index %d",
-			ErrV2FieldEmpty, s.Index,
-		)
-	}
-	if s.FieldTag != 0 && s.FieldTag != SchemePedersenTag {
-		return fmt.Errorf(
-			"%w: V2 share with non-Pedersen field tag 0x%02x",
-			ErrUnknownFieldTag, s.FieldTag,
-		)
+	if muEnableFieldTagDiscrimination {
+		if s.FieldTag != 0 && s.FieldTag != SchemePedersenTag {
+			return fmt.Errorf(
+				"%w: V2 share with non-Pedersen field tag 0x%02x",
+				ErrUnknownFieldTag, s.FieldTag,
+			)
+		}
 	}
 	return nil
 }

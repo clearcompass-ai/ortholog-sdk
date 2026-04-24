@@ -18,39 +18,63 @@ import (
 func runValidateRegistries(regs []*Registry) {
 	var drift []string
 
+	// Cache source bytes per-file to avoid redundant I/O when a
+	// registry's gates cover more than one file via source_file.
+	srcCache := map[string]string{}
+	readSource := func(path string) (string, error) {
+		if s, ok := srcCache[path]; ok {
+			return s, nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		s := string(b)
+		srcCache[path] = s
+		return s, nil
+	}
+
 	for _, r := range regs {
-		// 1. The source file must exist.
+		// 1. The registry-level source file must exist.
 		if _, err := os.Stat(r.File); err != nil {
 			drift = append(drift, fmt.Sprintf(
 				"%s: source file %q does not exist",
 				r.RegistryPath, r.File))
 			continue
 		}
-		// 2. Per-gate source checks.
-		srcBytes, err := os.ReadFile(r.File)
-		if err != nil {
-			drift = append(drift, fmt.Sprintf(
-				"%s: read source %q: %v", r.RegistryPath, r.File, err))
-			continue
-		}
-		srcText := string(srcBytes)
 		for _, g := range r.Gates {
+			src := g.ResolveSourceFile(r.File)
+			// 2a. Every gate's source file (possibly overridden) must exist.
+			if _, err := os.Stat(src); err != nil {
+				drift = append(drift, fmt.Sprintf(
+					"%s: gate %q: source_file %q does not exist",
+					r.RegistryPath, g.Name, src))
+				continue
+			}
+			srcText, err := readSource(src)
+			if err != nil {
+				drift = append(drift, fmt.Sprintf(
+					"%s: gate %q: read source %q: %v",
+					r.RegistryPath, g.Name, src, err))
+				continue
+			}
+			// 2b. Per-gate source check.
 			switch g.Kind {
 			case GateBoolConst:
 				re := findBoolConstLineRE(g.Name)
 				if !re.MatchString(srcText) {
 					drift = append(drift, fmt.Sprintf(
 						"%s: gate %q: no `%s = true` declaration in %s",
-						r.RegistryPath, g.Name, g.Name, r.File))
+						r.RegistryPath, g.Name, g.Name, src))
 				}
 			case GateStringMutation:
 				if !strings.Contains(srcText, g.MutationFrom) {
 					drift = append(drift, fmt.Sprintf(
 						"%s: gate %q: mutation_from %q absent from %s",
-						r.RegistryPath, g.Name, g.MutationFrom, r.File))
+						r.RegistryPath, g.Name, g.MutationFrom, src))
 				}
 			}
-			// 3. Every declared test must exist somewhere in the package.
+			// 3. Every declared test must exist in the package.
 			missing := missingTestsInPackage(r.Package, g.Tests)
 			for _, t := range missing {
 				drift = append(drift, fmt.Sprintf(

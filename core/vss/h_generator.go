@@ -194,6 +194,17 @@ func candidateX(counter uint32, p *big.Int) *big.Int {
 // (nil, false) when no y exists for this x — that is, when the
 // quadratic-residue check on x^3 + 7 fails.
 func liftX(x *big.Int, curve *secp256k1.KoblitzCurve) (*big.Int, bool) {
+	// Gate: muEnableHGeneratorLiftX
+	// (h_generator_mutation_switches.go). When off, every candidate
+	// is treated as not-liftable — deriveHGenerator exhausts its
+	// try-and-increment loop and HGenerator returns
+	// ErrHGeneratorExhausted. The binding test runs deriveHGenerator
+	// directly (bypassing the sync.Once cache in HGenerator) and
+	// asserts the error fires.
+	if !muEnableHGeneratorLiftX {
+		return nil, false
+	}
+
 	p := curve.Params().P
 
 	// Compute the right-hand side of y^2 = x^3 + ax + b. For

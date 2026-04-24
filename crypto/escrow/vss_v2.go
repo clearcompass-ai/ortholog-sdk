@@ -122,24 +122,32 @@ func splitV2WithReader(
 ) ([]Share, vss.Commitments, [32]byte, error) {
 	var zeroID [32]byte
 
-	// Structural gates — cheap failures before any curve math.
-	if len(secret) != SecretSize {
-		return nil, vss.Commitments{}, zeroID, fmt.Errorf(
-			"escrow/split_v2: secret must be %d bytes, got %d",
-			SecretSize, len(secret),
-		)
+	// Structural gates — cheap failures before any curve math. Each
+	// gate is wired to the ADR-005 §6 mutation-audit discipline via
+	// its muEnable* switch (see vss_v2_mutation_switches.go).
+	if muEnableEscrowSecretSizeCheck {
+		if len(secret) != SecretSize {
+			return nil, vss.Commitments{}, zeroID, fmt.Errorf(
+				"escrow/split_v2: secret must be %d bytes, got %d",
+				SecretSize, len(secret),
+			)
+		}
 	}
-	if dealerDID == "" {
-		return nil, vss.Commitments{}, zeroID, errors.New("escrow/split_v2: dealerDID must be non-empty")
+	if muEnableEscrowDealerDIDNonEmpty {
+		if dealerDID == "" {
+			return nil, vss.Commitments{}, zeroID, errors.New("escrow/split_v2: dealerDID must be non-empty")
+		}
 	}
-	if M < 2 {
-		return nil, vss.Commitments{}, zeroID, fmt.Errorf("%w: M=%d, minimum is 2", ErrInvalidThreshold, M)
-	}
-	if N < M {
-		return nil, vss.Commitments{}, zeroID, fmt.Errorf("%w: N=%d < M=%d", ErrInvalidThreshold, N, M)
-	}
-	if N > 255 {
-		return nil, vss.Commitments{}, zeroID, fmt.Errorf("%w: N=%d exceeds 255", ErrInvalidThreshold, N)
+	if muEnableEscrowThresholdBounds {
+		if M < 2 {
+			return nil, vss.Commitments{}, zeroID, fmt.Errorf("%w: M=%d, minimum is 2", ErrInvalidThreshold, M)
+		}
+		if N < M {
+			return nil, vss.Commitments{}, zeroID, fmt.Errorf("%w: N=%d < M=%d", ErrInvalidThreshold, N, M)
+		}
+		if N > 255 {
+			return nil, vss.Commitments{}, zeroID, fmt.Errorf("%w: N=%d exceeds 255", ErrInvalidThreshold, N)
+		}
 	}
 
 	// SplitID: deterministic from (dealerDID, nonce). Distinct
@@ -216,11 +224,13 @@ func ReconstructV2(shares []Share, commitments vss.Commitments) ([]byte, error) 
 	if err := VerifyShareSet(shares); err != nil {
 		return nil, fmt.Errorf("escrow/reconstruct_v2: %w", err)
 	}
-	if shares[0].Version != VersionV2 {
-		return nil, fmt.Errorf(
-			"%w: ReconstructV2 called with version 0x%02x set",
-			ErrUnsupportedVersion, shares[0].Version,
-		)
+	if muEnableReconstructVersionCheck {
+		if shares[0].Version != VersionV2 {
+			return nil, fmt.Errorf(
+				"%w: ReconstructV2 called with version 0x%02x set",
+				ErrUnsupportedVersion, shares[0].Version,
+			)
+		}
 	}
 
 	// Per-share cryptographic verification. This is the step that
@@ -228,12 +238,14 @@ func ReconstructV2(shares []Share, commitments vss.Commitments) ([]byte, error) 
 	// into a Pedersen "must produce right secret or loud error".
 	// Every share is checked; the first failure aborts with an
 	// index-tagged error so operators can attribute.
-	for i, s := range shares {
-		if err := VerifyShareAgainstCommitments(s, commitments); err != nil {
-			return nil, fmt.Errorf(
-				"escrow/reconstruct_v2: share at slot %d (index %d): %w",
-				i, s.Index, err,
-			)
+	if muEnableReconstructShareVerification {
+		for i, s := range shares {
+			if err := VerifyShareAgainstCommitments(s, commitments); err != nil {
+				return nil, fmt.Errorf(
+					"escrow/reconstruct_v2: share at slot %d (index %d): %w",
+					i, s.Index, err,
+				)
+			}
 		}
 	}
 

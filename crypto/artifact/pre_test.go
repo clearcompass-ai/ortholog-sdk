@@ -249,10 +249,14 @@ type transcriptVector struct {
 // match transitively anchors the transcript format (a wrong DST
 // produces a wrong challenge, and the challenge check catches it).
 func TestPRE_DLEQTranscript_Golden(t *testing.T) {
+	// Load the cross-implementation fixture. Phase C Group 5.1
+	// converted the two prior t.Skip paths to t.Fatalf: a skipped
+	// test silently passes the M4 transcript-DST mutation-audit
+	// probe, which would let a future DST flip escape review.
 	fixturePath := filepath.Join("..", "..", "core", "vss", "testdata", "transcript_vector.json")
 	raw, err := os.ReadFile(fixturePath)
 	if err != nil {
-		t.Skipf("fixture not readable (%v); Phase A test covers the primary assertion", err)
+		t.Fatalf("fixture %s not readable: %v (required for M4 transcript-DST mutation audit)", fixturePath, err)
 	}
 
 	var v transcriptVector
@@ -261,7 +265,7 @@ func TestPRE_DLEQTranscript_Golden(t *testing.T) {
 	}
 
 	if v.Expected.ChallengeHex == "" {
-		t.Skip("fixture lacks expected.challenge_hex; Phase A primary coverage suffices")
+		t.Fatalf("fixture %s lacks expected.challenge_hex — required for M4 DST-mutation binding", fixturePath)
 	}
 
 	expected, err := hex.DecodeString(v.Expected.ChallengeHex)

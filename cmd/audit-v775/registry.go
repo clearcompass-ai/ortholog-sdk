@@ -33,12 +33,30 @@ const (
 
 // Gate describes a single mutation probe in a registry.
 type Gate struct {
-	Name          string   `yaml:"name"`
-	Kind          GateKind `yaml:"kind"`
-	Description   string   `yaml:"description"`
-	Tests         []string `yaml:"tests"`
-	MutationFrom  string   `yaml:"mutation_from,omitempty"`
-	MutationTo    string   `yaml:"mutation_to,omitempty"`
+	Name         string   `yaml:"name"`
+	Kind         GateKind `yaml:"kind"`
+	Description  string   `yaml:"description"`
+	Tests        []string `yaml:"tests"`
+	MutationFrom string   `yaml:"mutation_from,omitempty"`
+	MutationTo   string   `yaml:"mutation_to,omitempty"`
+
+	// SourceFile optionally overrides the registry-level File for
+	// this gate. Used when one registry covers mutations in more
+	// than one source file — for example, a bool_const declared in
+	// a sibling `_mutation_switches.go` alongside a string_mutation
+	// targeting the primary source. When empty, the runner uses
+	// Registry.File.
+	SourceFile string `yaml:"source_file,omitempty"`
+}
+
+// ResolveSourceFile returns the file the runner should mutate for
+// this gate. Gate.SourceFile wins if set; otherwise the registry's
+// File applies.
+func (g Gate) ResolveSourceFile(registryFile string) string {
+	if g.SourceFile != "" {
+		return g.SourceFile
+	}
+	return registryFile
 }
 
 // Registry is the parsed contents of one *.mutation-audit.yaml file.

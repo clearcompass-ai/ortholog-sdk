@@ -1,0 +1,51 @@
+# Mutation-audit registry for core/vss/h_generator.go
+#
+# Phase C Group 5.2 — H-generator derivation audit. Two probes:
+#
+# 1. HGeneratorSeedFlip — string_mutation on the printable seed
+#    constant. Flipping the version suffix from v1 to v2 changes the
+#    derived H and invalidates the golden xy_sha256 in
+#    testdata/h_generator.json. TestHGenerator_FrozenSeed asserts
+#    BOTH the seed constant identity and the frozen hash; either
+#    assertion fires on the mutation.
+#
+# 2. muEnableHGeneratorLiftX — bool_const gating the ModSqrt +
+#    IsOnCurve sequence in liftX. Off makes every candidate x
+#    non-liftable; deriveHGenerator exhausts HGeneratorMaxAttempts
+#    and returns ErrHGeneratorExhausted.
+#
+# The registry's file: field points at h_generator_mutation_switches.go
+# where the bool_const declaration lives. The string_mutation probe
+# is scoped against h_generator.go itself (where the seed constant
+# is declared); the schema's `source_file` override on the gate
+# directs the runner.
+
+file: core/vss/h_generator_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/core/vss
+
+gates:
+  - name: muEnableHGeneratorLiftX
+    kind: bool_const
+    description: >-
+      ModSqrt + IsOnCurve sequence inside liftX. Off makes every
+      candidate x non-liftable; deriveHGenerator exhausts the
+      try-and-increment loop and HGenerator returns
+      ErrHGeneratorExhausted.
+    tests:
+      - TestHGenerator_LiftXGate_Binding
+
+  - name: HGeneratorSeedFlip
+    kind: string_mutation
+    source_file: core/vss/h_generator.go
+    description: >-
+      HGeneratorSeed byte flip. The printable seed
+      "ortholog/core/vss/pedersen/h-generator/v1" is baked into the
+      H derivation; a one-byte change yields a different H and
+      invalidates every golden commitment vector. The binding test
+      (TestHGenerator_FrozenSeed) asserts BOTH the seed constant
+      identity AND the frozen xy_sha256 digest; either assertion
+      fires on the mutation.
+    mutation_from: ortholog/core/vss/pedersen/h-generator/v1
+    mutation_to:   ortholog/core/vss/pedersen/h-generator/v2
+    tests:
+      - TestHGenerator_FrozenSeed

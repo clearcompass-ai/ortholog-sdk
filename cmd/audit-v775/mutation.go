@@ -64,7 +64,7 @@ func runMutation(args []string) {
 	if *listOnly {
 		for _, r := range regs {
 			for _, g := range r.Gates {
-				fmt.Printf("%s\t%s\t%s\n", r.File, g.Name, g.Kind)
+				fmt.Printf("%s\t%s\t%s\n", g.ResolveSourceFile(r.File), g.Name, g.Kind)
 			}
 		}
 		return
@@ -120,7 +120,7 @@ func runAllMutations(regs []*Registry, filter *regexp.Regexp, dry bool) []AuditR
 			if dry {
 				res.Note = "dry-run"
 				results = append(results, res)
-				fmt.Fprintf(os.Stderr, "  SKIP %s/%s (dry-run)\n", r.File, g.Name)
+				fmt.Fprintf(os.Stderr, "  SKIP %s/%s (dry-run)\n", g.ResolveSourceFile(r.File), g.Name)
 				continue
 			}
 			runOne(r, g, &res)
@@ -131,20 +131,22 @@ func runAllMutations(regs []*Registry, filter *regexp.Regexp, dry bool) []AuditR
 }
 
 func runOne(r *Registry, g Gate, res *AuditResult) {
+	source := g.ResolveSourceFile(r.File)
+
 	// 1. Baseline test run.
 	if err := runTests(r.Package, g.Tests, wantPass); err != nil {
 		res.Result = "SKIP"
 		res.Note = "baseline failed: " + err.Error()
-		fmt.Fprintf(os.Stderr, "  SKIP %s/%s: baseline failed\n", r.File, g.Name)
+		fmt.Fprintf(os.Stderr, "  SKIP %s/%s: baseline failed\n", source, g.Name)
 		return
 	}
 
 	// 2. Mutate.
-	original, err := mutate(r.File, g)
+	original, err := mutate(source, g)
 	if err != nil {
 		res.Result = "FAIL"
 		res.Note = "mutate failed: " + err.Error()
-		fmt.Fprintf(os.Stderr, "  FAIL %s/%s: mutate: %v\n", r.File, g.Name, err)
+		fmt.Fprintf(os.Stderr, "  FAIL %s/%s: mutate: %v\n", source, g.Name, err)
 		return
 	}
 
@@ -160,10 +162,10 @@ func runOne(r *Registry, g Gate, res *AuditResult) {
 		if restored {
 			return
 		}
-		if restoreErr := RestoreBytes(r.File, original); restoreErr != nil {
+		if restoreErr := RestoreBytes(source, original); restoreErr != nil {
 			fmt.Fprintf(os.Stderr,
 				"  CRITICAL %s/%s: deferred restore failed: %v\n  Recover manually: git checkout -- %s\n",
-				r.File, g.Name, restoreErr, r.File)
+				source, g.Name, restoreErr, source)
 			if res.Result != "FAIL" {
 				res.Result = "FAIL"
 				res.Note = "deferred restore failed: " + restoreErr.Error()
@@ -175,12 +177,12 @@ func runOne(r *Registry, g Gate, res *AuditResult) {
 	if err := runTests(r.Package, g.Tests, wantFail); err != nil {
 		res.Result = "FAIL"
 		res.Note = "post-mutation: " + err.Error()
-		fmt.Fprintf(os.Stderr, "  FAIL %s/%s: post-mutation: %v\n", r.File, g.Name, err)
+		fmt.Fprintf(os.Stderr, "  FAIL %s/%s: post-mutation: %v\n", source, g.Name, err)
 		return // deferred restore fires
 	}
 
 	// 4. Manual restore.
-	if restoreErr := RestoreBytes(r.File, original); restoreErr != nil {
+	if restoreErr := RestoreBytes(source, original); restoreErr != nil {
 		res.Result = "FAIL"
 		res.Note = "restore failed: " + restoreErr.Error()
 		return // deferred restore will retry
@@ -191,12 +193,12 @@ func runOne(r *Registry, g Gate, res *AuditResult) {
 	if err := runTests(r.Package, g.Tests, wantPass); err != nil {
 		res.Result = "FAIL"
 		res.Note = "post-restore: " + err.Error()
-		fmt.Fprintf(os.Stderr, "  FAIL %s/%s: post-restore: %v\n", r.File, g.Name, err)
+		fmt.Fprintf(os.Stderr, "  FAIL %s/%s: post-restore: %v\n", source, g.Name, err)
 		return
 	}
 
 	res.Result = "PASS"
-	fmt.Fprintf(os.Stderr, "  PASS %s/%s\n", r.File, g.Name)
+	fmt.Fprintf(os.Stderr, "  PASS %s/%s\n", source, g.Name)
 }
 
 // mutate dispatches to the correct rewrite strategy for g.Kind.

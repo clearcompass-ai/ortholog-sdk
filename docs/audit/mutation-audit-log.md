@@ -14,10 +14,14 @@ Every row records one gate's mutation result from a run of
 
 The file is append-only. Entries are committed to the repo.
 
-## 2026-04-24T22:38:46Z — audit-v775 mutation
+## 2026-04-24T22:59:37Z — audit-v775 mutation
 
 | Registry | Gate | Result | Note |
 | --- | --- | --- | --- |
+| core/vss/h_generator.mutation-audit.yaml | muEnableHGeneratorLiftX | PASS | — |
+| core/vss/h_generator.mutation-audit.yaml | HGeneratorSeedFlip | PASS | — |
+| core/vss/pedersen.mutation-audit.yaml | muEnablePedersenIndexBounds | PASS | — |
+| core/vss/pedersen.mutation-audit.yaml | muEnablePedersenOnCurveCheck | PASS | — |
 | core/vss/transcript.mutation-audit.yaml | TranscriptDSTFlip | PASS | — |
 | crypto/artifact/pre.mutation-audit.yaml | muEnableCommitmentsGate | PASS | — |
 | crypto/artifact/pre.mutation-audit.yaml | muEnableOnCurveGate | PASS | — |
@@ -34,5 +38,15 @@ The file is append-only. Entries are committed to the repo.
 | crypto/escrow/split_commitment.mutation-audit.yaml | muEnableEscrowCommitmentSetLengthCheck | PASS | — |
 | crypto/escrow/split_commitment.mutation-audit.yaml | muEnableEscrowThresholdBoundsCheck | PASS | — |
 | crypto/escrow/split_commitment.mutation-audit.yaml | muEnableEscrowSplitIDRecomputation | PASS | — |
+| crypto/escrow/verify_share.mutation-audit.yaml | muEnableV1FieldEmptyCheck | PASS | — |
+| crypto/escrow/verify_share.mutation-audit.yaml | muEnableV2FieldPopulatedCheck | PASS | — |
+| crypto/escrow/verify_share.mutation-audit.yaml | muEnableShareIndexNonZero | PASS | — |
+| crypto/escrow/verify_share.mutation-audit.yaml | muEnableSplitIDPresent | PASS | — |
+| crypto/escrow/verify_share.mutation-audit.yaml | muEnableFieldTagDiscrimination | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableEscrowSecretSizeCheck | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableEscrowDealerDIDNonEmpty | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableEscrowThresholdBounds | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableReconstructVersionCheck | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableReconstructShareVerification | PASS | — |
 | lifecycle/commitment_atomic.mutation-audit.yaml | muEnableCommitmentEmissionAtomic | PASS | — |
 

@@ -162,6 +162,45 @@ gates:
 	}
 }
 
+func TestGate_ResolveSourceFile_OverridesRegistryFile(t *testing.T) {
+	g := Gate{Name: "muX", Kind: GateBoolConst, SourceFile: "other/file.go"}
+	if got := g.ResolveSourceFile("pkg/registry_file.go"); got != "other/file.go" {
+		t.Fatalf("SourceFile override lost: %q", got)
+	}
+}
+
+func TestGate_ResolveSourceFile_FallsBackToRegistryFile(t *testing.T) {
+	g := Gate{Name: "muX", Kind: GateBoolConst} // no SourceFile
+	if got := g.ResolveSourceFile("pkg/file.go"); got != "pkg/file.go" {
+		t.Fatalf("fallback broken: %q", got)
+	}
+}
+
+func TestLoadRegistry_AcceptsPerGateSourceFile(t *testing.T) {
+	path := writeTempRegistry(t, `
+file: pkg/primary.go
+package: github.com/example/pkg
+gates:
+  - name: Flip
+    kind: string_mutation
+    source_file: pkg/sibling.go
+    description: x
+    mutation_from: FOO
+    mutation_to:   BAR
+    tests: [TestX]
+`)
+	r, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatalf("LoadRegistry: %v", err)
+	}
+	if r.Gates[0].SourceFile != "pkg/sibling.go" {
+		t.Fatalf("source_file not parsed: %+v", r.Gates[0])
+	}
+	if got := r.Gates[0].ResolveSourceFile(r.File); got != "pkg/sibling.go" {
+		t.Fatalf("ResolveSourceFile should prefer per-gate override, got %q", got)
+	}
+}
+
 func TestLoadRegistry_RejectsEmpty(t *testing.T) {
 	path := writeTempRegistry(t, `
 file: x.go

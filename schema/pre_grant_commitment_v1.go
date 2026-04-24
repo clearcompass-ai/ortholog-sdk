@@ -26,19 +26,18 @@ import (
 
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/artifact"
+	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 )
 
-// PREGrantCommitmentSchemaID is the v7.75 schema ID for PRE grant
-// commitment entries. Kept in sync with the builder-side constant in
-// builder/commitment_entry_builders.go; a drift would break
-// admission dispatch.
-const PREGrantCommitmentSchemaID = "pre-grant-commitment-v1"
+// PREGrantCommitmentSchemaID re-exports the canonical constant from
+// crypto/artifact. The artifact package is the source of truth for
+// the string because it owns the corresponding fetch and parse
+// primitives.
+const PREGrantCommitmentSchemaID = artifact.PREGrantCommitmentSchemaID
 
-// EscrowSplitCommitmentSchemaID is defined alongside PRE here so a
-// single admission dispatcher can route both without a package import
-// cycle through builder/. Parallel to
-// escrow-split-commitment-v1.go's own constant.
-const EscrowSplitCommitmentSchemaID = "escrow-split-commitment-v1"
+// EscrowSplitCommitmentSchemaID re-exports the canonical constant
+// from crypto/escrow for the same reason.
+const EscrowSplitCommitmentSchemaID = escrow.EscrowSplitCommitmentSchemaID
 
 // ─────────────────────────────────────────────────────────────────────
 // Errors

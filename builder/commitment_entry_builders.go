@@ -56,14 +56,16 @@ var (
 // Schema identifiers
 // ─────────────────────────────────────────────────────────────────────
 
-// PREGrantCommitmentSchemaID is the v7.75 schema ID for PRE grant
-// commitment entries. Admission dispatches on this string to route to
-// the pre-grant-commitment-v1 validator.
-const PREGrantCommitmentSchemaID = "pre-grant-commitment-v1"
+// PREGrantCommitmentSchemaID re-exports the canonical constant from
+// crypto/artifact so builder callers can reference it without
+// importing artifact/ directly. The artifact package is the source
+// of truth because it also owns the fetch and parse primitives that
+// consume the same identifier.
+const PREGrantCommitmentSchemaID = artifact.PREGrantCommitmentSchemaID
 
-// EscrowSplitCommitmentSchemaID is the v7.75 schema ID for escrow
-// split commitment entries.
-const EscrowSplitCommitmentSchemaID = "escrow-split-commitment-v1"
+// EscrowSplitCommitmentSchemaID re-exports the canonical escrow
+// schema ID from crypto/escrow.
+const EscrowSplitCommitmentSchemaID = escrow.EscrowSplitCommitmentSchemaID
 
 // ─────────────────────────────────────────────────────────────────────
 // Wire envelope for commitment entries

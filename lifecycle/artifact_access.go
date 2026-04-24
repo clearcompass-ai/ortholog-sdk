@@ -644,17 +644,11 @@ func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAcces
 	result.Commitment = pgc
 	result.CommitmentEntry = commitmentEntry
 
-	// Atomic-emission invariant (ADR-005 §4). When CFrags are present,
-	// a commitment entry MUST be present. The switch gates the
-	// assertion for mutation-audit purposes; flipping it false
-	// disables the invariant and allows the result to return without a
-	// commitment entry.
-	if muEnableCommitmentEmissionAtomic {
-		if len(result.CFrags) > 0 && result.CommitmentEntry == nil {
-			return fmt.Errorf(
-				"lifecycle/artifact: atomic emission invariant violated: CFrags without CommitmentEntry",
-			)
-		}
+	// Atomic-emission invariant (ADR-005 §4). AssertPREAtomicEmission
+	// (commitment_atomic.go) routes through the mutation-audit switch;
+	// flipping the switch false disables the assertion.
+	if err := AssertPREAtomicEmission(result.CFrags, result.CommitmentEntry); err != nil {
+		return fmt.Errorf("lifecycle/artifact: %w", err)
 	}
 	return nil
 }

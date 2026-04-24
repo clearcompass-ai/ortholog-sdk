@@ -1,0 +1,49 @@
+# Mutation-audit registry for crypto/escrow/split_commitment.go
+#
+# ADR-005 §6 locks the mutation-audit discipline; this registry is
+# the machine-verifiable manifest for the four muEnable* constants
+# gating VerifyEscrowSplitCommitment. Parallel structure to
+# crypto/artifact/pre.mutation-audit.yaml — same discipline, same
+# runner, same CI guard.
+
+file: crypto/escrow/split_commitment.go
+package: github.com/clearcompass-ai/ortholog-sdk/crypto/escrow
+
+gates:
+  - name: muEnableEscrowCommitmentOnCurveGate
+    kind: bool_const
+    description: >-
+      On-curve check for every point in EscrowSplitCommitment.CommitmentSet.
+      Off admits off-curve commitment sets.
+    tests:
+      - TestEscrowSplitCommitment_VerifyRejectsOffCurvePoint
+
+  - name: muEnableEscrowCommitmentSetLengthCheck
+    kind: bool_const
+    description: >-
+      Invariant len(CommitmentSet) == M in VerifyEscrowSplitCommitment.
+      Off admits commitments with mismatched threshold/length.
+    tests:
+      - TestEscrowSplitCommitment_VerifyRejectsShortCommitmentSet
+      - TestEscrowSplitCommitment_VerifyRejectsLongCommitmentSet
+
+  - name: muEnableEscrowThresholdBoundsCheck
+    kind: bool_const
+    description: >-
+      (2 <= M <= N <= 255) threshold-bounds gate. Off admits
+      degenerate (1-of-N) or inverted (M > N) thresholds.
+    tests:
+      - TestEscrowSplitCommitment_VerifyRejectsThresholdBelowMin
+      - TestEscrowSplitCommitment_VerifyRejectsMAboveN
+      - TestEscrowSplitCommitment_VerifyRejectsNZero
+
+  - name: muEnableEscrowSplitIDRecomputation
+    kind: bool_const
+    description: >-
+      SplitID == ComputeEscrowSplitID(dealerDID, nonce) binding in
+      VerifyEscrowSplitCommitment. Off readmits commitment replay
+      across escrow contexts.
+    tests:
+      - TestEscrowSplitCommitment_VerifyRejectsWrongSplitID
+      - TestEscrowSplitCommitment_VerifyRejectsWrongDealerDID
+      - TestEscrowSplitCommitment_VerifyRejectsWrongNonce

@@ -1,0 +1,142 @@
+# Mutation-audit registry for crypto/artifact/pre.go
+#
+# ADR-005 §6 locks the mutation-audit discipline; this registry is
+# the machine-verifiable manifest for every muEnable* constant
+# declared in pre.go. The runner (cmd/audit-v775) flips each
+# constant to false, runs the listed binding tests, asserts they
+# fail, restores the constant, and confirms they pass again.
+#
+# Any gate added, removed, or renamed in pre.go MUST update this
+# file in the same commit. scripts/verify-phase-c-decomm.sh checks
+# both directions: declared gates exist in source, and source gates
+# have registry entries.
+
+file: crypto/artifact/pre.go
+package: github.com/clearcompass-ai/ortholog-sdk/crypto/artifact
+
+gates:
+  # ── Six pre-existing Phase A/B switches ───────────────────────
+
+  - name: muEnableCommitmentsGate
+    kind: bool_const
+    description: >-
+      Empty-commitments rejection in PRE_DecryptFrags. Off admits
+      zero-threshold Commitments and silently skips the per-CFrag
+      Pedersen gate.
+    tests:
+      - TestPRE_EmptyCommitments_Rejected
+      - TestDecryptFrags_RequiresCommitments
+
+  - name: muEnableOnCurveGate
+    kind: bool_const
+    description: >-
+      On-curve validation for VK, E', and capsule E inside
+      gateCFragOnCurve. The binding tests construct a
+      structurally valid CFrag (nil-field check passes) and move
+      VK or E' to off-curve coordinates (1, 1). With the gate on
+      PRE_VerifyCFrag rejects; with the gate off the rejection
+      evaporates — the signal the mutation-audit runner catches.
+    tests:
+      - TestPRE_VerifyCFrag_RejectsOffCurveVK_Binding
+      - TestPRE_VerifyCFrag_RejectsOffCurveEPrime_Binding
+
+  - name: muEnableDLEQCheck
+    kind: bool_const
+    description: >-
+      ADR-005 §3.5 CHECK 1 — DLEQ proof verification (e, z) over the
+      Fiat-Shamir transcript binds the proxy's re-encryption to the
+      specific capsule and KFrag.
+    tests:
+      - TestPRE_SubstitutedVK_Rejected
+      - TestPRE_SubstitutedEPrime_Rejected
+      - TestPRE_SubstitutedProofE_Rejected
+      - TestPRE_SubstitutedProofZ_Rejected
+      - TestPRE_AdaptiveBK_Rejected
+
+  - name: muEnablePedersenCheck
+    kind: bool_const
+    description: >-
+      ADR-005 §3.5 CHECK 2 — Pedersen polynomial-consistency binding.
+      Off readmits silent share substitution and coalition attacks.
+    tests:
+      - TestPRE_SubstitutedRKShare_Rejected
+      - TestPRE_CoalitionAttack_Rejected
+      - TestPRE_WrongCommitments_Rejected
+
+  - name: muEnableSufficientCFragsGate
+    kind: bool_const
+    description: >-
+      Threshold-sufficiency gate in PRE_DecryptFrags. Off accepts
+      fewer than M CFrags and produces mathematically-invalid
+      Lagrange combinations.
+    tests:
+      - TestDecryptFrags_InsufficientCFrags
+
+  - name: muEnableVerifyBeforeCombine
+    kind: bool_const
+    description: >-
+      ADR-005 §3.5 — per-CFrag PRE_VerifyCFrag call before Lagrange
+      combination. Off lets tampered CFrags combine without rejection.
+    tests:
+      - TestDecryptFrags_VerifiesEveryFrag
+
+  # ── Group 3.1 KFrag reserved-zone switch ──────────────────────
+
+  - name: muEnableKFragReservedCheck
+    kind: bool_const
+    description: >-
+      Reserved-zone zero-byte enforcement in DeserializeKFrag.
+      Off admits non-zero reserved bytes on the 196-byte KFrag wire
+      format, readmitting covert-channel or version-drift attacks.
+    tests:
+      - TestKFrag_ReservedBytesNonZeroRejected_EachPosition
+      - TestKFrag_ReservedBytesNonZeroRejected_SingleBit
+
+  # ── Group 3.2 PRE commitment gates ────────────────────────────
+  #
+  # These four constants are declared in pre.go but consumed by
+  # VerifyPREGrantCommitment in pre_grant_commitment.go. Colocating
+  # their declarations with the other PRE muEnable* constants keeps
+  # the mutation-audit registry 1-to-1 with the file that holds the
+  # declarations (what the runner mutates), consistent with the
+  # single-source-of-truth discipline ADR-005 §6 prescribes.
+
+  - name: muEnableCommitmentOnCurveGate
+    kind: bool_const
+    description: >-
+      On-curve check for every point in PREGrantCommitment.CommitmentSet.
+      Off admits malformed or off-curve commitment sets.
+    tests:
+      - TestPREGrantCommitment_VerifyRejectsOffCurvePoint
+
+  - name: muEnableCommitmentSetLengthCheck
+    kind: bool_const
+    description: >-
+      Invariant len(CommitmentSet) == M in VerifyPREGrantCommitment.
+      Off admits commitments with mismatched threshold/length.
+    tests:
+      - TestPREGrantCommitment_VerifyRejectsShortCommitmentSet
+      - TestPREGrantCommitment_VerifyRejectsLongCommitmentSet
+
+  - name: muEnableThresholdBoundsCheck
+    kind: bool_const
+    description: >-
+      (2 <= M <= N <= 255) threshold-bounds gate in
+      VerifyPREGrantCommitment. Off admits degenerate thresholds.
+    tests:
+      - TestPREGrantCommitment_VerifyRejectsThresholdBelowMin
+      - TestPREGrantCommitment_VerifyRejectsMAboveN
+      - TestPREGrantCommitment_VerifyRejectsNZero
+
+  - name: muEnableSplitIDRecomputation
+    kind: bool_const
+    description: >-
+      SplitID == ComputePREGrantSplitID(grantor, recipient, artifactCID)
+      binding in VerifyPREGrantCommitment. Off readmits commitment
+      replay across grant contexts.
+    tests:
+      - TestPREGrantCommitment_VerifyRejectsWrongSplitID
+      - TestPREGrantCommitment_VerifyRejectsWrongGrantor
+      - TestPREGrantCommitment_VerifyRejectsWrongRecipient
+      - TestPREGrantCommitment_VerifyRejectsWrongCID
+      - TestPREGrantCommitment_VerifyRejectsAlgorithmSwap

@@ -1,6 +1,9 @@
 # --- General ---
 # Ignore dot-directories anywhere (e.g., .git/, .vscode/, .idea/, .pytest_cache/)
 **/.*/
+
+# Compiled Go binaries accidentally left at repo root by `go build`.
+/audit-v775
 # But allow .githooks (pre-commit hooks shared via repo)
 !.githooks/
 !.githooks/**

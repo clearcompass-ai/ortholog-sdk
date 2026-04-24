@@ -926,22 +926,28 @@ func TestPRE_VerifyCFrag_NilCapsule(t *testing.T) {
 // exposes the manual mutation checklist in source. Run manually
 // as part of Phase C closure. Steps are logged via t.Log so they
 // surface in `go test -v` output.
+// TestPRE_MutationDiscipline is the documentation entry-point for
+// the mutation-audit discipline (ADR-005 §6, Phase C Group 4). The
+// manual-audit recipe this test used to describe has been fully
+// automated by the `cmd/audit-v775` runner and the
+// `crypto/artifact/pre.mutation-audit.yaml` registry.
+//
+// Run the runner:
+//
+//	make audit-v775          # validate registries (fast; pre-commit)
+//	make audit-v775-full     # full mutation sweep (slow; pre-release)
+//	make audit-v775-list     # list every registered gate
+//
+// The runner flips each muEnable* constant in pre.go (and every
+// other registered gate file), runs the listed binding tests,
+// asserts they fail, restores the constant, and confirms they pass
+// again. A dated row is appended to docs/audit/mutation-audit-log.md.
+//
+// This test is kept as a no-op smoke assertion so `go test` output
+// contains a visible reference to the discipline without re-running
+// the expensive runner.
 func TestPRE_MutationDiscipline(t *testing.T) {
-	t.Log("Manual mutation discipline audit (ADR-005 §9.2):")
-	t.Log("")
-	t.Log("1. Comment out vss.VerifyPoints call in PRE_VerifyCFrag:")
-	t.Log("   - TestPRE_SubstitutedRKShare_Rejected MUST fail")
-	t.Log("   - TestPRE_CoalitionAttack_Rejected MUST fail")
-	t.Log("")
-	t.Log("2. Comment out DLEQ challenge comparison in PRE_VerifyCFrag:")
-	t.Log("   - TestPRE_SubstitutedVK_Rejected MUST fail")
-	t.Log("   - TestPRE_AdaptiveBK_Rejected MUST fail")
-	t.Log("")
-	t.Log("3. Change transcript DST in core/vss/transcript.go:")
-	t.Log("   - TestPRE_DLEQTranscript_Golden MUST fail")
-	t.Log("")
-	t.Log("4. Remove commitment check from PRE_DecryptFrags:")
-	t.Log("   - TestDecryptFrags_RequiresCommitments MUST fail")
-	t.Log("")
-	t.Log("Restore all four; full suite MUST pass.")
+	t.Log("Mutation-audit discipline is automated; run `make audit-v775-full`.")
+	t.Log("See crypto/artifact/pre.mutation-audit.yaml for this file's gates.")
+	t.Log("See docs/audit/mutation-audit-log.md for dated audit history.")
 }

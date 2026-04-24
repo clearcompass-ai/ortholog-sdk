@@ -184,6 +184,12 @@ type MappingEscrow struct {
 	cfg   MappingEscrowConfig
 	mu    sync.RWMutex
 	index map[[32]byte]*StoredMapping
+	// indexV2Map is the V2 counterpart to index. Lives alongside the
+	// V1 map because the stored metadata shape differs (V2 adds
+	// SplitNonce and DealerDID so the on-log commitment binding can
+	// be recomputed by verifiers). Lazily initialized on first V2
+	// insert by indexV2.
+	indexV2Map map[[32]byte]*StoredMappingV2
 }
 
 // NewMappingEscrow constructs a MappingEscrow. ShareThreshold < 2 is

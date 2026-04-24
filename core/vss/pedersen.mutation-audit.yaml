@@ -1,0 +1,38 @@
+# Mutation-audit registry for core/vss/pedersen.go
+#
+# Phase C Group 5.2 — VSS primitive audit. VerifyPoints is the
+# point-side Pedersen polynomial-consistency check that the PRE
+# verifier (checkPedersen in crypto/artifact/pre.go) delegates to.
+# Two switches gate defensive validation on input bounds and
+# on-curve geometry; each has tight binding tests that assert the
+# specific sentinel the gate returns.
+#
+# Declarations live in core/vss/pedersen_mutation_switches.go so the
+# runner's line-local rewrite can target exactly one constant
+# declaration per mutation.
+
+file: core/vss/pedersen_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/core/vss
+
+gates:
+  - name: muEnablePedersenIndexBounds
+    kind: bool_const
+    description: >-
+      (index == 0 || index > MaxShares) rejection in VerifyPoints.
+      Off admits index = 0 (Lagrange secret position — would leak
+      polynomial evaluation at x=0) or indices above the 255 cap.
+    tests:
+      - TestVerifyPoints_RejectsIndexZero_Binding
+      - TestVerifyPoints_RejectsIndexOverMax_Binding
+
+  - name: muEnablePedersenOnCurveCheck
+    kind: bool_const
+    description: >-
+      Belt-and-braces IsOnCurve check on (vkX, vkY) and (bkX, bkY)
+      in VerifyPoints. Off lets off-curve points reach curve.Add,
+      whose behaviour on off-curve arguments is undefined — a
+      forged (VK, BK) pair could produce an on-curve combined point
+      that matches the commitment equation by chance.
+    tests:
+      - TestVerifyPoints_RejectsOffCurveVK_Binding
+      - TestVerifyPoints_RejectsOffCurveBK_Binding

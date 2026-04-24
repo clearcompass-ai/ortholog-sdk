@@ -1,0 +1,60 @@
+# Mutation-audit registry for crypto/escrow/verify_share.go
+#
+# Phase C Group 5.2 — share-format validator audit. Five switches
+# gate the five structural checks inside validateShareFormatV1 /
+# validateShareFormatV2. Declarations live in
+# verify_share_mutation_switches.go so the audit-v775 runner's
+# line-local rewrite can target exactly one declaration per gate.
+
+file: crypto/escrow/verify_share_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/crypto/escrow
+
+gates:
+  - name: muEnableV1FieldEmptyCheck
+    kind: bool_const
+    description: >-
+      V1 invariant that BlindingFactor and CommitmentHash (V2-only
+      fields) MUST be zero. Off admits V1 shares with populated V2
+      fields — a Version-byte forgery path that downstream code
+      would misinterpret.
+    tests:
+      - TestValidateShareFormatV1_V1FieldEmpty_Binding
+
+  - name: muEnableV2FieldPopulatedCheck
+    kind: bool_const
+    description: >-
+      V2 invariant that BlindingFactor and CommitmentHash MUST be
+      non-zero (Pedersen-VSS structural contract). Off admits
+      ill-formed V2 shares; downstream Pedersen verification would
+      fail with a confusing error instead of the clean
+      ErrV2FieldEmpty boundary rejection.
+    tests:
+      - TestValidateShareFormatV2_V2FieldPopulated_Binding
+
+  - name: muEnableShareIndexNonZero
+    kind: bool_const
+    description: >-
+      (s.Index == 0) rejection on both V1 and V2. Off admits index
+      0 — collides with the Lagrange secret position (x=0) and
+      would leak polynomial evaluation at that point.
+    tests:
+      - TestValidateShareFormat_IndexNonZero_Binding
+
+  - name: muEnableSplitIDPresent
+    kind: bool_const
+    description: >-
+      (zeroArray32(s.SplitID)) rejection on both V1 and V2. Off
+      admits zero SplitIDs, which collide across unrelated splits
+      and defeat the cross-split mixing guard in VerifyShareSet.
+    tests:
+      - TestValidateShareFormat_SplitIDPresent_Binding
+
+  - name: muEnableFieldTagDiscrimination
+    kind: bool_const
+    description: >-
+      FieldTag discrimination on both paths: V1 accepts only 0 or
+      SchemeGF256Tag; V2 accepts only 0 or SchemePedersenTag. Off
+      admits unknown non-zero tags — attacker-chosen values or
+      tags from future schemes fed into current-scheme code.
+    tests:
+      - TestValidateShareFormat_FieldTagDiscrimination_Binding

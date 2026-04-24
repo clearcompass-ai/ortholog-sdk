@@ -389,8 +389,11 @@ func Verify(share Share, commitments Commitments) error {
 // a rejection: Pedersen soundness does not imply DLEQ soundness and
 // vice versa.
 func VerifyPoints(index byte, vkX, vkY, bkX, bkY *big.Int, commitments Commitments) error {
-	if index == 0 || index > MaxShares {
-		return fmt.Errorf("%w: %d", ErrShareIndexOutOfRange, index)
+	// Gate: muEnablePedersenIndexBounds (pedersen_mutation_switches.go).
+	if muEnablePedersenIndexBounds {
+		if index == 0 || index > MaxShares {
+			return fmt.Errorf("%w: %d", ErrShareIndexOutOfRange, index)
+		}
 	}
 	if len(commitments.Points) == 0 {
 		return ErrCommitmentVectorEmpty
@@ -401,8 +404,9 @@ func VerifyPoints(index byte, vkX, vkY, bkX, bkY *big.Int, commitments Commitmen
 
 	curve := secp256k1.S256()
 
-	// Belt-and-braces on-curve check. A caller that passes an
-	// off-curve point would cause undefined behaviour in curve.Add.
+	// Gate: muEnablePedersenOnCurveCheck. Belt-and-braces on-curve
+	// check. A caller that passes an off-curve point would cause
+	// undefined behaviour in curve.Add.
 	//
 	// On-curve alone is sufficient on secp256k1: the curve has
 	// cofactor 1, so every on-curve point is in the prime-order
@@ -410,11 +414,13 @@ func VerifyPoints(index byte, vkX, vkY, bkX, bkY *big.Int, commitments Commitmen
 	// a distinct concern from BLS12-381's G2, where cofactor > 1
 	// and subgroup membership is non-trivial (see the BLS signer's
 	// public-key validation for the contrasting case).
-	if !curve.IsOnCurve(vkX, vkY) {
-		return fmt.Errorf("%w: vk", ErrInvalidCommitmentPoint)
-	}
-	if !curve.IsOnCurve(bkX, bkY) {
-		return fmt.Errorf("%w: bk", ErrInvalidCommitmentPoint)
+	if muEnablePedersenOnCurveCheck {
+		if !curve.IsOnCurve(vkX, vkY) {
+			return fmt.Errorf("%w: vk", ErrInvalidCommitmentPoint)
+		}
+		if !curve.IsOnCurve(bkX, bkY) {
+			return fmt.Errorf("%w: bk", ErrInvalidCommitmentPoint)
+		}
 	}
 
 	// LHS = VK + BK.

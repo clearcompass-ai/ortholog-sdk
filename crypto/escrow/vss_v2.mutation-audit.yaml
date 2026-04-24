@@ -1,0 +1,62 @@
+# Mutation-audit registry for crypto/escrow/vss_v2.go
+#
+# Phase C Group 5.2 — V2 VSS audit. Five switches gate the
+# structural checks inside splitV2WithReader and ReconstructV2.
+# Declarations live in vss_v2_mutation_switches.go so the
+# audit-v775 runner's line-local rewrite can target exactly one
+# declaration per gate.
+
+file: crypto/escrow/vss_v2_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/crypto/escrow
+
+gates:
+  - name: muEnableEscrowSecretSizeCheck
+    kind: bool_const
+    description: >-
+      (len(secret) != SecretSize) structural check in
+      splitV2WithReader. Off admits wrong-sized secrets; the
+      subsequent `copy(secretArr[:], secret)` silently truncates
+      or zero-pads, producing a split that reconstructs a different
+      secret than the caller intended.
+    tests:
+      - TestSplitV2_SecretSizeBinding
+
+  - name: muEnableEscrowDealerDIDNonEmpty
+    kind: bool_const
+    description: >-
+      (dealerDID == "") check. Off admits an empty dealerDID into
+      ComputeEscrowSplitID, producing a SplitID that collides
+      across every dealer — defeating dealer-scoped equivocation
+      detection at the lifecycle layer.
+    tests:
+      - TestSplitV2_DealerDIDBinding
+
+  - name: muEnableEscrowThresholdBounds
+    kind: bool_const
+    description: >-
+      (M, N) bounds check — M >= 2, N >= M, N <= 255. Off admits
+      degenerate (1-of-N copy), inverted (M > N), or oversized
+      (N > 255) splits.
+    tests:
+      - TestSplitV2_ThresholdBoundsBinding
+
+  - name: muEnableReconstructVersionCheck
+    kind: bool_const
+    description: >-
+      ReconstructV2 assertion that shares[0].Version == VersionV2.
+      Off admits V1 share sets into the V2 reconstruction path;
+      downstream Pedersen verification fails with a confusing
+      error, when the correct behaviour is ErrUnsupportedVersion.
+    tests:
+      - TestReconstructV2_VersionCheckBinding
+
+  - name: muEnableReconstructShareVerification
+    kind: bool_const
+    description: >-
+      Per-share VerifyShareAgainstCommitments loop inside
+      ReconstructV2 — the load-bearing V2 property. Off readmits
+      the silent-wrong-secret failure mode that V2 exists to
+      close; a substituted share reconstructs a different secret
+      without any error surfacing.
+    tests:
+      - TestReconstructV2_ShareVerificationBinding

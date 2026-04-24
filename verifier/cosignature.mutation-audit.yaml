@@ -1,0 +1,37 @@
+# Mutation-audit registry for verifier/cosignature.go
+#
+# Phase C Group 6.1 — cosignature-binding audit. IsCosignatureOf is
+# the SDK-wide canonical predicate for binding a cosignature entry
+# to the specific log position it approves. Its position-match
+# clause closes ORTHO-BUG-009, BUG-015, and BUG-016 — where
+# cosignatures on unrelated entries were being counted as approval
+# of a pending operation.
+#
+# The AST linter cmd/lint-cosignature-binding enforces that no
+# file other than cosignature.go checks CosignatureOf raw; this
+# registry gates the one canonical check the linter's design
+# relies on.
+
+file: verifier/cosignature_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/verifier
+
+gates:
+  - name: muEnableCosignatureBinding
+    kind: bool_const
+    description: >-
+      Position-match clause inside IsCosignatureOf. Off makes
+      IsCosignatureOf return true for any cosignature-shaped entry
+      regardless of which position it references — the exact
+      ORTHO-BUG-009 / BUG-015 / BUG-016 regression.
+    tests:
+      # Direct binding tests on the predicate itself.
+      - TestIsCosignatureOf_PositionMismatch_Binding
+      - TestIsCosignatureOf_NilInputs_Binding
+      # Cross-registered downstream consumer tests. condition_evaluator
+      # and contest_override route every cosignature-binding check
+      # through IsCosignatureOf; flipping muEnableCosignatureBinding
+      # silently re-admits the BUG-016 wrong-position-cosignature
+      # path through these consumers as well. The lighter-touch
+      # 6.1 audit confirms each test fails when the gate is flipped.
+      - TestCollectEvidenceSigners_RejectsUnboundEntries
+      - TestHasWitnessCosig_RejectsUnboundCosignature

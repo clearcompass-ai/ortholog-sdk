@@ -80,6 +80,16 @@ func DetectEquivocation(
 		return nil, nil
 	}
 
+	// Gate: muEnableEquivocationDetection
+	// (equivocation_mutation_switches.go). Off makes the function
+	// return (nil, nil) for every same-size, different-roots head
+	// pair — silent acceptance of operator forks. The branch below
+	// (verify both heads, package the proof) is the only path that
+	// can surface an EquivocationProof.
+	if !muEnableEquivocationDetection {
+		return nil, nil
+	}
+
 	// Same size, different roots → potential equivocation.
 	// Verify both heads have valid quorum signatures.
 	resultA, errA := VerifyTreeHead(headA, witnessKeys, quorumK, blsVerifier)

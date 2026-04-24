@@ -410,15 +410,36 @@ type GrantArtifactAccessResult struct {
 	// PRE_GenerateKFrags during umbral_pre grants. v7.75 Phase C
 	// (ADR-005 §3.5). Empty for aes_gcm grants.
 	//
-	// Phase D REQUIREMENT: the domain layer MUST publish this
-	// commitment set on-log via the pre-grant-commitment-v1 schema
-	// BEFORE distributing CFrags to proxies. Verifiers fetch the
-	// commitment set from the log (via the grant's deterministic
-	// SplitID — see ADR-005 §6.2) and pass it to
-	// VerifyAndDecryptArtifact at decryption time. The primitive
-	// rejects any CFrag that fails the polynomial consistency check
-	// against this commitment set.
+	// The commitment set is the in-memory vss.Commitments form used
+	// by decryption. The serialized on-log wire form is carried on
+	// CommitmentEntry below; the SDK produces both atomically so a
+	// caller cannot legally emit CFrags without also emitting the
+	// on-log commitment.
 	Commitments vss.Commitments
+
+	// Commitment is the high-level PREGrantCommitment wrapper around
+	// Commitments, bound to the (grantor, recipient, artifact) tuple
+	// via SplitID. v7.75 Phase C (ADR-005 §4). Nil for aes_gcm.
+	//
+	// Callers that need to verify the commitment out-of-band (e.g.,
+	// recipient-side verification before accepting CFrags) can call
+	// artifact.VerifyPREGrantCommitment on this value directly.
+	Commitment *artifact.PREGrantCommitment
+
+	// CommitmentEntry is the signed Path A commentary entry carrying
+	// the serialized PREGrantCommitment under the
+	// pre-grant-commitment-v1 schema. v7.75 Phase C (ADR-005 §4).
+	// Non-nil on every successful umbral_pre grant; nil for aes_gcm.
+	//
+	// ATOMICITY INVARIANT: when Method=="umbral_pre" and CFrags is
+	// non-nil, CommitmentEntry MUST be non-nil. The invariant is
+	// enforced structurally by grantUmbralPRE and gated by the
+	// muEnableCommitmentEmissionAtomic mutation switch — flipping
+	// the switch false is the audit-layer probe that exercises the
+	// "shares without commitment" failure mode. In production, the
+	// caller submits CommitmentEntry to the log in the same batch as
+	// the CFrag distribution.
+	CommitmentEntry *envelope.Entry
 }
 
 // GrantArtifactAccess composes a grant for artifact access.
@@ -527,11 +548,16 @@ func grantAESGCM(params GrantArtifactAccessParams, result *GrantArtifactAccessRe
 //
 // v7.75 Phase C (ADR-005 §3.5): PRE_GenerateKFrags produces a Pedersen
 // commitment set alongside the KFrags. The commitment set is captured
-// on the result for Phase D on-log publication via the
+// on the result for on-log publication via the
 // pre-grant-commitment-v1 schema. Each CFrag's DLEQ challenge is
 // computed over a transcript that absorbs the commitments and BK_i
 // (ADR-005 §5.2), binding the proxy's re-encryption to the committed
 // polynomial.
+//
+// v7.75 Phase C (ADR-005 §4) atomic emission: grantUmbralPRE produces
+// the PREGrantCommitment and the signed commitment entry inline. The
+// result carries both; a caller cannot legally emit CFrags without
+// also emitting the commitment entry.
 //
 // The private key scalar (sk_del) comes from params, already unwrapped
 // by the caller.
@@ -541,6 +567,16 @@ func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAcces
 	}
 	if len(params.OwnerSecretKey) == 0 {
 		return fmt.Errorf("lifecycle/artifact: owner secret key required for PRE mode")
+	}
+	// Atomic emission requires the grant context for SplitID derivation.
+	if params.GranterDID == "" {
+		return fmt.Errorf("lifecycle/artifact: GranterDID required for PRE mode (ADR-005 §4 SplitID binding)")
+	}
+	if params.RecipientDID == "" {
+		return fmt.Errorf("lifecycle/artifact: RecipientDID required for PRE mode (ADR-005 §4 SplitID binding)")
+	}
+	if params.ArtifactCID.IsZero() {
+		return fmt.Errorf("lifecycle/artifact: ArtifactCID required for PRE mode (ADR-005 §4 SplitID binding)")
 	}
 
 	m, n := 3, 5
@@ -569,10 +605,57 @@ func grantUmbralPRE(params GrantArtifactAccessParams, result *GrantArtifactAcces
 		cfrags[i] = cf
 	}
 
+	// Derive the deterministic SplitID and wrap the VSS commitments in
+	// the PREGrantCommitment wire struct. NewPREGrantCommitmentFromVSS
+	// handles uncompressed→compressed point conversion at the RAM/wire
+	// boundary.
+	splitID := artifact.ComputePREGrantSplitID(
+		params.GranterDID, params.RecipientDID, params.ArtifactCID,
+	)
+	pgc, err := artifact.NewPREGrantCommitmentFromVSS(splitID, m, n, commitments)
+	if err != nil {
+		return fmt.Errorf("lifecycle/artifact: build PRE commitment: %w", err)
+	}
+	// Sanity-verify the commitment binds to the supplied grant context.
+	// This cannot fail today because the SplitID was just computed from
+	// the same context, but running the verifier here catches any future
+	// drift between the SplitID derivation and the verifier on either
+	// side of the RAM/wire boundary.
+	if err := artifact.VerifyPREGrantCommitment(
+		pgc, params.GranterDID, params.RecipientDID, params.ArtifactCID,
+	); err != nil {
+		return fmt.Errorf("lifecycle/artifact: verify PRE commitment: %w", err)
+	}
+
+	// Build the signed commentary entry.
+	commitmentEntry, err := builder.BuildPREGrantCommitmentEntry(builder.PREGrantCommitmentEntryParams{
+		Destination: params.Destination,
+		SignerDID:   params.GranterDID,
+		Commitment:  pgc,
+	})
+	if err != nil {
+		return fmt.Errorf("lifecycle/artifact: build commitment entry: %w", err)
+	}
+
 	result.Method = "umbral_pre"
 	result.CFrags = cfrags
 	result.Capsule = params.Capsule
 	result.Commitments = commitments
+	result.Commitment = pgc
+	result.CommitmentEntry = commitmentEntry
+
+	// Atomic-emission invariant (ADR-005 §4). When CFrags are present,
+	// a commitment entry MUST be present. The switch gates the
+	// assertion for mutation-audit purposes; flipping it false
+	// disables the invariant and allows the result to return without a
+	// commitment entry.
+	if muEnableCommitmentEmissionAtomic {
+		if len(result.CFrags) > 0 && result.CommitmentEntry == nil {
+			return fmt.Errorf(
+				"lifecycle/artifact: atomic emission invariant violated: CFrags without CommitmentEntry",
+			)
+		}
+	}
 	return nil
 }
 

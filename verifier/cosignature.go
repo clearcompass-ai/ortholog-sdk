@@ -98,5 +98,15 @@ func IsCosignatureOf(entry *envelope.Entry, expectedPos types.LogPosition) bool 
 	if entry.Header.CosignatureOf == nil {
 		return false
 	}
+	// Gate: muEnableCosignatureBinding
+	// (cosignature_mutation_switches.go). When off, the position-match
+	// clause drops out and any cosignature-shaped entry is accepted
+	// regardless of which position it references — the exact
+	// ORTHO-BUG-009 regression. The binding test inverts the
+	// position and asserts the false-return; flipping the switch
+	// off makes the test fail.
+	if !muEnableCosignatureBinding {
+		return true
+	}
 	return entry.Header.CosignatureOf.Equal(expectedPos)
 }

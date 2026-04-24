@@ -1,0 +1,41 @@
+# Mutation-audit registry for witness/verify.go and
+# witness/equivocation.go
+#
+# Phase C Group 6.1 — witness audit. Two gates:
+#
+# 1. muEnableWitnessQuorumCount — gates the structural pre-check
+#    that the witness key set is large enough to satisfy K-of-N
+#    quorum (declared in verify_mutation_switches.go).
+#
+# 2. muEnableEquivocationDetection — gates the same-size,
+#    different-roots branch inside DetectEquivocation that
+#    produces an EquivocationProof (declared in
+#    equivocation_mutation_switches.go via the per-gate
+#    source_file override).
+
+file: witness/verify_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/witness
+
+gates:
+  - name: muEnableWitnessQuorumCount
+    kind: bool_const
+    description: >-
+      (len(witnessKeys) < quorumK) pre-check inside VerifyTreeHead.
+      Off lets undersized witness sets fall through to the Phase-1
+      primitive — different (less specific) error or silent
+      acceptance depending on signature shape.
+    tests:
+      - TestWitnessQuorumCount_Binding
+
+  - name: muEnableEquivocationDetection
+    kind: bool_const
+    source_file: witness/equivocation_mutation_switches.go
+    description: >-
+      Same-size, different-roots branch inside DetectEquivocation
+      — the only path that surfaces an EquivocationProof. Off
+      makes the function return (nil, nil) for every same-size
+      head pair regardless of root divergence, hiding operator
+      forks from the monitoring layer.
+    tests:
+      - TestEquivocationDetection_Binding
+      - TestEquivocationDetection_DifferentSizes_PreGate

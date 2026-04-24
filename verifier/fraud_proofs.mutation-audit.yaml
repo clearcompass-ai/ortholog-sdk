@@ -1,0 +1,29 @@
+# Mutation-audit registry for verifier/fraud_proofs.go
+#
+# Phase C Group 6.1 — fraud-proof verification audit. The single
+# gate covers the per-leaf mutation comparison and the post-root
+# divergence check inside VerifyDerivationCommitment. Off makes
+# every commitment Valid:true regardless of input — the failure
+# mode fraud-proof verification exists to prevent.
+#
+# Cross-log proof verification (verifier/cross_log.go) gates ten
+# additional switches; those are scoped to Group 8 and will be
+# registered in a separate cross_log.mutation-audit.yaml at that
+# time. The plan note in Subgroup 6.1 calls out cross_log.go as
+# "registered here" — the registration sits next to fraud_proofs
+# because both files share the cross-log integrity domain — but
+# the gates themselves land in Group 8.
+
+file: verifier/fraud_proofs_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/verifier
+
+gates:
+  - name: muEnableFraudProofValidation
+    kind: bool_const
+    description: >-
+      Per-leaf mutation comparison and post-root divergence check
+      inside VerifyDerivationCommitment. Off makes every commitment
+      Valid:true regardless of input, readmitting silent acceptance
+      of fraudulent SMT operator commitments.
+    tests:
+      - TestFraudProofValidation_Binding

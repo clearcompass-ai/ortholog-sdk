@@ -78,8 +78,13 @@ func VerifyTreeHead(
 	if len(head.Signatures) == 0 {
 		return nil, ErrNoSignatures
 	}
-	if len(witnessKeys) < quorumK {
-		return nil, fmt.Errorf("witness/verify: witness set size %d < quorum %d", len(witnessKeys), quorumK)
+	// Gate: muEnableWitnessQuorumCount (verify_mutation_switches.go).
+	// Off lets undersized witness sets fall through to the Phase-1
+	// primitive, where the failure mode depends on signature shape.
+	if muEnableWitnessQuorumCount {
+		if len(witnessKeys) < quorumK {
+			return nil, fmt.Errorf("witness/verify: witness set size %d < quorum %d", len(witnessKeys), quorumK)
+		}
 	}
 
 	result, err := signatures.VerifyWitnessCosignatures(head, witnessKeys, quorumK, blsVerifier)

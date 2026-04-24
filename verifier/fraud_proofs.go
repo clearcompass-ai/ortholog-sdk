@@ -159,6 +159,16 @@ func VerifyDerivationCommitment(
 		return nil, fmt.Errorf("verifier/fraud: ProcessBatch: %w", err)
 	}
 
+	// Gate: muEnableFraudProofValidation
+	// (fraud_proofs_mutation_switches.go). When off, both the
+	// per-leaf comparison and the post-root check below are
+	// bypassed and the function returns Valid:true unconditionally
+	// — the exact failure mode fraud-proof verification exists to
+	// prevent.
+	if !muEnableFraudProofValidation {
+		return &FraudProofResult{Valid: true}, nil
+	}
+
 	// 5. Compare mutations.
 	var proofs []FraudProof
 

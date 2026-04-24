@@ -14,7 +14,7 @@ Every row records one gate's mutation result from a run of
 
 The file is append-only. Entries are committed to the repo.
 
-## 2026-04-24T22:59:37Z — audit-v775 mutation
+## 2026-04-24T23:42:50Z — audit-v775 mutation
 
 | Registry | Gate | Result | Note |
 | --- | --- | --- | --- |
@@ -49,4 +49,8 @@ The file is append-only. Entries are committed to the repo.
 | crypto/escrow/vss_v2.mutation-audit.yaml | muEnableReconstructVersionCheck | PASS | — |
 | crypto/escrow/vss_v2.mutation-audit.yaml | muEnableReconstructShareVerification | PASS | — |
 | lifecycle/commitment_atomic.mutation-audit.yaml | muEnableCommitmentEmissionAtomic | PASS | — |
+| verifier/cosignature.mutation-audit.yaml | muEnableCosignatureBinding | PASS | — |
+| verifier/fraud_proofs.mutation-audit.yaml | muEnableFraudProofValidation | PASS | — |
+| witness/verify.mutation-audit.yaml | muEnableWitnessQuorumCount | PASS | — |
+| witness/verify.mutation-audit.yaml | muEnableEquivocationDetection | PASS | — |
 

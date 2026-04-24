@@ -137,10 +137,8 @@ func ProvisionSingleLogWithEscrow(cfg SingleLogConfig, spec *EscrowSpec) (*Provi
 	}
 	result.Escrow = esc
 
-	if muEnableCommitmentEmissionAtomic {
-		if len(esc.Shares) > 0 && esc.CommitmentEntry == nil {
-			return nil, ErrProvisionEscrowAtomicEmissionViolated
-		}
+	if err := AssertAtomicEmission(len(esc.Shares), esc.CommitmentEntry); err != nil {
+		return nil, ErrProvisionEscrowAtomicEmissionViolated
 	}
 	return result, nil
 }

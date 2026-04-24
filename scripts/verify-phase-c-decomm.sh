@@ -8,7 +8,10 @@
 
 set -euo pipefail
 
-REPO="/Users/anil/workspace/ortholog-sdk"
+# Default to the directory this script lives in's parent (repo root).
+# Allows running from any working directory without hard-coding an
+# author-specific absolute path.
+REPO="${REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$REPO"
 
 say() { printf '\n\033[1;36m══ %s ══\033[0m\n' "$1"; }
@@ -44,12 +47,34 @@ ok "all legacy test files deleted"
 say "Gate 2: mutation-audit constants locked to production"
 # ═════════════════════════════════════════════════════════════════
 
+# Gate 2a (legacy): PRE gates true.
 PRE_GO="crypto/artifact/pre.go"
 if grep -E 'muEnable[A-Za-z]+\s*=\s*false' "$PRE_GO" > /dev/null; then
     grep -nE 'muEnable[A-Za-z]+\s*=\s*false' "$PRE_GO"
     die "mutation audit constant set to false in $PRE_GO — restore before shipping"
 fi
-ok "all muEnable* constants are true"
+ok "all muEnable* constants are true in $PRE_GO"
+
+# Gate 2b (new): every muEnable* in the tree is true.
+if grep -rnE 'muEnable[A-Za-z]+\s*=\s*false' --include='*.go' \
+       --exclude-dir=cmd . > /dev/null 2>&1; then
+    grep -rnE 'muEnable[A-Za-z]+\s*=\s*false' --include='*.go' \
+         --exclude-dir=cmd .
+    die "mutation audit constant set to false somewhere in the tree"
+fi
+ok "no muEnable*=false anywhere in the production tree"
+
+# Gate 2c (Group 4): mutation-audit registries validate clean.
+# Reads every *.mutation-audit.yaml and verifies that each declared
+# gate constant exists in the named source file and every declared
+# binding test function exists in the named package's test files.
+# Catches drift in either direction: a registry pointing at a
+# deleted constant, or a gate declared in source without a registry
+# entry.
+if ! go run ./cmd/audit-v775 mutation --validate-registries 2>&1; then
+    die "mutation-audit registry drift — run 'make audit-v775-list' to diagnose"
+fi
+ok "all *.mutation-audit.yaml registries validate clean"
 
 # ═════════════════════════════════════════════════════════════════
 say "Gate 3: compile-clean across the whole tree"

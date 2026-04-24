@@ -1,0 +1,30 @@
+# Mutation-audit registry for core/vss/transcript.go
+#
+# The DLEQ transcript DST is a printable ASCII prefix encoded into
+# a 32-byte fixed array at init time. Flipping any byte of the
+# printable prefix invalidates every golden challenge vector bound
+# to the old DST. This registry declares the DST-flip mutation as a
+# string_mutation gate (not a bool_const) — the runner does a
+# file-wide textual replacement of the printable constant rather
+# than flipping a boolean.
+#
+# ADR-005 §2 pins the DST string "ORTHOLOG-V7.75-DLEQ-CHALLENGE-v1";
+# this registry proves the binding is load-bearing.
+
+file: core/vss/transcript.go
+package: github.com/clearcompass-ai/ortholog-sdk/core/vss
+
+gates:
+  - name: TranscriptDSTFlip
+    kind: string_mutation
+    description: >-
+      DLEQ transcript DST flip. The TranscriptDST array encodes
+      "ORTHOLOG-V7.75-DLEQ-CHALLENGE-v1" in its first 32 bytes
+      of printable ASCII. Flipping the version suffix from v1 to v2
+      invalidates every golden challenge vector and any test that
+      pins the DST byte sequence.
+    mutation_from: ORTHOLOG-V7.75-DLEQ-CHALLENGE-v1
+    mutation_to:   ORTHOLOG-V7.75-DLEQ-CHALLENGE-v2
+    tests:
+      - TestTranscript_DSTFrozen
+      - TestFixture_TranscriptGolden

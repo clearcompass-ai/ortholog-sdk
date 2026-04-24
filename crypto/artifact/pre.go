@@ -232,6 +232,25 @@ const (
 	//   - TestDecryptFrags_VerifiesEveryFrag
 	//   - TestDecryptFrags_NilCFragRejected
 	muEnableVerifyBeforeCombine = true
+
+	// muEnableKFragReservedCheck controls the reserved-zone zero-byte
+	// enforcement in DeserializeKFrag.
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: DeserializeKFrag accepts KFrag wire payloads whose
+	// reserved zone (offset 99..195) contains non-zero bytes, making
+	// the reserved region a free side-channel for attacker-controlled
+	// bytes that downstream code may mistake for legitimate payload
+	// once the format evolves. The reserved zone is the versioning
+	// margin that lets us rev KFrag layouts without a wire-length
+	// collision with v7.75 — silent drift across it is a protocol-
+	// level bug waiting to happen.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestKFrag_ReservedBytesNonZeroRejected_EachPosition
+	//   - TestKFrag_ReservedBytesNonZeroRejected_SingleBit
+	muEnableKFragReservedCheck = true
 )
 
 // ═════════════════════════════════════════════════════════════════════
@@ -286,6 +305,14 @@ var (
 	// the 32-byte reserved zone (offset 164..195) contains any
 	// non-zero byte.
 	ErrReservedBytesNonZero = errors.New("pre: CFrag reserved bytes must be zero")
+
+	// ErrKFragReservedBytesNonZero is returned by DeserializeKFrag
+	// when the 97-byte reserved zone (offset 99..195) contains any
+	// non-zero byte. Parallel to ErrReservedBytesNonZero for the
+	// CFrag wire. The KFrag reserved zone lets the SDK rev KFrag
+	// layouts without colliding with v7.75's 196-byte length; any
+	// non-zero byte in the reserved range rejects at deserialize.
+	ErrKFragReservedBytesNonZero = errors.New("pre: KFrag reserved bytes must be zero")
 )
 
 // ─────────────────────────────────────────────────────────────────────
@@ -310,6 +337,46 @@ const (
 
 // KFragBKLen is the fixed size of the compressed BK commitment.
 const KFragBKLen = 33
+
+// KFragWireLen is the fixed on-wire size of a serialized KFrag
+// plaintext per ADR-005 §5. 196 bytes: 99 active bytes (ID + RKShare
+// + VK compressed + BK compressed) + 97 reserved bytes
+// (zero-enforced).
+//
+// Matching the CFrag wire length is intentional: a v7.75 deserializer
+// consuming a KFrag or CFrag uses the length discriminator (196 bytes)
+// to reject legacy v7.5 163-byte CFrags at length check, and the
+// type-specific layout is disambiguated by the active-field offsets.
+const KFragWireLen = 196
+
+const (
+	kfragOffsetID       = 0
+	kfragOffsetRKShare  = 1
+	kfragOffsetVK       = 33
+	kfragOffsetBK       = 66
+	kfragOffsetReserved = 99
+	kfragReservedLen    = 97
+)
+
+// assertReservedZoneZero verifies that every byte in data[offset:offset+length]
+// is zero. Returns the sentinel on the first non-zero byte seen.
+// Shared by DeserializeCFrag and DeserializeKFrag so any drift in the
+// reserved-zone discipline is caught in one place — and because the
+// KFrag and CFrag wire formats both depend on this invariant for
+// version discrimination, they share the helper.
+func assertReservedZoneZero(data []byte, offset, length int, sentinel error) error {
+	end := offset + length
+	if end > len(data) {
+		return fmt.Errorf("%w: reserved range [%d,%d) out of bounds (data len %d)",
+			sentinel, offset, end, len(data))
+	}
+	for i := offset; i < end; i++ {
+		if data[i] != 0 {
+			return fmt.Errorf("%w at offset %d", sentinel, i)
+		}
+	}
+	return nil
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Types
@@ -1040,13 +1107,8 @@ func DeserializeCFrag(data []byte) (*CFrag, error) {
 
 	// Reserved-bytes check FIRST — cheap rejection before any curve
 	// arithmetic on potentially malicious inputs.
-	for i := 0; i < cfragReservedLen; i++ {
-		if data[cfragOffsetReserved+i] != 0 {
-			return nil, fmt.Errorf(
-				"%w at offset %d",
-				ErrReservedBytesNonZero, cfragOffsetReserved+i,
-			)
-		}
+	if err := assertReservedZoneZero(data, cfragOffsetReserved, cfragReservedLen, ErrReservedBytesNonZero); err != nil {
+		return nil, err
 	}
 
 	c := curve()
@@ -1092,6 +1154,113 @@ func DeserializeCFrag(data []byte) (*CFrag, error) {
 		ID:     id,
 		ProofE: proofE,
 		ProofZ: proofZ,
+	}, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// KFrag wire-format (de)serialization (ADR-005 §5)
+// ─────────────────────────────────────────────────────────────────────
+
+// SerializeKFrag encodes a KFrag plaintext into the fixed 196-byte
+// wire format per ADR-005 §5:
+//
+//	Offset  Length  Field
+//	   0       1    ID
+//	   1      32    RKShare (big-endian padded)
+//	  33      33    VK      (compressed)
+//	  66      33    BK      (compressed, already stored)
+//	  99      97    Reserved (MUST be zero)
+//
+// Total: 196 bytes. 99 bytes of active material + 97 reserved.
+//
+// Shares the compressedPoint / padBigInt helpers with SerializeCFrag —
+// any drift between KFrag and CFrag point encoding would be a cross-
+// layer bug. Reserved bytes are left zero by `make([]byte, ...)`.
+//
+// Callers that transmit KFrag plaintexts over wire boundaries MUST
+// use this serialization. KFrag material is secret — the wire form
+// is for transport between the grantor and the proxies, always
+// wrapped in an ECIES envelope or equivalent confidentiality layer.
+func SerializeKFrag(kf KFrag) ([]byte, error) {
+	if kf.RKShare == nil {
+		return nil, fmt.Errorf("%w: nil RKShare", ErrInvalidKFragFormat)
+	}
+	if kf.VKX == nil || kf.VKY == nil {
+		return nil, fmt.Errorf("%w: nil VK", ErrInvalidKFragFormat)
+	}
+	if kf.ID == 0 {
+		return nil, fmt.Errorf("%w: index 0 is reserved", ErrInvalidKFragFormat)
+	}
+
+	out := make([]byte, KFragWireLen)
+	out[kfragOffsetID] = kf.ID
+	copy(out[kfragOffsetRKShare:kfragOffsetRKShare+32], padBigInt(kf.RKShare))
+	copy(out[kfragOffsetVK:kfragOffsetVK+33], compressedPoint(kf.VKX, kf.VKY))
+	copy(out[kfragOffsetBK:kfragOffsetBK+33], kf.BK[:])
+	// Reserved bytes at offset 99..195 are already zero from make().
+	return out, nil
+}
+
+// DeserializeKFrag decodes a 196-byte wire buffer into a KFrag
+// plaintext. Validates length, rejects non-zero reserved bytes,
+// decompresses and on-curve-checks VK and BK, and reconstructs
+// RKShare as a secp256k1 scalar.
+//
+// Reserved-zone enforcement is gated by muEnableKFragReservedCheck.
+// In production the gate is always true; flipping it false is a
+// mutation-audit probe that MUST fail the corresponding binding test.
+func DeserializeKFrag(data []byte) (*KFrag, error) {
+	if len(data) != KFragWireLen {
+		return nil, fmt.Errorf(
+			"%w: expected %d bytes, got %d",
+			ErrInvalidKFragFormat, KFragWireLen, len(data),
+		)
+	}
+	if muEnableKFragReservedCheck {
+		if err := assertReservedZoneZero(data, kfragOffsetReserved, kfragReservedLen, ErrKFragReservedBytesNonZero); err != nil {
+			return nil, err
+		}
+	}
+
+	id := data[kfragOffsetID]
+	if id == 0 {
+		return nil, fmt.Errorf("%w: index 0 is reserved", ErrInvalidKFragFormat)
+	}
+
+	c := curve()
+
+	vkX, vkY, err := decompressPoint(data[kfragOffsetVK : kfragOffsetVK+33])
+	if err != nil {
+		return nil, fmt.Errorf("%w: VK: %v", ErrInvalidKFragFormat, err)
+	}
+	if !c.IsOnCurve(vkX, vkY) {
+		return nil, fmt.Errorf("%w: VK not on curve", ErrInvalidKFragFormat)
+	}
+
+	var bk [KFragBKLen]byte
+	copy(bk[:], data[kfragOffsetBK:kfragOffsetBK+33])
+	bkX, bkY, err := decompressPoint(bk[:])
+	if err != nil {
+		return nil, fmt.Errorf("%w: BK: %v", ErrInvalidKFragFormat, err)
+	}
+	if !c.IsOnCurve(bkX, bkY) {
+		return nil, fmt.Errorf("%w: BK not on curve", ErrInvalidKFragFormat)
+	}
+
+	rk := new(big.Int).SetBytes(data[kfragOffsetRKShare : kfragOffsetRKShare+32])
+	if rk.Sign() == 0 {
+		return nil, fmt.Errorf("%w: RKShare is zero", ErrInvalidKFragFormat)
+	}
+	if rk.Cmp(curveN()) >= 0 {
+		return nil, fmt.Errorf("%w: RKShare >= curve order", ErrInvalidKFragFormat)
+	}
+
+	return &KFrag{
+		ID:      id,
+		RKShare: rk,
+		VKX:     vkX,
+		VKY:     vkY,
+		BK:      bk,
 	}, nil
 }
 

@@ -251,6 +251,76 @@ const (
 	//   - TestKFrag_ReservedBytesNonZeroRejected_EachPosition
 	//   - TestKFrag_ReservedBytesNonZeroRejected_SingleBit
 	muEnableKFragReservedCheck = true
+
+	// muEnableCommitmentOnCurveGate controls the on-curve validation
+	// of every point in a PREGrantCommitment's CommitmentSet at
+	// deserialize and at verify time.
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: off-curve points admitted into CommitmentSet reach
+	// downstream VSS arithmetic. commitmentCombine already rejects
+	// off-curve points in the core primitive, but the gate in this
+	// package is the structural first line — a misformed commitment
+	// set should never reach the primitive layer.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestPREGrantCommitment_VerifyRejectsOffCurvePoint
+	muEnableCommitmentOnCurveGate = true
+
+	// muEnableCommitmentSetLengthCheck controls the invariant that
+	// len(CommitmentSet) == M. A commitment set that claims threshold
+	// M but carries M-1 or M+1 points is structurally malformed and
+	// MUST reject before any cryptographic reasoning.
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: VerifyPREGrantCommitment accepts a short or long
+	// commitment set. Downstream VerifyPoints would still fail, but
+	// the rejection comes deep in the primitive rather than at the
+	// structural gate — a noisy and confusing path for auditors.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestPREGrantCommitment_VerifyRejectsShortCommitmentSet
+	//   - TestPREGrantCommitment_VerifyRejectsLongCommitmentSet
+	muEnableCommitmentSetLengthCheck = true
+
+	// muEnableThresholdBoundsCheck controls the (2 <= M <= N <= 255)
+	// threshold-bounds check on PREGrantCommitment.
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: degenerate thresholds (M=0, M=1, M>N, N>255) are
+	// admitted. A 1-of-N split is not a threshold scheme — every
+	// share is the secret; relaxing this gate regresses the security
+	// model to per-share disclosure.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestPREGrantCommitment_VerifyRejectsThresholdBelowMin
+	//   - TestPREGrantCommitment_VerifyRejectsMAboveN
+	//   - TestPREGrantCommitment_VerifyRejectsNZero
+	muEnableThresholdBoundsCheck = true
+
+	// muEnableSplitIDRecomputation controls the verify-time check
+	// that SplitID recomputes from (grantorDID, recipientDID,
+	// artifactCID). This is the load-bearing binding between the
+	// commitment entry and the grant context it claims to cover.
+	//
+	// Production value: true. MUST be true on any committed code.
+	//
+	// When false: a commitment entry can carry any SplitID while
+	// still appearing to bind the grant. An attacker who obtains
+	// one legitimate commitment entry could re-publish it under a
+	// different (grantor, recipient, artifact) tuple and verifiers
+	// would accept it — the commitment-entry-to-grant binding
+	// collapses.
+	//
+	// Tests that MUST fail when this is false:
+	//   - TestPREGrantCommitment_VerifyRejectsWrongSplitID
+	//   - TestPREGrantCommitment_VerifyRejectsWrongGrantor
+	//   - TestPREGrantCommitment_VerifyRejectsWrongRecipient
+	//   - TestPREGrantCommitment_VerifyRejectsWrongCID
+	muEnableSplitIDRecomputation = true
 )
 
 // ═════════════════════════════════════════════════════════════════════

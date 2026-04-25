@@ -180,8 +180,22 @@ func ParsePubKey(bytes []byte) (*ecdsa.PublicKey, error) {
 		return nil, errors.New("signatures: ParsePubKey requires non-empty bytes")
 	}
 	pk, err := secp256k1.ParsePubKey(bytes)
-	if err != nil {
-		return nil, fmt.Errorf("signatures: parse secp256k1 pubkey: %w", err)
+	// Gate: muEnablePubKeyOnCurve (entry_verify_mutation_switches.go).
+	// When off, the parse error from secp256k1.ParsePubKey is
+	// suppressed; off-curve / malformed bytes return (nil, nil).
+	if muEnablePubKeyOnCurve {
+		if err != nil {
+			return nil, fmt.Errorf("signatures: parse secp256k1 pubkey: %w", err)
+		}
+	}
+	if pk == nil {
+		// Defensive: when the gate is off and ParsePubKey rejected
+		// the input, return (nil, nil) rather than nil-deref on the
+		// next line. The binding test asserts a non-nil error from
+		// off-curve input; either the gate-on error path or the
+		// gate-off (nil, nil) path makes that assertion fire when
+		// the gate is flipped.
+		return nil, nil
 	}
 	return pk.ToECDSA(), nil
 }
@@ -256,18 +270,43 @@ func VerifyEntry(hash [32]byte, sig []byte, pub *ecdsa.PublicKey) error {
 	if pub == nil {
 		return fmt.Errorf("%w: nil public key", ErrInvalidPublicKey)
 	}
-	if len(sig) != 64 {
-		return fmt.Errorf("%w: got %d bytes", ErrInvalidRawSignatureLength, len(sig))
+	// Gate: muEnableSignatureLength
+	// (entry_verify_mutation_switches.go). When off, signatures of
+	// any length are decoded as big-endian R/S — ECDSA does not
+	// specify the result for non-64-byte inputs.
+	if muEnableSignatureLength {
+		if len(sig) != 64 {
+			return fmt.Errorf("%w: got %d bytes", ErrInvalidRawSignatureLength, len(sig))
+		}
+	}
+	// Defensive: if the length gate is off and the input is
+	// shorter than 64 bytes, the slice ops below would panic.
+	// Bound the slice to 64 bytes max with zero padding.
+	sigBuf := sig
+	if len(sigBuf) < 64 {
+		padded := make([]byte, 64)
+		copy(padded, sigBuf)
+		sigBuf = padded
+	} else if len(sigBuf) > 64 {
+		sigBuf = sigBuf[:64]
 	}
 
-	r := new(big.Int).SetBytes(sig[:32])
-	s := new(big.Int).SetBytes(sig[32:64])
+	r := new(big.Int).SetBytes(sigBuf[:32])
+	s := new(big.Int).SetBytes(sigBuf[32:64])
 	if r.Sign() == 0 || s.Sign() == 0 {
 		return ErrZeroSignatureComponent
 	}
 
-	if !ecdsa.Verify(pub, hash[:], r, s) {
-		return ErrSignatureVerificationFailed
+	// Gate: muEnableEntrySignatureVerify
+	// (entry_verify_mutation_switches.go). When off, ecdsa.Verify
+	// is bypassed and any well-formed signature shape verifies
+	// regardless of the actual cryptographic relationship — the
+	// silent-forgery-acceptance failure mode this gate exists to
+	// prevent.
+	if muEnableEntrySignatureVerify {
+		if !ecdsa.Verify(pub, hash[:], r, s) {
+			return ErrSignatureVerificationFailed
+		}
 	}
 	return nil
 }

@@ -369,14 +369,23 @@ func (v *GnarkBLSVerifier) VerifyAggregate(
 	var negG2Gen bls12381.G2Affine
 	negG2Gen.Neg(&g2Gen)
 
-	aggregatedOK, err := bls12381.PairingCheck(
-		[]bls12381.G1Affine{sigAggAff, hashPoint},
-		[]bls12381.G2Affine{negG2Gen, pubAggAff},
-	)
-	if err != nil {
-		// PairingCheck doesn't typically fail on valid-length inputs,
-		// but surface any library-level issue.
-		return results, fmt.Errorf("signatures/bls: aggregate pairing check: %w", err)
+	// Gate: muEnableBLSAggregateVerify
+	// (bls_verifier_mutation_switches.go). When off, the
+	// PairingCheck is bypassed and aggregatedOK is forced to true —
+	// silent forgery acceptance for BLS cosignatures.
+	var aggregatedOK bool
+	if muEnableBLSAggregateVerify {
+		aggregatedOK, err = bls12381.PairingCheck(
+			[]bls12381.G1Affine{sigAggAff, hashPoint},
+			[]bls12381.G2Affine{negG2Gen, pubAggAff},
+		)
+		if err != nil {
+			// PairingCheck doesn't typically fail on valid-length
+			// inputs, but surface any library-level issue.
+			return results, fmt.Errorf("signatures/bls: aggregate pairing check: %w", err)
+		}
+	} else {
+		aggregatedOK = true
 	}
 
 	if aggregatedOK {
@@ -525,6 +534,14 @@ func VerifyBLSPoP(pub *bls12381.G2Affine, popBytes []byte) error {
 	_, _, _, g2Gen := bls12381.Generators()
 	var negG2Gen bls12381.G2Affine
 	negG2Gen.Neg(&g2Gen)
+
+	// Gate: muEnableBLSPoPVerify (bls_verifier_mutation_switches.go).
+	// When off, the PairingCheck is bypassed and any well-formed
+	// PoP shape returns nil — rogue-key attacks succeed because PoP
+	// no longer attests to scalar knowledge.
+	if !muEnableBLSPoPVerify {
+		return nil
+	}
 
 	ok, err := bls12381.PairingCheck(
 		[]bls12381.G1Affine{pop, hashPoint},

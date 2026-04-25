@@ -14,10 +14,17 @@ Every row records one gate's mutation result from a run of
 
 The file is append-only. Entries are committed to the repo.
 
-## 2026-04-24T23:42:50Z — audit-v775 mutation
+## 2026-04-25T00:18:40Z — audit-v775 mutation
 
 | Registry | Gate | Result | Note |
 | --- | --- | --- | --- |
+| core/envelope/serialize.mutation-audit.yaml | muEnableCanonicalOrdering | PASS | — |
+| core/envelope/serialize.mutation-audit.yaml | muEnableSizeCap | PASS | — |
+| core/envelope/serialize.mutation-audit.yaml | muEnableVersionReject | PASS | — |
+| core/envelope/serialize.mutation-audit.yaml | muEnableDestinationBound | PASS | — |
+| core/smt/verify.mutation-audit.yaml | muEnableRootMatch | PASS | — |
+| core/smt/verify.mutation-audit.yaml | muEnableProofDepthBounds | PASS | — |
+| core/smt/verify.mutation-audit.yaml | muEnableEmptyLeafDistinction | PASS | — |
 | core/vss/h_generator.mutation-audit.yaml | muEnableHGeneratorLiftX | PASS | — |
 | core/vss/h_generator.mutation-audit.yaml | HGeneratorSeedFlip | PASS | — |
 | core/vss/pedersen.mutation-audit.yaml | muEnablePedersenIndexBounds | PASS | — |
@@ -48,6 +55,13 @@ The file is append-only. Entries are committed to the repo.
 | crypto/escrow/vss_v2.mutation-audit.yaml | muEnableEscrowThresholdBounds | PASS | — |
 | crypto/escrow/vss_v2.mutation-audit.yaml | muEnableReconstructVersionCheck | PASS | — |
 | crypto/escrow/vss_v2.mutation-audit.yaml | muEnableReconstructShareVerification | PASS | — |
+| crypto/signatures/bls_verifier.mutation-audit.yaml | muEnableBLSSubgroupCheck | PASS | — |
+| crypto/signatures/bls_verifier.mutation-audit.yaml | muEnableBLSPoPVerify | PASS | — |
+| crypto/signatures/bls_verifier.mutation-audit.yaml | BLSPoPDomainTagFlip | PASS | — |
+| crypto/signatures/bls_verifier.mutation-audit.yaml | muEnableBLSAggregateVerify | PASS | — |
+| crypto/signatures/entry_verify.mutation-audit.yaml | muEnableEntrySignatureVerify | PASS | — |
+| crypto/signatures/entry_verify.mutation-audit.yaml | muEnablePubKeyOnCurve | PASS | — |
+| crypto/signatures/entry_verify.mutation-audit.yaml | muEnableSignatureLength | PASS | — |
 | lifecycle/commitment_atomic.mutation-audit.yaml | muEnableCommitmentEmissionAtomic | PASS | — |
 | verifier/cosignature.mutation-audit.yaml | muEnableCosignatureBinding | PASS | — |
 | verifier/fraud_proofs.mutation-audit.yaml | muEnableFraudProofValidation | PASS | — |

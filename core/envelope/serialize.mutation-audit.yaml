@@ -1,0 +1,53 @@
+# Mutation-audit registry for core/envelope/serialize.go
+#
+# Phase C Group 5.3 — envelope serialization audit. Four switches
+# gate the canonical-form invariants every Ortholog log entry
+# depends on. Declarations live in serialize_mutation_switches.go
+# so the audit-v775 runner's line-local rewrite can target exactly
+# one declaration per gate.
+
+file: core/envelope/serialize_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/core/envelope
+
+gates:
+  - name: muEnableCanonicalOrdering
+    kind: bool_const
+    description: >-
+      Strict-trailing-bytes check inside ReadSignaturesSection.
+      Off admits trailing bytes after the signatures section; two
+      distinct byte sequences would deserialize to the same Entry,
+      breaking the canonical-form contract that hashing the entry
+      produces a unique identity.
+    tests:
+      - TestDeserialize_RejectsTrailingBytes_Binding
+
+  - name: muEnableSizeCap
+    kind: bool_const
+    description: >-
+      MaxCanonicalBytes bound check inside Deserialize. Off admits
+      oversize buffers; downstream consumers (Tessera bundle parser,
+      admission pipeline) hit different errors at unpredictable
+      boundaries.
+    tests:
+      - TestDeserialize_RejectsOversize_Binding
+
+  - name: muEnableVersionReject
+    kind: bool_const
+    description: >-
+      CheckReadAllowed protocol-version check inside Deserialize.
+      Off admits entries claiming unsupported (past or future)
+      protocol versions — silent forward-incompatibility and
+      downgrade attacks.
+    tests:
+      - TestDeserialize_RejectsUnsupportedVersion_Binding
+
+  - name: muEnableDestinationBound
+    kind: bool_const
+    description: >-
+      ValidateDestination call inside validateHeaderForWrite. Off
+      readmits empty, whitespace, or oversize destinations at
+      write time — the canonical-hash destination-binding property
+      fails the moment this validation is bypassed (cross-exchange
+      replay attack surface).
+    tests:
+      - TestValidateHeader_RejectsEmptyDestination_Binding

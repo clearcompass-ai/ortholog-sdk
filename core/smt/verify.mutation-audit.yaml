@@ -1,0 +1,48 @@
+# Mutation-audit registry for core/smt/verify.go
+#
+# Phase C Group 5.3 — SMT proof-verification audit. Three switches
+# gate the structural checks SMT proof verification depends on.
+# Declarations live in verify_mutation_switches.go so the
+# audit-v775 runner's line-local rewrite can target exactly one
+# declaration per gate.
+
+file: core/smt/verify_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/core/smt
+
+gates:
+  - name: muEnableRootMatch
+    kind: bool_const
+    description: >-
+      (computed != root) comparison inside VerifyMembershipProof,
+      VerifyNonMembershipProof, VerifyBatchProof, and
+      VerifyMerkleInclusion. Off makes every proof silently
+      accept regardless of whether the reconstructed root matches
+      — the failure mode SMT verification exists to prevent.
+    tests:
+      - TestVerifyMembershipProof_RejectsWrongRoot_Binding
+
+  - name: muEnableProofDepthBounds
+    kind: bool_const
+    description: >-
+      Nil-siblings rejection inside checkProofDepthBounds. Off
+      admits proofs with nil siblings maps; computeRootFromProof
+      falls through to the default-hash ladder silently —
+      admitting proofs whose explicit co-path declaration was
+      never supplied. The bit-index and len > TreeDepth checks
+      the gate would also enforce are structurally unreachable
+      for uint8 keys with TreeDepth = 256; the nil-map check is
+      the only depth-bounds invariant observable at runtime.
+    tests:
+      - TestVerifyMembershipProof_RejectsNilSiblings_Binding
+
+  - name: muEnableEmptyLeafDistinction
+    kind: bool_const
+    description: >-
+      (proof.Leaf == nil) and (proof.Leaf != nil) checks that
+      distinguish membership proofs from non-membership proofs.
+      Off lets a non-membership proof pose as a membership proof
+      (or vice versa), admitting forged inclusion claims for
+      absent leaves.
+    tests:
+      - TestVerifyMembershipProof_RejectsNilLeaf_Binding
+      - TestVerifyNonMembershipProof_RejectsLeafPresent_Binding

@@ -1,4 +1,8 @@
 # Mutation-audit registry for lifecycle/commitment_atomic.go
+# (covers the lifecycle-side atomic-emission invariant via
+# AssertAtomicEmission and AssertPREAtomicEmission, plus the
+# Group-6.2 cross-registered end-to-end tests that drive
+# grantUmbralPRE and ProvisionSingleLogWithEscrow).
 #
 # ADR-005 §4 locks the atomic-emission invariant: every lifecycle
 # function returning shares or KFrags also returns a non-nil
@@ -7,10 +11,11 @@
 # disables the assertion and lets a regressed grantUmbralPRE (or
 # future lifecycle function) return shares without a commitment.
 #
-# The binding test drives a full PRE grant and asserts
-# result.CommitmentEntry is non-nil; a mutated-false switch would
-# also let pathological regressions leak through, which is what the
-# assertion exists to catch.
+# The escrow-side mirror gate muEnableCommitmentEmissionAtomicV2
+# in exchange/identity/mapping_escrow_v2_helpers.go has its own
+# registry at exchange/identity/mapping_escrow_v2.mutation-audit.yaml
+# (cross-package tests cannot be enumerated by `go test -list`
+# against this package).
 
 file: lifecycle/commitment_atomic.go
 package: github.com/clearcompass-ai/ortholog-sdk/lifecycle
@@ -25,7 +30,12 @@ gates:
       no-op. The binding tests construct the pathological
       (material > 0, entry == nil) tuple directly — a state the
       production happy path cannot produce — and assert the error
-      fires only while the switch is true.
+      fires only while the switch is true. The cross-registered
+      end-to-end tests confirm the assertion fires on the live
+      grantUmbralPRE and ProvisionSingleLogWithEscrow flows.
     tests:
       - TestAtomicEmissionInvariant_FireOnSharesWithoutCommitment
       - TestAtomicEmissionInvariant_PRESide
+      # Group 6.2 cross-registered end-to-end binding tests.
+      - TestGrantArtifactAccess_AtomicCommitmentEmission
+      - TestProvisionSingleLogWithEscrow_AtomicCommitmentEmission

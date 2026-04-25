@@ -1,0 +1,95 @@
+# Mutation-audit registry for the lifecycle layer
+# (artifact_access.go, recovery.go, plus parallel atomic-emission
+# coverage for provision_escrow.go and exchange/identity/
+# mapping_escrow_v2.go).
+#
+# Phase C Group 6.2 — composition-layer audit. Six new switches
+# gate the lifecycle-layer integrity checks plus a cross-registered
+# entry for the Group-3 muEnableCommitmentEmissionAtomic that the
+# registry covers via per-gate source_file overrides.
+#
+# Declarations live in artifact_access_mutation_switches.go so
+# the audit-v775 runner's line-local rewrite can target exactly
+# one declaration per gate. The Group-3 atomic-emission switch
+# stays in commitment_atomic.go (already registered there); this
+# registry cross-references it without re-declaring.
+
+file: lifecycle/artifact_access_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/lifecycle
+
+gates:
+  # ── artifact_access.go ─────────────────────────────────────────
+
+  - name: muEnableArtifactCommitmentRequired
+    kind: bool_const
+    description: >-
+      (params.Commitments.Threshold() == 0) check inside
+      VerifyAndDecryptArtifact's PRE branch. Off bypasses the
+      lifecycle-layer rejection; PRE_DecryptFrags still rejects
+      empty commitments via its own gate, but the boundary error
+      type changes (artifact.ErrEmptyCommitments instead of
+      lifecycle.ErrMissingCommitments) and admission diagnostics
+      degrade.
+    tests:
+      - TestVerifyAndDecryptArtifact_PRE_MissingCommitments
+
+  - name: muEnableGrantAuthorizationCheck
+    kind: bool_const
+    description: >-
+      Phase 1 dispatch in GrantArtifactAccess that runs
+      CheckGrantAuthorization when SchemaParams.GrantAuthorizationMode
+      != GrantAuthOpen. Off treats every grant as open mode
+      regardless of schema; restricted / sealed grants no longer
+      enforce scope-authority and authorized-recipient
+      constraints — silent authorization bypass.
+    tests:
+      - TestGrantArtifactAccess_AuthCheck_Binding
+
+  # ── recovery.go ────────────────────────────────────────────────
+
+  - name: muEnableWitnessDeserialize
+    kind: bool_const
+    description: >-
+      EvaluateArbitration witness Gate 1 — deserialize errors on
+      the witness cosignature envelope are fatal. Off ignores
+      deserialize errors; the defensive nil-witnessEntry guard
+      still rejects but with a different reason string, so the
+      gate-specific "deserialize failed" message no longer
+      surfaces. Specific-message assertion is the load-bearing
+      signal.
+    tests:
+      - TestEvaluateArbitration_WitnessDeserialize_Binding
+
+  - name: muEnableWitnessPositionBinding
+    kind: bool_const
+    description: >-
+      EvaluateArbitration witness Gate 2 — the witness cosignature
+      MUST reference the RecoveryRequestPos via IsCosignatureOf.
+      Off readmits BUG-016-class cross-position cosignature
+      acceptance at the arbitration boundary. Bound to the
+      pre-existing recovery-test regression.
+    tests:
+      - TestEvaluateArbitration_RejectsUnboundWitnessCosignature
+
+  - name: muEnableWitnessIndependence
+    kind: bool_const
+    description: >-
+      EvaluateArbitration witness Gate 3 — the witness signer MUST
+      NOT appear in EscrowNodeSet. Off lets escrow nodes
+      self-witness their own override request, defeating the
+      independence requirement schema-declared via
+      OverrideRequiresIndependentWitness.
+    tests:
+      - TestEvaluateArbitration_RejectsEscrowNodeAsWitness
+
+  - name: muEnableReconstructSizeCheck
+    kind: bool_const
+    description: >-
+      (len(keyBytes) != escrow.SecretSize) defensive invariant
+      after escrow.Reconstruct returns, factored into
+      assertReconstructSize. Off makes the assertion a no-op; a
+      primitive-layer contract violation silently propagates
+      wrong-size key material into RecoveryResult.MasterKey via
+      the copy.
+    tests:
+      - TestReconstructSizeCheck_Binding

@@ -281,11 +281,12 @@ func (me *MappingEscrow) storeMappingV2Inner(
 		CommitmentEntry: commitmentEntry,
 	}
 
-	// Atomic-emission invariant. shares non-nil ⇒ commitment entry non-nil.
-	if muEnableCommitmentEmissionAtomicV2 {
-		if len(result.EncShares) > 0 && result.CommitmentEntry == nil {
-			return nil, ErrV2AtomicEmissionViolated
-		}
+	// Atomic-emission invariant. Routed through assertV2AtomicEmission
+	// (mapping_escrow_v2_helpers.go) so the gate has an observable
+	// binding test on the pathological (shares > 0, entry == nil)
+	// tuple that the production happy path never produces.
+	if err := assertV2AtomicEmission(result.EncShares, result.CommitmentEntry); err != nil {
+		return nil, err
 	}
 	return result, nil
 }

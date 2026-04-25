@@ -11,9 +11,28 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
 )
+
+// assertV2AtomicEmission enforces the V2 atomic-emission invariant
+// inside StoreMappingV2: encShares non-empty ⇒ commitmentEntry
+// non-nil. Returns nil on success, ErrV2AtomicEmissionViolated on
+// violation. Gated by muEnableCommitmentEmissionAtomicV2 so the
+// audit runner can flip the switch and observe that the binding
+// test fires on a pathological tuple. The production happy path
+// never produces such a tuple — encShares and commitmentEntry are
+// produced together inside storeMappingV2Inner.
+func assertV2AtomicEmission(encShares []EncryptedShare, commitmentEntry *envelope.Entry) error {
+	if !muEnableCommitmentEmissionAtomicV2 {
+		return nil
+	}
+	if len(encShares) > 0 && commitmentEntry == nil {
+		return ErrV2AtomicEmissionViolated
+	}
+	return nil
+}
 
 // muEnableCommitmentEmissionAtomicV2 is the package-local mirror of
 // the lifecycle-layer muEnableCommitmentEmissionAtomic switch. Kept

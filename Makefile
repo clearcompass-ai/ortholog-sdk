@@ -1,4 +1,4 @@
-.PHONY: fmt build test check audit-v775 audit-v775-validate audit-v775-list audit-v775-full lint-cosignature-binding
+.PHONY: fmt build test check audit-v775 audit-v775-validate audit-v775-list audit-v775-full lint-cosignature-binding lint-destination-binding
 
 fmt:
 	@goimports -w $(shell find . -name '*.go' -not -path './vendor/*')
@@ -53,3 +53,16 @@ audit-v775-full:
 # BUG-016-class regression and the linter exits non-zero.
 lint-cosignature-binding:
 	@go run ./cmd/lint-cosignature-binding .
+
+# ─────────────────────────────────────────────────────────────────
+# Destination-binding lint (ADR-005, Phase C Group 7.1)
+# ─────────────────────────────────────────────────────────────────
+#
+# AST-scans every production .go file for builder *Params composite
+# literals (RootEntityParams, AmendmentParams, ..., the 20-builder set
+# locked in Group 7.1). Errors if any literal omits the Destination
+# field or sets it to "". Test files are skipped — they legitimately
+# exercise the runtime ErrDestinationEmpty rejection path. Routes
+# through cmd/check-sdk-usage's R13 with -destination-binding.
+lint-destination-binding:
+	@go run ./cmd/check-sdk-usage -path . -destination-binding -json=""

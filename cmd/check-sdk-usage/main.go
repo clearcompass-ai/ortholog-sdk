@@ -91,6 +91,16 @@
 //	      violation (builder must never read Domain Payload).
 //	      Severity: WARNING (strict only).
 //
+//	[R13] Builder *Params composite literal with no Destination field, or
+//	      Destination set to an empty string literal. Phase C Group 7.1
+//	      destination-binding closure: every static call site must bind a
+//	      target exchange DID. Production *.go files only — _test.go files
+//	      legitimately exercise the runtime ErrDestinationEmpty path.
+//	      Severity: ERROR. Passes runtime validateCommon would reject anyway,
+//	      but the static check fails the build earlier and points at the
+//	      site rather than at validateCommon's error.
+//	      Run with -destination-binding to scope the audit to R13 only.
+//
 // ─────────────────────────────────────────────────────────────────────────
 // WHAT THIS TOOL CANNOT DO
 // ─────────────────────────────────────────────────────────────────────────
@@ -178,6 +188,11 @@ type Checker struct {
 	includeTests bool
 	findings     []Finding
 
+	// destinationBindingOnly suppresses every check except R13 when true.
+	// Phase C Group 7.1 uses this for the focused destination-binding
+	// audit; full audits leave it false to run every rule.
+	destinationBindingOnly bool
+
 	// per-file state, reset at each file
 	filePath     string
 	file         *ast.File
@@ -242,11 +257,12 @@ func (c *Checker) record(rule string, sev Severity, pos token.Pos, msg, fix stri
 
 func main() {
 	var (
-		path         = flag.String("path", "", "Directory to scan (required)")
-		sdkPrefix    = flag.String("sdk-prefix", "github.com/clearcompass-ai/ortholog-sdk", "SDK module prefix")
-		strictArg    = flag.String("strictness", "strict", "minimal|balanced|strict")
-		jsonOut      = flag.String("json", "./sdk-usage-findings.json", "Emit findings as JSON to this path (empty string disables)")
-		includeTests = flag.Bool("include-tests", true, "Include *_test.go files")
+		path             = flag.String("path", "", "Directory to scan (required)")
+		sdkPrefix        = flag.String("sdk-prefix", "github.com/clearcompass-ai/ortholog-sdk", "SDK module prefix")
+		strictArg        = flag.String("strictness", "strict", "minimal|balanced|strict")
+		jsonOut          = flag.String("json", "./sdk-usage-findings.json", "Emit findings as JSON to this path (empty string disables)")
+		includeTests     = flag.Bool("include-tests", true, "Include *_test.go files")
+		destinationOnly  = flag.Bool("destination-binding", false, "Only run R13 destination-binding audit (Phase C Group 7.1)")
 	)
 	flag.Parse()
 
@@ -269,6 +285,7 @@ func main() {
 	}
 
 	checker := NewChecker(strictness, *sdkPrefix, *includeTests)
+	checker.destinationBindingOnly = *destinationOnly
 	filesScanned, err := checker.ScanDir(absPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ERROR: scan:", err)
@@ -378,6 +395,22 @@ func (c *Checker) collectSDKImports(f *ast.File) map[string]string {
 // ──────────────────────────────────────────────────────────────────────
 
 func (c *Checker) runAllChecks(f *ast.File) {
+	// R13 destination-binding audit always runs and must run BEFORE the
+	// destinationBindingOnly guard so it's still emitted in focused mode.
+	ast.Inspect(f, func(n ast.Node) bool {
+		if cl, ok := n.(*ast.CompositeLit); ok {
+			c.checkBuilderParamsDestination(cl)
+		}
+		return true
+	})
+
+	if c.destinationBindingOnly {
+		// Focused mode: skip R1–R12. Phase C Group 7.1 uses this to
+		// produce a clean run scoped to the destination-binding closure
+		// proof without surfacing unrelated style/migration findings.
+		return
+	}
+
 	// Pass 1: deleted symbol references and removed field access.
 	// These walk the whole AST once.
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -773,6 +806,180 @@ func (c *Checker) checkPREGenerateKFrags(call *ast.CallExpr, sel *ast.SelectorEx
 		fmt.Sprintf("PRE_GenerateKFrags first arg %q looks like a master key. Scalar-multiplication PRE + M-of-N collusion can extract it.", ident.Name),
 		"Use lifecycle.GenerateDelegationKey at publish time and lifecycle.UnwrapDelegationKey at grant time. Pass the unwrapped sk_del to PRE_GenerateKFrags — never sk_owner.",
 	)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// [R13] Destination-binding (Phase C Group 7.1)
+// ──────────────────────────────────────────────────────────────────────
+//
+// Every builder.Build* function consumes a *Params struct that carries a
+// Destination field. The builder routes the value through
+// envelope.ValidateDestination via validateCommon — if the field is empty
+// at call time, the builder returns ErrDestinationEmpty and refuses to
+// emit. The cryptographic property this gates is locked at the canonical
+// hash level: serialize.go binds Destination into the entry hash, so a
+// missing or wrong destination invalidates every signature on the entry.
+//
+// This check enforces the static side: every builder *Params composite
+// literal MUST set Destination to either a non-empty string literal or a
+// non-nil identifier/selector. The two failure modes are:
+//
+//   - Field absent entirely. Go zero-values it to "" — silently producing
+//     a header that fails validateCommon at runtime. The runtime gate
+//     catches it, but the static check fires earlier and points at the
+//     specific call site.
+//   - Field set to "" or to a synthetic empty string. Same outcome at
+//     runtime, but the empty string in source is itself the bug.
+//
+// The check intentionally allows:
+//
+//   - Variable references (Destination: someVar) — the value is
+//     dynamic and ValidateDestination handles it at runtime.
+//   - Selector references (Destination: cfg.Destination) — same.
+//   - Function-call results (Destination: deriveDestination()) — same.
+//   - Parameter-spread shapes where the *Params struct is constructed
+//     by hand outside the literal we see (e.g. params.Destination = x;
+//     Build(params)). We do not chase assignments across statements;
+//     such call sites are flagged only if their literal omits the
+//     field entirely.
+//
+// Scope: any composite literal of type `builder.<X>Params` (or an
+// unqualified `<X>Params` inside the builder package itself).
+
+// builderParamsWithDestination is the closed list of *Params types in the
+// builder package that carry a Destination field and route it through
+// envelope.ValidateDestination at build time. Restricting R13 to this set
+// avoids false positives on non-builder Params structs (ClassifyParams,
+// ProcessWithRetryParams) which don't construct entries and don't bind a
+// destination.
+//
+// This list is the source of truth for "every builder *Params struct"
+// referenced by ADR-005's destination-binding requirement. When a new
+// builder lands, add its Params type here so R13 covers it.
+var builderParamsWithDestination = map[string]bool{
+	"RootEntityParams":                  true,
+	"AmendmentParams":                   true,
+	"DelegationParams":                  true,
+	"SuccessionParams":                  true,
+	"RevocationParams":                  true,
+	"ScopeCreationParams":               true,
+	"ScopeAmendmentParams":              true,
+	"ScopeRemovalParams":                true,
+	"EnforcementParams":                 true,
+	"CommentaryParams":                  true,
+	"CosignatureParams":                 true,
+	"RecoveryRequestParams":             true,
+	"AnchorParams":                      true,
+	"KeyRotationParams":                 true,
+	"KeyPrecommitParams":                true,
+	"SchemaEntryParams":                 true,
+	"PathBParams":                       true,
+	"MirrorParams":                      true,
+	"PREGrantCommitmentEntryParams":     true,
+	"EscrowSplitCommitmentEntryParams":  true,
+}
+
+func (c *Checker) checkBuilderParamsDestination(cl *ast.CompositeLit) {
+	typeName, ok := builderParamsTypeName(cl, c)
+	if !ok {
+		return
+	}
+
+	// Negative-path tests for the runtime ErrDestinationEmpty gate
+	// legitimately construct *Params with an empty Destination to
+	// exercise validateCommon's rejection. Skipping _test.go files
+	// scopes R13 to production call sites without losing coverage —
+	// the tests we'd be flagging are themselves the proof that the
+	// runtime gate fires.
+	if strings.HasSuffix(c.filePath, "_test.go") {
+		return
+	}
+
+	var (
+		found        bool
+		valueIsEmpty bool
+		fieldPos     token.Pos
+	)
+	for _, elt := range cl.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		key, ok := kv.Key.(*ast.Ident)
+		if !ok || key.Name != "Destination" {
+			continue
+		}
+		found = true
+		fieldPos = kv.Pos()
+		if lit, ok := kv.Value.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+			// `""` is two bytes (the quotes); literal value is unquoted.
+			if lit.Value == `""` {
+				valueIsEmpty = true
+			}
+		}
+		break
+	}
+
+	if !found {
+		c.record(
+			"R13-builder-destination-missing",
+			SeverityError,
+			cl.Pos(),
+			fmt.Sprintf("%s composite literal omits Destination field; builder will reject with ErrDestinationEmpty.", typeName),
+			"Set Destination to the target exchange DID. Routes through envelope.ValidateDestination at build time.",
+		)
+		return
+	}
+
+	if valueIsEmpty {
+		c.record(
+			"R13-builder-destination-empty-literal",
+			SeverityError,
+			fieldPos,
+			fmt.Sprintf("%s.Destination set to empty string literal; builder will reject with ErrDestinationEmpty.", typeName),
+			"Set Destination to a real DID. Empty literals indicate the call site never resolved its target exchange.",
+		)
+	}
+}
+
+// builderParamsTypeName returns the *Params type name when cl is a
+// composite literal of a builder Params struct that R13 covers, plus a
+// boolean indicating whether the literal qualifies. The match accepts:
+//
+//   - builder.<X>Params{...}: SelectorExpr keyed by the file's builder
+//     import alias, when <X>Params is in builderParamsWithDestination.
+//   - <X>Params{...}: Ident, only when the file is under the builder
+//     package itself AND <X>Params is in builderParamsWithDestination.
+//
+// Anything outside those shapes returns ok=false. Restricting to the
+// closed list keeps R13 focused on builder Params with Destination
+// fields and avoids false positives on unrelated Params types.
+func builderParamsTypeName(cl *ast.CompositeLit, c *Checker) (string, bool) {
+	switch t := cl.Type.(type) {
+	case *ast.SelectorExpr:
+		ident, ok := t.X.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+		alias := c.pkgAlias("builder")
+		if alias == "" || ident.Name != alias {
+			return "", false
+		}
+		if !builderParamsWithDestination[t.Sel.Name] {
+			return "", false
+		}
+		return alias + "." + t.Sel.Name, true
+	case *ast.Ident:
+		// Unqualified type — only valid inside the builder package itself.
+		if !strings.HasPrefix(c.filePath, "builder/") && c.filePath != "builder" {
+			return "", false
+		}
+		if !builderParamsWithDestination[t.Name] {
+			return "", false
+		}
+		return t.Name, true
+	}
+	return "", false
 }
 
 // ──────────────────────────────────────────────────────────────────────

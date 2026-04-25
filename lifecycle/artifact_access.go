@@ -462,7 +462,14 @@ func GrantArtifactAccess(params GrantArtifactAccessParams) (*GrantArtifactAccess
 	}
 
 	// ── Phase 1: Grant authorization ────────────────────────────────
-	if params.SchemaParams.GrantAuthorizationMode != types.GrantAuthOpen {
+	//
+	// Gate: muEnableGrantAuthorizationCheck
+	// (artifact_access_mutation_switches.go). Off treats every
+	// grant as open mode regardless of SchemaParams; restricted /
+	// sealed grants no longer enforce the scope-authority and
+	// authorized-recipient constraints — silent authorization
+	// bypass.
+	if muEnableGrantAuthorizationCheck && params.SchemaParams.GrantAuthorizationMode != types.GrantAuthOpen {
 		check, err := CheckGrantAuthorization(GrantAuthCheckParams{
 			Mode:                 params.SchemaParams.GrantAuthorizationMode,
 			GranterDID:           params.GranterDID,
@@ -750,8 +757,16 @@ func VerifyAndDecryptArtifact(params VerifyAndDecryptArtifactParams) ([]byte, er
 		}
 		// v7.75 Phase C: commitments are required at decrypt time so
 		// PRE_DecryptFrags can verify every CFrag before combination.
-		if params.Commitments.Threshold() == 0 {
-			return nil, ErrMissingCommitments
+		//
+		// Gate: muEnableArtifactCommitmentRequired
+		// (artifact_access_mutation_switches.go). Off bypasses the
+		// lifecycle-layer rejection; PRE_DecryptFrags still rejects
+		// empty commitments via its own gate, but the boundary
+		// error type changes and admission diagnostics degrade.
+		if muEnableArtifactCommitmentRequired {
+			if params.Commitments.Threshold() == 0 {
+				return nil, ErrMissingCommitments
+			}
 		}
 		plaintext, err = artifact.PRE_DecryptFrags(
 			params.RecipientKey, params.CFrags, params.Capsule,

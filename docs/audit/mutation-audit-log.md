@@ -14,7 +14,7 @@ Every row records one gate's mutation result from a run of
 
 The file is append-only. Entries are committed to the repo.
 
-## 2026-04-25T00:18:40Z — audit-v775 mutation
+## 2026-04-25T00:58:27Z — audit-v775 mutation
 
 | Registry | Gate | Result | Note |
 | --- | --- | --- | --- |
@@ -62,6 +62,13 @@ The file is append-only. Entries are committed to the repo.
 | crypto/signatures/entry_verify.mutation-audit.yaml | muEnableEntrySignatureVerify | PASS | — |
 | crypto/signatures/entry_verify.mutation-audit.yaml | muEnablePubKeyOnCurve | PASS | — |
 | crypto/signatures/entry_verify.mutation-audit.yaml | muEnableSignatureLength | PASS | — |
+| exchange/identity/mapping_escrow_v2.mutation-audit.yaml | muEnableCommitmentEmissionAtomicV2 | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableArtifactCommitmentRequired | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableGrantAuthorizationCheck | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessDeserialize | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessPositionBinding | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessIndependence | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableReconstructSizeCheck | PASS | — |
 | lifecycle/commitment_atomic.mutation-audit.yaml | muEnableCommitmentEmissionAtomic | PASS | — |
 | verifier/cosignature.mutation-audit.yaml | muEnableCosignatureBinding | PASS | — |
 | verifier/fraud_proofs.mutation-audit.yaml | muEnableFraudProofValidation | PASS | — |

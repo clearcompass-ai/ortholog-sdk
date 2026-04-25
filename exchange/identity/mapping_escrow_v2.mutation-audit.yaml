@@ -1,0 +1,38 @@
+# Mutation-audit registry for exchange/identity/mapping_escrow_v2.go
+# (and its helper file mapping_escrow_v2_helpers.go).
+#
+# Phase C Group 6.2 — escrow-side atomic-emission audit. Mirrors
+# the lifecycle-layer registry at lifecycle/commitment_atomic.mutation-audit.yaml
+# for the StoreMappingV2 path, which uses its own package-local
+# atomic-emission switch (muEnableCommitmentEmissionAtomicV2)
+# because exchange/identity does not depend on lifecycle/.
+#
+# ADR-005 §4 locks the atomic-emission invariant: every function
+# producing shares MUST also return a non-nil commitment entry.
+# StoreMappingV2 produces V2 escrow shares; the gate fires when
+# CFrags/shares are non-empty and CommitmentEntry is nil — a
+# state the production happy path cannot produce.
+
+file: exchange/identity/mapping_escrow_v2_helpers.go
+package: github.com/clearcompass-ai/ortholog-sdk/exchange/identity
+
+gates:
+  - name: muEnableCommitmentEmissionAtomicV2
+    kind: bool_const
+    description: >-
+      V2 atomic-emission invariant inside StoreMappingV2's
+      storeMappingV2Inner final assertion. When true (production),
+      a regressed StoreMappingV2 returning shares without a
+      commitment entry surfaces ErrV2AtomicEmissionViolated. When
+      false, the assertion is a no-op and the regression
+      propagates silently.
+    tests:
+      # Happy-path end-to-end test: drives a real V2 mapping store
+      # and asserts the result carries a non-nil commitment entry.
+      - TestStoreMappingV2_AtomicCommitmentEmission
+      # Pathological-tuple binding: exercises the gate's assertion
+      # branch directly via assertV2AtomicEmission. Production
+      # callers cannot construct (shares > 0, entry == nil), so
+      # this synthetic test is the only path that actually
+      # exercises the gate's mutation-audit failure mode.
+      - TestAssertV2AtomicEmission_FireOnSharesWithoutEntry

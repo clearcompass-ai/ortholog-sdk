@@ -156,6 +156,31 @@ var (
 	ErrReconstructedSizeMismatch = fmt.Errorf("lifecycle/recovery: reconstructed secret size mismatch")
 )
 
+// assertReconstructSize enforces the muEnableReconstructSizeCheck
+// invariant: escrow.Reconstruct is contracted to return exactly
+// escrow.SecretSize bytes. Returns nil on success,
+// ErrReconstructedSizeMismatch on violation.
+//
+// Gated by muEnableReconstructSizeCheck
+// (artifact_access_mutation_switches.go). Off makes the assertion
+// a no-op; a primitive-layer contract violation silently
+// propagates wrong-size key material into RecoveryResult.
+//
+// The binding test (TestReconstructSizeCheck_Binding) constructs
+// a synthetic short slice and asserts the assertion fires —
+// production callers never produce one because Reconstruct
+// honours its size contract.
+func assertReconstructSize(keyBytes []byte) error {
+	if !muEnableReconstructSizeCheck {
+		return nil
+	}
+	if len(keyBytes) != escrow.SecretSize {
+		return fmt.Errorf("%w: got %d bytes, expected %d",
+			ErrReconstructedSizeMismatch, len(keyBytes), escrow.SecretSize)
+	}
+	return nil
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Phase 1: InitiateRecovery
 //
@@ -518,9 +543,16 @@ func ExecuteRecovery(p ExecuteRecoveryParams) (*RecoveryResult, error) {
 	// exactly escrow.SecretSize (32) bytes. Asserting surfaces any
 	// future contract violation at the lifecycle boundary rather than
 	// far downstream as a confusing cryptographic failure.
-	if len(keyBytes) != escrow.SecretSize {
-		return nil, fmt.Errorf("%w: got %d bytes, expected %d",
-			ErrReconstructedSizeMismatch, len(keyBytes), escrow.SecretSize)
+	//
+	// Gate: muEnableReconstructSizeCheck
+	// (artifact_access_mutation_switches.go). Off lets a wrong-
+	// size keyBytes propagate into RecoveryResult.MasterKey via
+	// the copy below — producing a truncated or padded master-
+	// identity key. The binding test calls
+	// assertReconstructSize directly with a synthetic short
+	// slice; the production happy path never produces one.
+	if err := assertReconstructSize(keyBytes); err != nil {
+		return nil, err
 	}
 
 	result := &RecoveryResult{}
@@ -733,25 +765,45 @@ func EvaluateArbitration(p ArbitrationParams) (*ArbitrationResult, error) {
 		}
 
 		// Gate 1: deserialize errors are fatal.
+		// Gated by muEnableWitnessDeserialize
+		// (artifact_access_mutation_switches.go). Off lets
+		// malformed witnesses fall through to the position /
+		// independence checks with a nil entry; the defensive
+		// nil-guard below short-circuits to a clear rejection.
 		witnessEntry, err := envelope.Deserialize(p.WitnessCosignature.CanonicalBytes)
-		if err != nil {
-			result.Reason = fmt.Sprintf("witness cosignature deserialize failed: %v", err)
+		if muEnableWitnessDeserialize {
+			if err != nil {
+				result.Reason = fmt.Sprintf("witness cosignature deserialize failed: %v", err)
+				return result, nil
+			}
+		}
+		if witnessEntry == nil {
+			result.Reason = "witness cosignature is malformed"
 			return result, nil
 		}
 
 		// Gate 2: witness cosig must reference the recovery request.
-		if !verifier.IsCosignatureOf(witnessEntry, p.RecoveryRequestPos) {
-			result.Reason = "witness cosignature does not reference recovery request position"
-			return result, nil
+		// Gated by muEnableWitnessPositionBinding. Off readmits
+		// BUG-016-class cross-position cosignature acceptance at
+		// the arbitration boundary.
+		if muEnableWitnessPositionBinding {
+			if !verifier.IsCosignatureOf(witnessEntry, p.RecoveryRequestPos) {
+				result.Reason = "witness cosignature does not reference recovery request position"
+				return result, nil
+			}
 		}
 
 		// Gate 3: witness must be independent of escrow.
-		if p.EscrowNodeSet[witnessEntry.Header.SignerDID] {
-			result.Reason = fmt.Sprintf(
-				"witness %s is an escrow node; independence requirement violated",
-				witnessEntry.Header.SignerDID,
-			)
-			return result, nil
+		// Gated by muEnableWitnessIndependence. Off lets escrow
+		// nodes self-witness their own override request.
+		if muEnableWitnessIndependence {
+			if p.EscrowNodeSet[witnessEntry.Header.SignerDID] {
+				result.Reason = fmt.Sprintf(
+					"witness %s is an escrow node; independence requirement violated",
+					witnessEntry.Header.SignerDID,
+				)
+				return result, nil
+			}
 		}
 
 		result.HasWitnessCosig = true

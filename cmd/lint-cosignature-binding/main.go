@@ -42,9 +42,7 @@ func main() {
 				if isCosignatureOfNilCheck(binExpr.X, binExpr.Y) || isCosignatureOfNilCheck(binExpr.Y, binExpr.X) {
 					pos := fset.Position(binExpr.Pos())
 
-					// WHITELIST: Allow the check inside the helper function itself.
-					// Adjust the filename here to match where you put IsCosignatureOf.
-					if strings.HasSuffix(pos.Filename, "verifier/cosignature_helper.go") {
+					if isWhitelisted(pos.Filename) {
 						return true
 					}
 
@@ -71,6 +69,33 @@ func main() {
 	}
 
 	fmt.Println("✅ AST Check Passed: No un-bound CosignatureOf checks found.")
+}
+
+// whitelistedFiles enumerates the files where raw `CosignatureOf == nil` /
+// `CosignatureOf != nil` checks are semantically correct and not subject to
+// the binding rule:
+//
+//   - verifier/cosignature.go: canonical home of IsCosignatureOf, where the
+//     raw nil check is the gate that the binding helper itself wraps.
+//   - core/envelope/subtypes.go: structural shape predicate
+//     IsCosignatureCommentary, which classifies headers by the presence of
+//     the CosignatureOf field, not by binding semantics. Classification is
+//     the right level of abstraction for "is this entry a cosignature
+//     commentary?" — the binding check belongs to consumers that count it
+//     as approval, not to the shape predicate.
+var whitelistedFiles = []string{
+	"verifier/cosignature.go",
+	"core/envelope/subtypes.go",
+}
+
+func isWhitelisted(filename string) bool {
+	clean := filepath.ToSlash(filename)
+	for _, suffix := range whitelistedFiles {
+		if strings.HasSuffix(clean, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isCosignatureOfNilCheck returns true if exprA is a selector ending in "CosignatureOf"

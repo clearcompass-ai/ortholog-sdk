@@ -75,3 +75,83 @@ The file is append-only. Entries are committed to the repo.
 | witness/verify.mutation-audit.yaml | muEnableWitnessQuorumCount | PASS | — |
 | witness/verify.mutation-audit.yaml | muEnableEquivocationDetection | PASS | — |
 
+## 2026-04-25T01:19:36Z — audit-v775 mutation
+
+| Registry | Gate | Result | Note |
+| --- | --- | --- | --- |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableReconstructVersionCheck | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableReconstructShareVerification | PASS | — |
+| exchange/identity/mapping_escrow_v2.mutation-audit.yaml | muEnableCommitmentEmissionAtomicV2 | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableArtifactCommitmentRequired | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableGrantAuthorizationCheck | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessDeserialize | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessPositionBinding | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessIndependence | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableReconstructSizeCheck | PASS | — |
+| lifecycle/commitment_atomic.mutation-audit.yaml | muEnableCommitmentEmissionAtomic | PASS | — |
+| verifier/cosignature.mutation-audit.yaml | muEnableCosignatureBinding | PASS | — |
+| verifier/fraud_proofs.mutation-audit.yaml | muEnableFraudProofValidation | PASS | — |
+| witness/verify.mutation-audit.yaml | muEnableWitnessQuorumCount | PASS | — |
+| witness/verify.mutation-audit.yaml | muEnableEquivocationDetection | PASS | — |
+
+## 2026-04-25T01:23:32Z — audit-v775 mutation
+
+| Registry | Gate | Result | Note |
+| --- | --- | --- | --- |
+| core/envelope/serialize.mutation-audit.yaml | muEnableCanonicalOrdering | PASS | — |
+| core/envelope/serialize.mutation-audit.yaml | muEnableSizeCap | PASS | — |
+| core/envelope/serialize.mutation-audit.yaml | muEnableVersionReject | PASS | — |
+| core/envelope/serialize.mutation-audit.yaml | muEnableDestinationBound | PASS | — |
+| core/smt/verify.mutation-audit.yaml | muEnableRootMatch | PASS | — |
+| core/smt/verify.mutation-audit.yaml | muEnableProofDepthBounds | PASS | — |
+| core/smt/verify.mutation-audit.yaml | muEnableEmptyLeafDistinction | PASS | — |
+| core/vss/h_generator.mutation-audit.yaml | muEnableHGeneratorLiftX | PASS | — |
+| core/vss/h_generator.mutation-audit.yaml | HGeneratorSeedFlip | PASS | — |
+| core/vss/pedersen.mutation-audit.yaml | muEnablePedersenIndexBounds | PASS | — |
+| core/vss/pedersen.mutation-audit.yaml | muEnablePedersenOnCurveCheck | PASS | — |
+| core/vss/transcript.mutation-audit.yaml | TranscriptDSTFlip | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnableCommitmentsGate | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnableOnCurveGate | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnableDLEQCheck | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnablePedersenCheck | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnableSufficientCFragsGate | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnableVerifyBeforeCombine | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnableKFragReservedCheck | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnableCommitmentOnCurveGate | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnableCommitmentSetLengthCheck | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnableThresholdBoundsCheck | PASS | — |
+| crypto/artifact/pre.mutation-audit.yaml | muEnableSplitIDRecomputation | PASS | — |
+| crypto/escrow/split_commitment.mutation-audit.yaml | muEnableEscrowCommitmentOnCurveGate | PASS | — |
+| crypto/escrow/split_commitment.mutation-audit.yaml | muEnableEscrowCommitmentSetLengthCheck | PASS | — |
+| crypto/escrow/split_commitment.mutation-audit.yaml | muEnableEscrowThresholdBoundsCheck | PASS | — |
+| crypto/escrow/split_commitment.mutation-audit.yaml | muEnableEscrowSplitIDRecomputation | PASS | — |
+| crypto/escrow/verify_share.mutation-audit.yaml | muEnableV1FieldEmptyCheck | PASS | — |
+| crypto/escrow/verify_share.mutation-audit.yaml | muEnableV2FieldPopulatedCheck | PASS | — |
+| crypto/escrow/verify_share.mutation-audit.yaml | muEnableShareIndexNonZero | PASS | — |
+| crypto/escrow/verify_share.mutation-audit.yaml | muEnableSplitIDPresent | PASS | — |
+| crypto/escrow/verify_share.mutation-audit.yaml | muEnableFieldTagDiscrimination | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableEscrowSecretSizeCheck | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableEscrowDealerDIDNonEmpty | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableEscrowThresholdBounds | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableReconstructVersionCheck | PASS | — |
+| crypto/escrow/vss_v2.mutation-audit.yaml | muEnableReconstructShareVerification | PASS | — |
+| crypto/signatures/bls_verifier.mutation-audit.yaml | muEnableBLSSubgroupCheck | PASS | — |
+| crypto/signatures/bls_verifier.mutation-audit.yaml | muEnableBLSPoPVerify | PASS | — |
+| crypto/signatures/bls_verifier.mutation-audit.yaml | BLSPoPDomainTagFlip | PASS | — |
+| crypto/signatures/bls_verifier.mutation-audit.yaml | muEnableBLSAggregateVerify | PASS | — |
+| crypto/signatures/entry_verify.mutation-audit.yaml | muEnableEntrySignatureVerify | PASS | — |
+| crypto/signatures/entry_verify.mutation-audit.yaml | muEnablePubKeyOnCurve | PASS | — |
+| crypto/signatures/entry_verify.mutation-audit.yaml | muEnableSignatureLength | PASS | — |
+| exchange/identity/mapping_escrow_v2.mutation-audit.yaml | muEnableCommitmentEmissionAtomicV2 | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableArtifactCommitmentRequired | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableGrantAuthorizationCheck | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessDeserialize | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessPositionBinding | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessIndependence | PASS | — |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableReconstructSizeCheck | PASS | — |
+| lifecycle/commitment_atomic.mutation-audit.yaml | muEnableCommitmentEmissionAtomic | PASS | — |
+| verifier/cosignature.mutation-audit.yaml | muEnableCosignatureBinding | PASS | — |
+| verifier/fraud_proofs.mutation-audit.yaml | muEnableFraudProofValidation | PASS | — |
+| witness/verify.mutation-audit.yaml | muEnableWitnessQuorumCount | PASS | — |
+| witness/verify.mutation-audit.yaml | muEnableEquivocationDetection | PASS | — |
+

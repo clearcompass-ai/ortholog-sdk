@@ -1,4 +1,4 @@
-.PHONY: fmt build test check audit-v775 audit-v775-validate audit-v775-list audit-v775-full
+.PHONY: fmt build test check audit-v775 audit-v775-validate audit-v775-list audit-v775-full lint-cosignature-binding
 
 fmt:
 	@goimports -w $(shell find . -name '*.go' -not -path './vendor/*')
@@ -40,3 +40,16 @@ audit-v775-list:
 # CI and pre-release gates call this.
 audit-v775-full:
 	@go run ./cmd/audit-v775 mutation
+
+# ─────────────────────────────────────────────────────────────────
+# Cosignature-binding lint (ADR-005 §6, Phase C Group 6.1)
+# ─────────────────────────────────────────────────────────────────
+#
+# AST-scans every *.go file for raw `CosignatureOf == nil` and
+# `CosignatureOf != nil` checks. The canonical home of such checks
+# is verifier/cosignature.go (IsCosignatureOf) and the structural
+# shape predicate IsCosignatureCommentary in core/envelope/subtypes.go;
+# both are whitelisted inside the linter. Any other site is a
+# BUG-016-class regression and the linter exits non-zero.
+lint-cosignature-binding:
+	@go run ./cmd/lint-cosignature-binding .

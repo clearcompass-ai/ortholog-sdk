@@ -440,8 +440,17 @@ func ParseBLSPubKey(data []byte) (*bls12381.G2Affine, error) {
 		// are the security-critical case and get their own error.
 		// All other deserialization failures (malformed encoding,
 		// off-curve) get the on-curve error.
-		if strings.Contains(err.Error(), "subgroup") {
-			return nil, fmt.Errorf("%w: %v", ErrBLSPubKeyNotInSubgroup, err)
+		//
+		// Gate: muEnableBLSSubgroupCheck
+		// (bls_verifier_mutation_switches.go). When off, the typed-
+		// error narrowing is bypassed: every parse failure surfaces
+		// as ErrBLSPubKeyNotOnCurve, losing the security-critical
+		// distinction between "malformed bytes" and "rogue point
+		// outside the prime-order subgroup".
+		if muEnableBLSSubgroupCheck {
+			if strings.Contains(err.Error(), "subgroup") {
+				return nil, fmt.Errorf("%w: %v", ErrBLSPubKeyNotInSubgroup, err)
+			}
 		}
 		return nil, fmt.Errorf("%w: %v", ErrBLSPubKeyNotOnCurve, err)
 	}

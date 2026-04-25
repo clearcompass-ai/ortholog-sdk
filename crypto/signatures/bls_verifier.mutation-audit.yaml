@@ -1,0 +1,65 @@
+# Mutation-audit registry for crypto/signatures/bls_verifier.go
+# (and the closely-related ParseBLSPubKey in bls_signer.go).
+#
+# Phase C Group 5.3 — BLS verification audit. Four switches gate
+# the BLS12-381 verification surface:
+#
+#   muEnableBLSSubgroupCheck   (in bls_signer.go via source_file)
+#   muEnableBLSPoPVerify       (in bls_verifier.go)
+#   muEnableBLSDSTSeparation   (paired with a string mutation on
+#                               BLSPoPDomainTag in bls_signer.go)
+#   muEnableBLSAggregateVerify (in bls_verifier.go)
+
+file: crypto/signatures/bls_verifier_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/crypto/signatures
+
+gates:
+  - name: muEnableBLSSubgroupCheck
+    kind: bool_const
+    description: >-
+      Subgroup-error classification inside ParseBLSPubKey. Off
+      bypasses the typed-error narrowing: every parse failure
+      surfaces as ErrBLSPubKeyNotOnCurve, losing the security-
+      critical distinction between "malformed bytes" and "rogue
+      point outside the prime-order subgroup".
+    tests:
+      - TestParseBLSPubKey_NotInSubgroup
+
+  - name: muEnableBLSPoPVerify
+    kind: bool_const
+    description: >-
+      PairingCheck inside VerifyBLSPoP. Off bypasses the
+      cryptographic step that proves the prover knows the secret
+      scalar matching the public key — rogue-key attacks succeed
+      because PoP no longer attests to scalar knowledge.
+    tests:
+      - TestVerifyBLSPoP_RejectsTamperedPoP
+      - TestVerifyBLSPoP_RejectsWrongKey
+
+  - name: BLSPoPDomainTagFlip
+    kind: string_mutation
+    source_file: crypto/signatures/bls_signer.go
+    description: >-
+      DST separation between BLSDomainTag and BLSPoPDomainTag.
+      The string mutation flips the PoP DST suffix from "PoP" to
+      "SIG" so the two DSTs collide, readmitting cross-protocol
+      replay (cosignature reused as PoP). The binding test
+      asserts the two constants are distinct; the mutation makes
+      them equal and the test fails.
+    mutation_from: ORTHOLOG_BLS_PoP_V1_
+    mutation_to:   ORTHOLOG_BLS_SIG_V1_
+    tests:
+      - TestDomainSeparation_DSTsAreDistinct
+      - TestDomainSeparation_CosignatureNotUsableAsPoP
+      - TestDomainSeparation_PoPNotUsableAsCosignature
+
+  - name: muEnableBLSAggregateVerify
+    kind: bool_const
+    description: >-
+      Optimistic-aggregation PairingCheck inside VerifyAggregate.
+      Off bypasses the aggregation check; aggregatedOK is forced
+      to true and every parsed pair is marked valid regardless of
+      the actual signature relationships — silent forgery
+      acceptance for BLS cosignatures.
+    tests:
+      - TestBLSAggregateVerify_RejectsTamperedSig_Binding

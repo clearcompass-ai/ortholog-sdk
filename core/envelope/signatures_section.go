@@ -300,8 +300,16 @@ func ReadSignaturesSection(region []byte) ([]Signature, error) {
 		sigs[i] = s
 	}
 
-	if r.Len() != 0 {
-		return nil, fmt.Errorf("%w: %d bytes remaining after %d signatures", ErrTrailingBytes, r.Len(), count)
+	// Gate: muEnableCanonicalOrdering
+	// (serialize_mutation_switches.go). Off admits trailing bytes
+	// after the signatures section; two distinct byte sequences
+	// would deserialize to the same Entry, breaking the canonical-
+	// form contract that hashing the entry produces a unique
+	// identity.
+	if muEnableCanonicalOrdering {
+		if r.Len() != 0 {
+			return nil, fmt.Errorf("%w: %d bytes remaining after %d signatures", ErrTrailingBytes, r.Len(), count)
+		}
 	}
 
 	return sigs, nil

@@ -274,11 +274,19 @@ func validateHeaderForWrite(h *ControlHeader) error {
 	// non-whitespace, bounded length by ValidateDestination, plus ASCII
 	// conformance here (DIDs are ASCII by spec; consistent with
 	// SignerDID).
-	if err := ValidateDestination(h.Destination); err != nil {
-		return err
-	}
-	if !isASCII(h.Destination) {
-		return ErrNonASCIIDestination
+	//
+	// Gate: muEnableDestinationBound
+	// (serialize_mutation_switches.go). Off readmits empty,
+	// whitespace, or oversize destinations at write time — and the
+	// canonical-hash destination-binding property fails the moment
+	// this validation is bypassed.
+	if muEnableDestinationBound {
+		if err := ValidateDestination(h.Destination); err != nil {
+			return err
+		}
+		if !isASCII(h.Destination) {
+			return ErrNonASCIIDestination
+		}
 	}
 	if len(h.DelegationPointers) > MaxDelegationPointers {
 		return ErrTooManyDelegationPointers
@@ -501,8 +509,14 @@ func serializeHeaderBody(h *ControlHeader) []byte {
 // signatures section is NOT in the HBL, so this tolerance does not apply
 // to it; signatures section bytes must be exact.
 func Deserialize(canonical []byte) (*Entry, error) {
-	if len(canonical) > MaxCanonicalBytes {
-		return nil, ErrCanonicalTooLarge
+	// Gate: muEnableSizeCap (serialize_mutation_switches.go). Off
+	// admits oversize buffers; downstream consumers (Tessera bundle
+	// parser, admission pipeline) hit different errors at
+	// unpredictable boundaries.
+	if muEnableSizeCap {
+		if len(canonical) > MaxCanonicalBytes {
+			return nil, ErrCanonicalTooLarge
+		}
 	}
 	if len(canonical) < 6 {
 		return nil, fmt.Errorf("%w: length %d < 6", ErrMalformedPreamble, len(canonical))
@@ -511,8 +525,14 @@ func Deserialize(canonical []byte) (*Entry, error) {
 	version := binary.BigEndian.Uint16(canonical[0:2])
 	hbl := binary.BigEndian.Uint32(canonical[2:6])
 
-	if err := CheckReadAllowed(version); err != nil {
-		return nil, err
+	// Gate: muEnableVersionReject (serialize_mutation_switches.go).
+	// Off admits entries claiming unsupported (past or future)
+	// protocol versions — silent forward-incompatibility and
+	// downgrade attacks.
+	if muEnableVersionReject {
+		if err := CheckReadAllowed(version); err != nil {
+			return nil, err
+		}
 	}
 
 	if 6+int(hbl) > len(canonical) {

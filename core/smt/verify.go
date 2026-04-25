@@ -13,12 +13,33 @@ func VerifyMembershipProof(proof *types.SMTProof, root [32]byte) error {
 	if proof == nil {
 		return errors.New("nil proof")
 	}
-	if proof.Leaf == nil {
-		return errors.New("membership proof has nil leaf")
+	// Gate: muEnableEmptyLeafDistinction
+	// (verify_mutation_switches.go). Off lets a non-membership
+	// proof pose as a membership proof (the leaf is nil but the
+	// caller treats it as present).
+	if muEnableEmptyLeafDistinction {
+		if proof.Leaf == nil {
+			return errors.New("membership proof has nil leaf")
+		}
 	}
-	computed := computeRootFromProof(proof.Key, hashLeaf(*proof.Leaf), proof.Siblings)
-	if computed != root {
-		return errors.New("computed root does not match expected root")
+	// Defensive: if the gate is off and Leaf is nil, fall back to
+	// the empty-leaf hash so hashLeaf(*proof.Leaf) doesn't panic on
+	// a nil dereference.
+	leafHash := defaultHashes[0]
+	if proof.Leaf != nil {
+		leafHash = hashLeaf(*proof.Leaf)
+	}
+	if err := checkProofDepthBounds(proof.Siblings); err != nil {
+		return err
+	}
+	computed := computeRootFromProof(proof.Key, leafHash, proof.Siblings)
+	// Gate: muEnableRootMatch (verify_mutation_switches.go). Off
+	// makes the proof silently accept regardless of whether the
+	// reconstructed root matches.
+	if muEnableRootMatch {
+		if computed != root {
+			return errors.New("computed root does not match expected root")
+		}
 	}
 	return nil
 }
@@ -27,12 +48,43 @@ func VerifyNonMembershipProof(proof *types.SMTProof, root [32]byte) error {
 	if proof == nil {
 		return errors.New("nil proof")
 	}
-	if proof.Leaf != nil {
-		return errors.New("non-membership proof has non-nil leaf")
+	if muEnableEmptyLeafDistinction {
+		if proof.Leaf != nil {
+			return errors.New("non-membership proof has non-nil leaf")
+		}
+	}
+	if err := checkProofDepthBounds(proof.Siblings); err != nil {
+		return err
 	}
 	computed := computeRootFromProof(proof.Key, defaultHashes[0], proof.Siblings)
-	if computed != root {
-		return errors.New("computed root does not match expected root")
+	if muEnableRootMatch {
+		if computed != root {
+			return errors.New("computed root does not match expected root")
+		}
+	}
+	return nil
+}
+
+// checkProofDepthBounds enforces the muEnableProofDepthBounds
+// invariant: proof.Siblings MUST be a non-nil map. A nil map is
+// indistinguishable from "every depth uses the default hash" in
+// computeRootFromProof — but admitting nil maps lets a malicious
+// prover omit the explicit empty-co-path declaration that the
+// proof contract requires. Surfacing nil maps as explicit
+// rejections keeps the verifier's error semantics aligned with
+// the prover's contract.
+//
+// (Bit-index and len > TreeDepth checks are structurally
+// unreachable for uint8 keys when TreeDepth = 256: the map cannot
+// hold more than 256 entries and uint8 cannot exceed 255. The
+// nil-map check is the only depth-bounds invariant the verifier
+// can observe at runtime today.)
+func checkProofDepthBounds(siblings map[uint8][32]byte) error {
+	if !muEnableProofDepthBounds {
+		return nil
+	}
+	if siblings == nil {
+		return errors.New("smt: proof siblings map is nil")
 	}
 	return nil
 }
@@ -41,8 +93,10 @@ func VerifyBatchProof(proof *types.BatchProof, root [32]byte) error {
 	if proof == nil {
 		return errors.New("nil batch proof")
 	}
-	if proof.SMTRoot != root {
-		return errors.New("batch proof SMT root does not match expected root")
+	if muEnableRootMatch {
+		if proof.SMTRoot != root {
+			return errors.New("batch proof SMT root does not match expected root")
+		}
 	}
 	return nil
 }
@@ -72,8 +126,10 @@ func VerifyMerkleInclusion(proof *types.MerkleProof, root [32]byte) error {
 		}
 		position /= 2
 	}
-	if current != root {
-		return errors.New("computed Merkle root does not match expected root")
+	if muEnableRootMatch {
+		if current != root {
+			return errors.New("computed Merkle root does not match expected root")
+		}
 	}
 	return nil
 }

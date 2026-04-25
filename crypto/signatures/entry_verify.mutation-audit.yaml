@@ -1,0 +1,41 @@
+# Mutation-audit registry for crypto/signatures/entry_verify.go
+#
+# Phase C Group 5.3 — entry-signature audit. Three switches gate
+# the structural and cryptographic checks every Ortholog log
+# entry passes through. Declarations live in
+# entry_verify_mutation_switches.go so the audit-v775 runner's
+# line-local rewrite can target exactly one declaration per gate.
+
+file: crypto/signatures/entry_verify_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/crypto/signatures
+
+gates:
+  - name: muEnableEntrySignatureVerify
+    kind: bool_const
+    description: >-
+      ecdsa.Verify call inside VerifyEntry. Off bypasses
+      cryptographic verification — any well-formed signature shape
+      verifies regardless of the actual relationship between the
+      signature, hash, and public key. Silent forgery acceptance.
+    tests:
+      - TestVerifyEntry_RejectsBadSignature_Binding
+
+  - name: muEnablePubKeyOnCurve
+    kind: bool_const
+    description: >-
+      secp256k1.ParsePubKey error return inside ParsePubKey. Off
+      suppresses the error and returns (nil, nil) for off-curve /
+      malformed bytes; downstream consumers nil-deref or silently
+      fail closed.
+    tests:
+      - TestParsePubKey_RejectsOffCurve_Binding
+
+  - name: muEnableSignatureLength
+    kind: bool_const
+    description: >-
+      (len(sig) != 64) length check inside VerifyEntry. Off bypasses
+      the check and pads/truncates to 64 bytes before invoking
+      ecdsa.Verify — semantics ECDSA does not specify for non-64
+      inputs.
+    tests:
+      - TestVerifyEntry_RejectsBadLength_Binding

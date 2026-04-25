@@ -30,6 +30,12 @@
 //	│      TestEvaluateArbitration_WitnessIndependenceBinding     │
 //	│    muEnableReconstructSizeCheck       →                     │
 //	│      TestReconstructSizeCheck_Binding                       │
+//	│                                                             │
+//	│  Group 6.3 — CheckGrantAuthorization internal membership:   │
+//	│    muEnableGrantAuthoritySetMembership →                    │
+//	│      TestCheckGrantAuthorization_AuthoritySetMembership_Binding │
+//	│    muEnableAuthorizedRecipientMembership →                  │
+//	│      TestCheckGrantAuthorization_AuthorizedRecipientMembership_Binding │
 //	└─────────────────────────────────────────────────────────────┘
 package lifecycle
 
@@ -88,3 +94,49 @@ const muEnableWitnessIndependence = true
 // silently propagates into RecoveryResult — producing a
 // truncated or oversized master-identity key.
 const muEnableReconstructSizeCheck = true
+
+// ═════════════════════════════════════════════════════════════════════
+// Group 6.3 — CheckGrantAuthorization internal membership gates
+// ═════════════════════════════════════════════════════════════════════
+//
+// Group 6.2 shipped muEnableGrantAuthorizationCheck which gates the
+// *dispatch* into CheckGrantAuthorization (whether the function runs
+// at all for non-open modes). Group 6.3 extends discipline one layer
+// deeper onto the two internal membership checks CheckGrantAuthorization
+// performs once it is running:
+//
+//   1. Authority-set membership. For restricted and sealed modes,
+//      scopeEntry.Header.AuthoritySetContains(GranterDID) MUST hold
+//      before any key material is produced. Off allows a non-authority
+//      granter to bypass scope authorization entirely — the granter
+//      check drops out and restricted mode collapses to open mode.
+//
+//   2. Authorized-recipient membership. For sealed mode, the
+//      RecipientDID MUST be in AuthorizedRecipients. Off collapses
+//      sealed mode to restricted mode — sealed grants would be issued
+//      to any recipient the granter targets, defeating the recipient
+//      allowlist the schema encodes.
+//
+// These gates are load-bearing even though the surrounding flow
+// returns Authorized=false on either check failure, because the mutation
+// audit runs the switches against the actual enforcement site. If the
+// switch is off, the internal check silently passes and the test-bound
+// authorization result flips from refused to granted.
+
+// muEnableGrantAuthoritySetMembership gates the
+// scopeEntry.Header.AuthoritySetContains(GranterDID) check inside
+// CheckGrantAuthorization for restricted and sealed modes. When true
+// (production), non-authority granters are refused before any key
+// material is produced. When false, the check short-circuits to true
+// and every granter passes the scope-authority boundary — restricted
+// and sealed modes silently collapse to open-mode semantics.
+const muEnableGrantAuthoritySetMembership = true
+
+// muEnableAuthorizedRecipientMembership gates the recipient-in-
+// AuthorizedRecipients loop inside CheckGrantAuthorization for sealed
+// mode only. When true (production), recipients not in the sealed
+// allowlist are refused. When false, the loop short-circuits to true
+// and sealed mode silently collapses to restricted mode — the granter
+// authority boundary still holds, but the recipient allowlist is no
+// longer enforced.
+const muEnableAuthorizedRecipientMembership = true

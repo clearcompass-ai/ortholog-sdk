@@ -3,10 +3,24 @@
 # coverage for provision_escrow.go and exchange/identity/
 # mapping_escrow_v2.go).
 #
-# Phase C Group 6.2 — composition-layer audit. Six new switches
-# gate the lifecycle-layer integrity checks plus a cross-registered
+# Phase C Group 6.2 — composition-layer audit. Six switches gate
+# the lifecycle-layer integrity checks plus a cross-registered
 # entry for the Group-3 muEnableCommitmentEmissionAtomic that the
 # registry covers via per-gate source_file overrides.
+#
+# Phase C Group 6.3 — extends discipline one layer deeper onto the
+# internal membership checks CheckGrantAuthorization performs. The
+# existing muEnableGrantAuthorizationCheck (Group 6.2) gates the
+# dispatch into the function; Group 6.3 adds two switches that gate
+# the internal authority-set membership check and the internal
+# authorized-recipient membership check. The existing gates for
+# VerifyAndDecryptArtifact's commitment-required invariant
+# (muEnableArtifactCommitmentRequired) and EvaluateArbitration's
+# IsCosignatureOf-binding and EscrowNodeSet-independence invariants
+# (muEnableWitnessPositionBinding, muEnableWitnessIndependence)
+# already ship in 6.2; they are called out in the section header
+# below so the Group 6.3 audit scope is readable as a unit even
+# though their declarations are shared with 6.2.
 #
 # Declarations live in artifact_access_mutation_switches.go so
 # the audit-v775 runner's line-local rewrite can target exactly
@@ -93,3 +107,36 @@ gates:
       the copy.
     tests:
       - TestReconstructSizeCheck_Binding
+
+  # ── Group 6.3 — CheckGrantAuthorization internal membership ──
+
+  - name: muEnableGrantAuthoritySetMembership
+    kind: bool_const
+    description: >-
+      Group 6.3. Gates the
+      scopeEntry.Header.AuthoritySetContains(GranterDID) check
+      inside CheckGrantAuthorization for restricted and sealed
+      modes. Off short-circuits the check so every granter passes
+      the scope-authority boundary — restricted and sealed modes
+      silently collapse to open-mode semantics, producing key
+      material for non-authority granters. The binding test drives
+      a restricted-mode call with a non-authority granter; with the
+      gate on the function rejects with an authority-set reason,
+      with the gate off it returns Authorized=true.
+    tests:
+      - TestCheckGrantAuthorization_AuthoritySetMembership_Binding
+
+  - name: muEnableAuthorizedRecipientMembership
+    kind: bool_const
+    description: >-
+      Group 6.3. Gates the recipient-in-AuthorizedRecipients loop
+      inside CheckGrantAuthorization for sealed mode only. Off
+      short-circuits the loop so every recipient is admitted and
+      sealed mode silently collapses to restricted-mode semantics
+      (granter authority still enforced, recipient allowlist no
+      longer enforced). Binding test drives a sealed-mode call
+      with an in-authority granter but a recipient not in the
+      allowlist; gate on → Authorized=false with an
+      allowlist-rejection reason; gate off → Authorized=true.
+    tests:
+      - TestCheckGrantAuthorization_AuthorizedRecipientMembership_Binding

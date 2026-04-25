@@ -316,7 +316,12 @@ func CheckGrantAuthorization(params GrantAuthCheckParams) (*GrantAuthCheckResult
 		}, nil
 	}
 
-	if !scopeEntry.Header.AuthoritySetContains(params.GranterDID) {
+	// Gate: muEnableGrantAuthoritySetMembership (Group 6.3).
+	// Off short-circuits this membership check so every granter
+	// passes the scope-authority boundary — restricted/sealed modes
+	// silently collapse to open-mode semantics. Binding test:
+	// TestCheckGrantAuthorization_AuthoritySetMembership_Binding.
+	if muEnableGrantAuthoritySetMembership && !scopeEntry.Header.AuthoritySetContains(params.GranterDID) {
 		return &GrantAuthCheckResult{
 			Authorized: false,
 			Reason: fmt.Sprintf("granter %s is not in scope authority set (size %d)",
@@ -337,6 +342,18 @@ func CheckGrantAuthorization(params GrantAuthCheckParams) (*GrantAuthCheckResult
 		return &GrantAuthCheckResult{
 			Authorized: false,
 			Reason:     "recipient DID is empty (required for sealed mode)",
+		}, nil
+	}
+	// Gate: muEnableAuthorizedRecipientMembership (Group 6.3).
+	// Off short-circuits the allowlist loop so every recipient is
+	// admitted — sealed mode silently collapses to restricted mode
+	// semantics (granter authority still enforced, recipient list
+	// no longer enforced). Binding test:
+	// TestCheckGrantAuthorization_AuthorizedRecipientMembership_Binding.
+	if !muEnableAuthorizedRecipientMembership {
+		return &GrantAuthCheckResult{
+			Authorized: true,
+			Reason:     "granter in authority set (recipient allowlist enforcement disabled via gate)",
 		}, nil
 	}
 	for _, did := range params.AuthorizedRecipients {

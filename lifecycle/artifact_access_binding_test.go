@@ -26,6 +26,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
+	"github.com/clearcompass-ai/ortholog-sdk/core/smt"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/escrow"
 	"github.com/clearcompass-ai/ortholog-sdk/storage"
 	"github.com/clearcompass-ai/ortholog-sdk/types"
@@ -148,5 +150,155 @@ func TestReconstructSizeCheck_Binding(t *testing.T) {
 	exact := make([]byte, escrow.SecretSize)
 	if err := assertReconstructSize(exact); err != nil {
 		t.Fatalf("exact-size slice: want nil, got %v", err)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Group 6.3 — CheckGrantAuthorization internal membership bindings
+// ─────────────────────────────────────────────────────────────────────
+
+// grantAuthFixture wires the minimum state CheckGrantAuthorization
+// needs to reach its internal membership checks: a scope pointer, a
+// LeafReader that returns a scope leaf pointing at an OriginTip, and a
+// Fetcher that returns a serialized scope entry whose ControlHeader
+// carries the AuthoritySet we expect the gate to read.
+//
+// Tests flip Mode / GranterDID / RecipientDID / AuthorizedRecipients
+// to drive the function past the earlier guards and exercise the
+// specific internal check under audit.
+type grantAuthFixture struct {
+	scopePointer  types.LogPosition
+	leafReader    leafReader
+	fetcher       entryFetcher
+	authorityDIDs map[string]struct{}
+}
+
+type grantAuthTestFetcher map[types.LogPosition]*types.EntryWithMetadata
+
+func (f grantAuthTestFetcher) Fetch(pos types.LogPosition) (*types.EntryWithMetadata, error) {
+	meta, ok := f[pos]
+	if !ok {
+		return nil, nil
+	}
+	return meta, nil
+}
+
+func newGrantAuthFixture(t *testing.T, authority []string) grantAuthFixture {
+	t.Helper()
+
+	scopePointer := types.LogPosition{
+		LogDID:      "did:web:scope-log.test",
+		Sequence: 7,
+	}
+	originTip := types.LogPosition{
+		LogDID:      "did:web:scope-log.test",
+		Sequence: 42,
+	}
+
+	// Scope entry with a populated AuthoritySet. Signer and destination
+	// are set so NewUnsignedEntry accepts the header; a dummy signature
+	// satisfies the v6 "at least one signature" invariant before
+	// Serialize.
+	authSet := map[string]struct{}{}
+	for _, did := range authority {
+		authSet[did] = struct{}{}
+	}
+	scopeEntry, err := envelope.NewUnsignedEntry(envelope.ControlHeader{
+		SignerDID:    "did:web:scope-signer.test",
+		Destination:  "did:web:exchange.test",
+		AuthoritySet: authSet,
+	}, []byte("scope-payload"))
+	if err != nil {
+		t.Fatalf("NewUnsignedEntry(scope): %v", err)
+	}
+	scopeEntry.Signatures = []envelope.Signature{{
+		SignerDID: "did:web:scope-signer.test",
+		AlgoID:    envelope.SigAlgoECDSA,
+		Bytes:     make([]byte, 64),
+	}}
+	if err := scopeEntry.Validate(); err != nil {
+		t.Fatalf("scopeEntry.Validate: %v", err)
+	}
+
+	leafStore := smt.NewInMemoryLeafStore()
+	if err := leafStore.Set(smt.DeriveKey(scopePointer), types.SMTLeaf{
+		OriginTip:    originTip,
+		AuthorityTip: originTip,
+	}); err != nil {
+		t.Fatalf("leafStore.Set: %v", err)
+	}
+
+	fetcher := grantAuthTestFetcher{
+		originTip: &types.EntryWithMetadata{
+			CanonicalBytes: envelope.Serialize(scopeEntry),
+		},
+	}
+
+	return grantAuthFixture{
+		scopePointer:  scopePointer,
+		leafReader:    leafStore,
+		fetcher:       fetcher,
+		authorityDIDs: authSet,
+	}
+}
+
+// TestCheckGrantAuthorization_AuthoritySetMembership_Binding pins
+// muEnableGrantAuthoritySetMembership: in restricted mode with a
+// granter DID that is NOT in the scope AuthoritySet, the function
+// MUST return Authorized=false with a reason referring to the
+// authority-set rejection. With the gate off, the membership check
+// short-circuits and the function returns Authorized=true — the
+// load-bearing signal that the mutation-audit runner observes when
+// it flips the constant.
+func TestCheckGrantAuthorization_AuthoritySetMembership_Binding(t *testing.T) {
+	fx := newGrantAuthFixture(t, []string{"did:web:insider.test"})
+
+	result, err := CheckGrantAuthorization(GrantAuthCheckParams{
+		Mode:         types.GrantAuthRestricted,
+		GranterDID:   "did:web:outsider.test", // NOT in AuthoritySet
+		ScopePointer: &fx.scopePointer,
+		Fetcher:      fx.fetcher,
+		LeafReader:   fx.leafReader,
+	})
+	if err != nil {
+		t.Fatalf("CheckGrantAuthorization: %v", err)
+	}
+	if result.Authorized {
+		t.Fatal("Authorized=true for non-authority granter (muEnableGrantAuthoritySetMembership not load-bearing?)")
+	}
+	if !strings.Contains(result.Reason, "authority set") {
+		t.Fatalf("want authority-set rejection reason, got %q", result.Reason)
+	}
+}
+
+// TestCheckGrantAuthorization_AuthorizedRecipientMembership_Binding
+// pins muEnableAuthorizedRecipientMembership: in sealed mode with a
+// granter in the AuthoritySet but a recipient NOT in the
+// AuthorizedRecipients allowlist, the function MUST return
+// Authorized=false with a reason referring to the recipient-allowlist
+// rejection. With the gate off, the loop short-circuits to true and
+// the function returns Authorized=true — the mutation-audit runner's
+// signal that the switch is active.
+func TestCheckGrantAuthorization_AuthorizedRecipientMembership_Binding(t *testing.T) {
+	const granter = "did:web:insider.test"
+	fx := newGrantAuthFixture(t, []string{granter})
+
+	result, err := CheckGrantAuthorization(GrantAuthCheckParams{
+		Mode:                 types.GrantAuthSealed,
+		GranterDID:           granter,
+		RecipientDID:         "did:web:stranger.test", // NOT in allowlist
+		ScopePointer:         &fx.scopePointer,
+		AuthorizedRecipients: []string{"did:web:known-recipient.test"},
+		Fetcher:              fx.fetcher,
+		LeafReader:           fx.leafReader,
+	})
+	if err != nil {
+		t.Fatalf("CheckGrantAuthorization: %v", err)
+	}
+	if result.Authorized {
+		t.Fatal("Authorized=true for non-allowlisted recipient (muEnableAuthorizedRecipientMembership not load-bearing?)")
+	}
+	if !strings.Contains(result.Reason, "authorized recipients list") {
+		t.Fatalf("want recipient-allowlist rejection reason, got %q", result.Reason)
 	}
 }

@@ -155,3 +155,23 @@ The file is append-only. Entries are committed to the repo.
 | witness/verify.mutation-audit.yaml | muEnableWitnessQuorumCount | PASS | — |
 | witness/verify.mutation-audit.yaml | muEnableEquivocationDetection | PASS | — |
 
+## 2026-04-25T01:59:05Z — audit-v775 mutation (Group 6.3 scope)
+
+Phase C Group 6.3 extends mutation-audit discipline one layer deeper:
+VerifyAndDecryptArtifact's commitment-required invariant (existing),
+CheckGrantAuthorization's two internal membership checks (new),
+EvaluateArbitration's IsCosignatureOf binding and EscrowNodeSet
+independence (existing). The two new switches
+(muEnableGrantAuthoritySetMembership,
+muEnableAuthorizedRecipientMembership) ship with dedicated binding
+tests; the three cross-referenced existing switches pass via their
+Group 6.2 binding tests.
+
+| Registry | Gate | Result | Note |
+| --- | --- | --- | --- |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableArtifactCommitmentRequired | PASS | Group 6.3 cross-ref (existing 6.2 gate) |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessPositionBinding | PASS | Group 6.3 cross-ref (existing 6.2 gate) |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableWitnessIndependence | PASS | Group 6.3 cross-ref (existing 6.2 gate) |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableGrantAuthoritySetMembership | PASS | Group 6.3 new gate |
+| lifecycle/artifact_access.mutation-audit.yaml | muEnableAuthorizedRecipientMembership | PASS | Group 6.3 new gate |
+

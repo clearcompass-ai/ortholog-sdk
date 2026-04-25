@@ -231,12 +231,18 @@ func TestWitnessCosig_BLS_MockVerifier_Pass(t *testing.T) {
 	// rather than using `make([]WitnessSignature, 3)` which would
 	// produce zero-tag signatures that the dispatcher rejects.
 	//
+	// Group 8.3: each signature carries a distinct PubKeyID so the
+	// post-verify uniqueness check (muEnableUniqueSigners) counts
+	// three independent signers rather than collapsing them into
+	// one. Pre-Group-8.3 the dedup pass did not exist, so identical
+	// PubKeyIDs across rows worked by accident.
+	//
 	// The mock BLSVerifier returns all-true regardless of input
 	// bytes; we just need valid scheme-tag dispatch to reach it.
 	sigs := []types.WitnessSignature{
-		{SchemeTag: signatures.SchemeBLS},
-		{SchemeTag: signatures.SchemeBLS},
-		{SchemeTag: signatures.SchemeBLS},
+		{SchemeTag: signatures.SchemeBLS, PubKeyID: [32]byte{0x01}},
+		{SchemeTag: signatures.SchemeBLS, PubKeyID: [32]byte{0x02}},
+		{SchemeTag: signatures.SchemeBLS, PubKeyID: [32]byte{0x03}},
 	}
 	head := types.CosignedTreeHead{
 		TreeHead:   types.TreeHead{TreeSize: 100},
@@ -245,9 +251,10 @@ func TestWitnessCosig_BLS_MockVerifier_Pass(t *testing.T) {
 	// Populate matching keys so the dispatcher can map sig → key.
 	// The mock verifier doesn't care about key contents; the
 	// dispatcher only needs a PubKeyID match.
-	keys := make([]types.WitnessPublicKey, 3)
-	for i := range keys {
-		keys[i] = types.WitnessPublicKey{PublicKey: []byte("key")}
+	keys := []types.WitnessPublicKey{
+		{ID: [32]byte{0x01}, PublicKey: []byte("key")},
+		{ID: [32]byte{0x02}, PublicKey: []byte("key")},
+		{ID: [32]byte{0x03}, PublicKey: []byte("key")},
 	}
 
 	mock := &mockBLSVerifierP4{results: []bool{true, true, true}}

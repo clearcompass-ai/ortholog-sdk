@@ -102,12 +102,71 @@ func VerifyTreeHead(
 		return nil, fmt.Errorf("witness/verify: %w", err)
 	}
 
+	// Group 8.3 — post-verify uniqueness and membership checks.
+	// Both operate on the Phase-1 primitive's per-signature result
+	// table, deduplicating to a canonical unique-valid count.
+	uniqueValid := countValidUnique(result, witnessKeys)
+	if muEnableUniqueSigners || muEnableWitnessKeyMembership {
+		if uniqueValid < quorumK {
+			return &VerifyResult{
+				ValidCount: uniqueValid,
+				Total:      result.Total,
+				QuorumK:    quorumK,
+				Details:    convertDetails(result.Results),
+			}, fmt.Errorf("%w: %d unique valid of %d (need %d)",
+				ErrInsufficientWitnesses, uniqueValid, result.Total, quorumK)
+		}
+	}
+
 	return &VerifyResult{
 		ValidCount: result.ValidCount,
 		Total:      result.Total,
 		QuorumK:    quorumK,
 		Details:    convertDetails(result.Results),
 	}, nil
+}
+
+// countValidUnique post-processes the Phase-1 per-signature result
+// table to derive a canonical unique-valid count under the Group 8.3
+// gates. The two gates compose:
+//
+//   - muEnableUniqueSigners: the same PubKeyID appearing in multiple
+//     result rows counts at most once.
+//   - muEnableWitnessKeyMembership: a successful row whose PubKeyID
+//     is not in witnessKeys does not count at all.
+//
+// When either gate is off, its contribution to the count is dropped
+// (duplicates admitted, non-members admitted). Both off yields
+// result.ValidCount unchanged, matching pre-Group-8.3 semantics.
+func countValidUnique(r *signatures.WitnessVerifyResult, witnessKeys []types.WitnessPublicKey) int {
+	if r == nil {
+		return 0
+	}
+	var membershipSet map[[32]byte]bool
+	if muEnableWitnessKeyMembership {
+		membershipSet = make(map[[32]byte]bool, len(witnessKeys))
+		for _, wk := range witnessKeys {
+			membershipSet[wk.ID] = true
+		}
+	}
+	seen := make(map[[32]byte]bool, len(r.Results))
+	count := 0
+	for _, row := range r.Results {
+		if !row.Valid {
+			continue
+		}
+		if muEnableWitnessKeyMembership && !membershipSet[row.PubKeyID] {
+			continue
+		}
+		if muEnableUniqueSigners {
+			if seen[row.PubKeyID] {
+				continue
+			}
+			seen[row.PubKeyID] = true
+		}
+		count++
+	}
+	return count
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -1,0 +1,116 @@
+# Mutation-audit registry for verifier/cross_log.go.
+#
+# Phase C Group 8.2 — cross-log proof nine-step lock. Ten switches
+# gate the ten verification checks inside VerifyCrossLogProof. Each
+# corresponds to one row of the ORTHO-BUG-001 attack matrix; flipping
+# any switch off readmits one specific class of cross-log forgery.
+#
+# Six of the ten gates are bound by existing ORTHO-BUG-001 tests in
+# cross_log_test.go that assert specific error sentinels. Four
+# additional binding tests in cross_log_binding_test.go assert
+# gate-specific error types or message substrings for the four gates
+# whose error path is otherwise indistinguishable from a downstream
+# step's error path.
+
+file: verifier/cross_log_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/verifier
+
+gates:
+  - name: muEnableExtractorRequired
+    kind: bool_const
+    description: >-
+      Fail-fast guard rejecting nil AnchorPayloadExtractor. On,
+      surfaces ErrExtractorRequired. Off, the call proceeds and the
+      content-binding check (step 9) becomes reachable only via
+      nil-deref panic.
+    tests:
+      - TestCrossLog_ExtractorRequired_Binding
+
+  - name: muEnableSourceEntryNonZero
+    kind: bool_const
+    description: >-
+      Step 1 zero-source-entry-hash check. On, rejects with a
+      "zero source entry hash" error before any Merkle arithmetic.
+      Off, step 2 catches the same input via a generic mismatch
+      message.
+    tests:
+      - TestCrossLog_SourceEntryNonZero_Binding
+
+  - name: muEnableSourceInclusionBinding
+    kind: bool_const
+    description: >-
+      Step 2 SourceInclusion.LeafHash == SourceEntryHash binding
+      check. On, rejects ORTHO-BUG-001 A1 source-entry-swap. Off,
+      Merkle verification accepts whatever leaf the proof carries.
+    tests:
+      - TestVerifyCrossLogProof_RejectsForgedSourceEntryHash
+      - TestVerifyCrossLogProof_RejectsSHA256IdentityAsLeafHash
+
+  - name: muEnableSourceInclusionVerify
+    kind: bool_const
+    description: >-
+      Step 3 smt.VerifyMerkleInclusion call. On, the source
+      inclusion proof is verified against the source tree head root.
+      Off, ORTHO-BUG-001 A2 source-inclusion-forge passes through.
+    tests:
+      - TestVerifyCrossLogProof_RejectsCorruptedSourceInclusion
+
+  - name: muEnableSourceHeadCosigVerify
+    kind: bool_const
+    description: >-
+      Step 4 witness.VerifyTreeHead call. On, the source tree head
+      must carry K-of-N valid witness cosignatures. Off, an
+      attacker-controlled head passes through (ORTHO-BUG-001 A3).
+    tests:
+      - TestCrossLog_SourceHeadCosigVerify_Binding
+
+  - name: muEnableLocalInclusionBinding
+    kind: bool_const
+    description: >-
+      Step 5 LocalInclusion.LeafHash == AnchorEntryHash binding
+      check. On, rejects ORTHO-BUG-001 A6 local-anchor-swap. Off,
+      Merkle verification accepts whatever leaf the proof carries.
+    tests:
+      - TestVerifyCrossLogProof_RejectsForgedAnchorEntryHash
+
+  - name: muEnableLocalInclusionVerify
+    kind: bool_const
+    description: >-
+      Step 6 smt.VerifyMerkleInclusion call on the local proof.
+      On, a corrupted local Merkle path is rejected. Off, the path
+      is skipped and the local tree head is trusted without evidence
+      of anchor inclusion.
+    tests:
+      - TestCrossLog_LocalInclusionVerify_Binding
+
+  - name: muEnableAnchorBytesHashBinding
+    kind: bool_const
+    description: >-
+      Step 7 EntryLeafHashBytes(AnchorEntryCanonical) == AnchorEntryHash.
+      On, byte substitution is detected. Off, the verifier
+      deserializes attacker-supplied bytes whose hash was never
+      proven into any Merkle tree (ORTHO-BUG-001 A7).
+    tests:
+      - TestVerifyCrossLogProof_RejectsSubstitutedAnchorBytes
+
+  - name: muEnableAnchorPayloadExtraction
+    kind: bool_const
+    description: >-
+      Step 9 extractor error-propagation. On, an extractor error
+      bubbles up. Off, extractor errors are silenced and the
+      content-binding check at step 10 runs against a zero-valued
+      ref.
+    tests:
+      - TestVerifyCrossLogProof_PropagatesExtractorError
+
+  - name: muEnableAnchorContentBinding
+    kind: bool_const
+    description: >-
+      Step 10 embeddedRef == TreeHeadHash(SourceTreeHead) check. On,
+      the anchor payload commits explicitly to the source tree head
+      (ORTHO-BUG-001 A4 Forged Anchor closed). Off, an anchor entry
+      committing to a different tree head is accepted and every
+      cross-log proof becomes unverifiable.
+    tests:
+      - TestVerifyCrossLogProof_RejectsForgedAnchorEntry
+      - TestVerifyCrossLogProof_RejectsMismatchedExtractorResult

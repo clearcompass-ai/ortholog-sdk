@@ -43,11 +43,28 @@ import (
 // ─────────────────────────────────────────────────────────────────────
 
 // ConstraintState classifies one authority entry in the chain.
+//
+// Group 8.1 Defect 1 — the zero value is ConstraintUnclassified, NOT
+// ConstraintActive. Pre-shift the enum placed ConstraintActive at 0,
+// which made the classification loop's `State != 0` skip-guard
+// silently dead: the guard never fired for snapshot-harvested entries
+// pre-marked ConstraintActive. The loop correctly re-ran
+// scopeMembershipValid on those entries, but for the wrong reason —
+// a future "guard fix" that matched the guard's stated comment would
+// have silently reintroduced the constraint-laundering exploit
+// (Defect 2). The structural fix is the distinct zero value declared
+// here; the guard now reads `State != ConstraintUnclassified` and is
+// load-bearing in exactly the intended direction.
 type ConstraintState uint8
 
 const (
+	// ConstraintUnclassified is the zero value. Every ConstraintEntry
+	// emitted by the walk (snapshot-harvested or chain-walked) begins
+	// life at this state; the classification loop is the only path
+	// that transitions it to Active/Pending/Overridden.
+	ConstraintUnclassified ConstraintState = iota
 	// ConstraintActive means the constraint is in effect.
-	ConstraintActive ConstraintState = iota
+	ConstraintActive
 	// ConstraintPending means the constraint is within activation delay.
 	ConstraintPending
 	// ConstraintOverridden means a later constraint supersedes this one.
@@ -162,7 +179,11 @@ func EvaluateAuthority(
 	visited := make(map[types.LogPosition]bool)
 
 	for depth := 0; depth < maxAuthorityChainDepth; depth++ {
-		if visited[current] {
+		// Gate: muEnableAuthorityChainCycleGuard. Off relies on
+		// maxAuthorityChainDepth alone to terminate a corrupted
+		// chain; on, a repeat position terminates the loop
+		// immediately (catching cycles before the depth cap).
+		if muEnableAuthorityChainCycleGuard && visited[current] {
 			break // Cycle detected.
 		}
 		visited[current] = true
@@ -184,11 +205,30 @@ func EvaluateAuthority(
 		}
 
 		// Check for authority snapshot shortcut.
-		if isAuthoritySnapshotEntry(entry) {
+		// Gate: muEnableSnapshotShapeCheck. Off admits every entry
+		// into the shortcut branch — walked Path A/B entries would
+		// be treated as snapshots, erasing chain-walk and membership
+		// checks. On, only entries whose shape matches
+		// (Path C + TargetRoot + PriorAuthority + non-empty
+		// EvidencePointers) enter the shortcut.
+		isSnapshot := isAuthoritySnapshotEntry(entry)
+		if !muEnableSnapshotShapeCheck {
+			isSnapshot = true
+		}
+		if isSnapshot {
 			eval.UsedSnapshot = true
 			// Snapshot: Evidence_Pointers contain the active constraints.
 			// Walk them instead of continuing the chain.
-			for _, evPtr := range entry.Header.EvidencePointers {
+			//
+			// Group 8.1 Defect 3 — the admission-time exemption from
+			// MaxEvidencePointers leaves this walk length at attacker
+			// discretion. MaxSnapshotEvidencePointers is the verifier-
+			// side cap. Binding test:
+			// TestEvaluateAuthority_SnapshotEvidenceCapEnforced.
+			for i, evPtr := range entry.Header.EvidencePointers {
+				if muEnableSnapshotEvidenceCap && i >= MaxSnapshotEvidencePointers {
+					break
+				}
 				evMeta, evErr := fetcher.Fetch(evPtr)
 				if evErr != nil || evMeta == nil {
 					continue
@@ -197,13 +237,18 @@ func EvaluateAuthority(
 				if evDesErr != nil {
 					continue
 				}
-				snapCE := ConstraintEntry{
+				// Group 8.1 Defect 2 — harvested entries arrive at
+				// ConstraintUnclassified (zero value) so the
+				// classification loop runs scopeMembershipValid on
+				// them on equal footing with chain-walked entries.
+				// An entry whose signer was not authorized in the
+				// governing scope at the entry's admission position
+				// drops from the active set.
+				allEntries = append(allEntries, ConstraintEntry{
 					Position: evPtr,
-					State:    ConstraintActive,
 					Entry:    evEntry,
 					LogTime:  evMeta.LogTime,
-				}
-				allEntries = append(allEntries, snapCE)
+				})
 			}
 			break
 		}
@@ -236,17 +281,7 @@ func EvaluateAuthority(
 	// common case; this check guards against a corrupted store
 	// surfacing entries that were never properly admitted (or were
 	// admitted against a pre-Decision-52 builder).
-	now := time.Now().UTC()
-	for i := range allEntries {
-		if allEntries[i].State != 0 {
-			continue // Already classified (snapshot entries).
-		}
-		state := classifyConstraint(allEntries[i], extractor, fetcher, now)
-		if state == ConstraintActive && !scopeMembershipValid(allEntries[i], fetcher, leafReader) {
-			state = ConstraintOverridden
-		}
-		allEntries[i].State = state
-	}
+	classifyAllEntries(allEntries, extractor, fetcher, leafReader, time.Now().UTC())
 
 	// Separate active, pending, overridden.
 	// The most recent non-pending entry is active; older entries at the
@@ -267,6 +302,56 @@ func EvaluateAuthority(
 	}
 
 	return eval, nil
+}
+
+// classifyAllEntries is the inner loop of EvaluateAuthority's
+// classification pass. Factored into a named helper so the Group 8.1
+// binding tests can exercise the guard and membership-validation
+// behaviour without rebuilding a full envelope+SMT fixture for every
+// case.
+//
+// The helper mutates `allEntries` in place. Each entry begins at its
+// incoming State value; entries at ConstraintUnclassified are
+// classified (Active/Pending) by classifyConstraint and then run
+// through scopeMembershipValid when Active. Entries already at any
+// non-zero state are left alone under the classification guard.
+func classifyAllEntries(
+	allEntries []ConstraintEntry,
+	extractor schema.SchemaParameterExtractor,
+	fetcher types.EntryFetcher,
+	leafReader smt.LeafReader,
+	now time.Time,
+) {
+	for i := range allEntries {
+		// Gate: muEnableClassificationGuard. Skip entries that are
+		// already classified by upstream logic (reserved for future
+		// pre-classification paths; today every entry the walk emits
+		// sits at ConstraintUnclassified). Off removes the guard and
+		// lets the classification loop overwrite every entry's State
+		// on each iteration.
+		if muEnableClassificationGuard && allEntries[i].State != ConstraintUnclassified {
+			continue
+		}
+		state := classifyConstraint(allEntries[i], extractor, fetcher, now)
+
+		// Gate: muEnableSnapshotMembershipValidation. Group 8.1
+		// Defect 2 — harvested snapshot entries and chain-walked
+		// entries both pass through this check on equal footing.
+		// An entry whose signer was not authorized in the governing
+		// scope at the entry's admission position is reclassified
+		// as ConstraintOverridden and drops from the active set.
+		// Off re-opens the constraint-laundering exploit: a
+		// malicious authorized signer publishing a snapshot whose
+		// EvidencePointers reference fraudulent or historically
+		// rejected entries could have them treated as active
+		// constraints.
+		if muEnableSnapshotMembershipValidation &&
+			state == ConstraintActive &&
+			!scopeMembershipValid(allEntries[i], fetcher, leafReader) {
+			state = ConstraintOverridden
+		}
+		allEntries[i].State = state
+	}
 }
 
 // classifyConstraint determines if a constraint entry is active or pending

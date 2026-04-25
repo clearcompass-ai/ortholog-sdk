@@ -114,22 +114,25 @@ func VerifyCrossLogProof(
 	blsVerifier signatures.BLSVerifier,
 	extractAnchor AnchorPayloadExtractor,
 ) error {
-	// Guard: extractor is mandatory. A nil extractor would make the
-	// content-binding check (step 9) reachable only via a nil-deref
-	// panic, which is a degenerate failure mode. Fail-fast with a
-	// typed error so callers can distinguish "misuse of the verifier"
-	// from "proof actually invalid."
-	if extractAnchor == nil {
+	// Guard: extractor is mandatory. Gate: muEnableExtractorRequired
+	// (Group 8.2). A nil extractor would make the content-binding
+	// check (step 9) reachable only via a nil-deref panic, which is
+	// a degenerate failure mode. Fail-fast with a typed error so
+	// callers can distinguish "misuse of the verifier" from "proof
+	// actually invalid."
+	if muEnableExtractorRequired && extractAnchor == nil {
 		return ErrExtractorRequired
 	}
 
 	// 1. Source entry hash must be non-zero.
-	if proof.SourceEntryHash == [32]byte{} {
+	// Gate: muEnableSourceEntryNonZero (Group 8.2).
+	if muEnableSourceEntryNonZero && proof.SourceEntryHash == [32]byte{} {
 		return fmt.Errorf("%w: zero source entry hash", ErrSourceInclusionFailed)
 	}
 
 	// 2. Bind source inclusion proof to claimed source entry hash.
-	if proof.SourceInclusion.LeafHash != proof.SourceEntryHash {
+	// Gate: muEnableSourceInclusionBinding (Group 8.2).
+	if muEnableSourceInclusionBinding && proof.SourceInclusion.LeafHash != proof.SourceEntryHash {
 		return fmt.Errorf("%w: inclusion leaf hash %x does not match claimed source entry hash %x",
 			ErrSourceInclusionFailed,
 			proof.SourceInclusion.LeafHash[:8],
@@ -137,17 +140,24 @@ func VerifyCrossLogProof(
 	}
 
 	// 3. Verify source inclusion proof against source tree head root.
-	if err := smt.VerifyMerkleInclusion(&proof.SourceInclusion, proof.SourceTreeHead.RootHash); err != nil {
-		return fmt.Errorf("%w: %v", ErrSourceInclusionFailed, err)
+	// Gate: muEnableSourceInclusionVerify (Group 8.2).
+	if muEnableSourceInclusionVerify {
+		if err := smt.VerifyMerkleInclusion(&proof.SourceInclusion, proof.SourceTreeHead.RootHash); err != nil {
+			return fmt.Errorf("%w: %v", ErrSourceInclusionFailed, err)
+		}
 	}
 
 	// 4. Verify source tree head has valid witness cosignatures.
-	if _, err := witness.VerifyTreeHead(proof.SourceTreeHead, sourceWitnessKeys, sourceQuorumK, blsVerifier); err != nil {
-		return fmt.Errorf("%w: %v", ErrSourceHeadInvalid, err)
+	// Gate: muEnableSourceHeadCosigVerify (Group 8.2).
+	if muEnableSourceHeadCosigVerify {
+		if _, err := witness.VerifyTreeHead(proof.SourceTreeHead, sourceWitnessKeys, sourceQuorumK, blsVerifier); err != nil {
+			return fmt.Errorf("%w: %v", ErrSourceHeadInvalid, err)
+		}
 	}
 
 	// 5. Bind local inclusion proof to claimed anchor entry hash.
-	if proof.LocalInclusion.LeafHash != proof.AnchorEntryHash {
+	// Gate: muEnableLocalInclusionBinding (Group 8.2).
+	if muEnableLocalInclusionBinding && proof.LocalInclusion.LeafHash != proof.AnchorEntryHash {
 		return fmt.Errorf("%w: inclusion leaf hash %x does not match claimed anchor entry hash %x",
 			ErrLocalInclusionFailed,
 			proof.LocalInclusion.LeafHash[:8],
@@ -155,8 +165,11 @@ func VerifyCrossLogProof(
 	}
 
 	// 6. Verify local inclusion proof against local tree head root.
-	if err := smt.VerifyMerkleInclusion(&proof.LocalInclusion, proof.LocalTreeHead.RootHash); err != nil {
-		return fmt.Errorf("%w: %v", ErrLocalInclusionFailed, err)
+	// Gate: muEnableLocalInclusionVerify (Group 8.2).
+	if muEnableLocalInclusionVerify {
+		if err := smt.VerifyMerkleInclusion(&proof.LocalInclusion, proof.LocalTreeHead.RootHash); err != nil {
+			return fmt.Errorf("%w: %v", ErrLocalInclusionFailed, err)
+		}
 	}
 
 	// ─────────────────────────────────────────────────────────────
@@ -165,8 +178,9 @@ func VerifyCrossLogProof(
 
 	// 7. Defend against byte substitution: verify the bytes carried in the
 	// proof actually hash to the AnchorEntryHash that was proven in Step 6.
+	// Gate: muEnableAnchorBytesHashBinding (Group 8.2).
 	actualAnchorHash := envelope.EntryLeafHashBytes(proof.AnchorEntryCanonical)
-	if actualAnchorHash != proof.AnchorEntryHash {
+	if muEnableAnchorBytesHashBinding && actualAnchorHash != proof.AnchorEntryHash {
 		return fmt.Errorf("%w: canonical bytes do not match proven anchor hash", ErrAnchorMismatch)
 	}
 
@@ -177,14 +191,20 @@ func VerifyCrossLogProof(
 	}
 
 	// 9. Extract the tree head reference from the physical DomainPayload.
-	embeddedRef, err := extractAnchor(anchorEntry.DomainPayload)
-	if err != nil {
-		return fmt.Errorf("verifier/cross_log: failed to extract anchor reference from payload: %w", err)
+	// Gate: muEnableAnchorPayloadExtraction (Group 8.2).
+	var embeddedRef [32]byte
+	if extractAnchor != nil {
+		var extractErr error
+		embeddedRef, extractErr = extractAnchor(anchorEntry.DomainPayload)
+		if muEnableAnchorPayloadExtraction && extractErr != nil {
+			return fmt.Errorf("verifier/cross_log: failed to extract anchor reference from payload: %w", extractErr)
+		}
 	}
 
 	// 10. Does the explicitly written payload match the source tree head?
+	// Gate: muEnableAnchorContentBinding (Group 8.2).
 	expectedRef := TreeHeadHash(proof.SourceTreeHead.TreeHead)
-	if embeddedRef != expectedRef {
+	if muEnableAnchorContentBinding && embeddedRef != expectedRef {
 		return fmt.Errorf("%w: payload embedded ref %x does not match actual source tree head %x",
 			ErrAnchorMismatch, embeddedRef[:8], expectedRef[:8])
 	}

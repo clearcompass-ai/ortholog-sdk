@@ -1,7 +1,7 @@
 # Mutation-audit registry for witness/verify.go and
 # witness/equivocation.go
 #
-# Phase C Group 6.1 — witness audit. Two gates:
+# Phase C Group 6.1 — witness audit:
 #
 # 1. muEnableWitnessQuorumCount — gates the structural pre-check
 #    that the witness key set is large enough to satisfy K-of-N
@@ -12,6 +12,17 @@
 #    produces an EquivocationProof (declared in
 #    equivocation_mutation_switches.go via the per-gate
 #    source_file override).
+#
+# Phase C Group 8.3 — adds two gates locking witness-cosignature
+# uniqueness and key-set membership at the witness layer:
+#
+# 3. muEnableUniqueSigners — gates the post-verify deduplication
+#    pass: the same PubKeyID across multiple Signatures rows counts
+#    once toward quorum.
+#
+# 4. muEnableWitnessKeyMembership — defensive post-verify
+#    membership check: every successful row's PubKeyID must be in
+#    the caller-supplied witness key set.
 
 file: witness/verify_mutation_switches.go
 package: github.com/clearcompass-ai/ortholog-sdk/witness
@@ -39,3 +50,27 @@ gates:
     tests:
       - TestEquivocationDetection_Binding
       - TestEquivocationDetection_DifferentSizes_PreGate
+
+  # ── Group 8.3 — uniqueness + key-set membership ──
+
+  - name: muEnableUniqueSigners
+    kind: bool_const
+    description: >-
+      Post-verify deduplication pass inside VerifyTreeHead: the
+      same PubKeyID across multiple Signatures rows counts at most
+      once toward quorum. On (production), prevents an attacker
+      who obtains a single valid cosignature from replaying it to
+      satisfy K-of-N. Off, repeats count individually.
+    tests:
+      - TestWitnessUniqueSigners_Binding
+
+  - name: muEnableWitnessKeyMembership
+    kind: bool_const
+    description: >-
+      Defensive post-verify membership check inside VerifyTreeHead:
+      every successful row's PubKeyID MUST be in the caller-
+      supplied witness key set. On, rejects out-of-set signatures
+      even when Phase 1 admits them. Off, defense-in-depth at the
+      witness layer is removed.
+    tests:
+      - TestWitnessKeyMembership_Binding

@@ -1,0 +1,89 @@
+# Mutation-audit registry for verifier/authority_evaluator.go.
+#
+# Phase C Group 8.1 — authority-snapshot shortcut audit and hardening.
+# Five switches gate the integrity invariants of the authority-chain
+# walk. Three of them encode structural fixes Group 8.1 introduced:
+#
+#   1. muEnableClassificationGuard — load-bearing only AFTER the
+#      ConstraintState enum shift (Group 8.1 Defect 1). Pre-shift the
+#      `State != 0` guard was silently dead because ConstraintActive
+#      was 0; post-shift, ConstraintUnclassified is 0 and the guard
+#      correctly skips pre-classified entries.
+#
+#   2. muEnableSnapshotMembershipValidation — closes the
+#      constraint-laundering exploit (Group 8.1 Defect 2). The
+#      snapshot branch leaves harvested entries at
+#      ConstraintUnclassified; the classification loop runs
+#      scopeMembershipValid on them on equal footing with
+#      chain-walked entries. Off restores the laundering path.
+#
+#   3. muEnableSnapshotEvidenceCap — closes the verifier-side DoS
+#      vector (Group 8.1 Defect 3). MaxSnapshotEvidencePointers = 256
+#      bounds the walk. Off lifts the cap and returns the walk to
+#      O(attacker-chosen) length.
+#
+# Two additional switches lock pre-existing behaviour into the
+# audit discipline:
+#
+#   4. muEnableSnapshotShapeCheck — wraps the isAuthoritySnapshotEntry
+#      callsite. Off treats every walked entry as a snapshot.
+#
+#   5. muEnableAuthorityChainCycleGuard — wraps the visited-position
+#      map check. Off relies on maxAuthorityChainDepth alone.
+
+file: verifier/authority_evaluator_mutation_switches.go
+package: github.com/clearcompass-ai/ortholog-sdk/verifier
+
+gates:
+  - name: muEnableClassificationGuard
+    kind: bool_const
+    description: >-
+      `if allEntries[i].State != ConstraintUnclassified { continue }`
+      skip-guard at the head of the classification loop. Load-bearing
+      after the Group 8.1 enum shift: pre-classified entries must be
+      left alone. Off lets the loop overwrite every entry's State on
+      each iteration.
+    tests:
+      - TestEvaluateAuthority_ClassificationLoopGuardIsLoadBearing
+
+  - name: muEnableSnapshotMembershipValidation
+    kind: bool_const
+    description: >-
+      scopeMembershipValid call inside the classification loop. On,
+      harvested snapshot entries pass through the same scope-authority
+      check as walked entries; an out-of-set signer is reclassified
+      Overridden. Off readmits the constraint-laundering exploit
+      Group 8.1 Defect 2 closes.
+    tests:
+      - TestEvaluateAuthority_SnapshotEvidenceMembershipValidated
+
+  - name: muEnableSnapshotEvidenceCap
+    kind: bool_const
+    description: >-
+      MaxSnapshotEvidencePointers=256 cap on the snapshot evidence
+      walk. On, walks at most 256 pointers regardless of the
+      admitted snapshot's declared length. Off lifts the cap and
+      restores the verifier-side DoS vector Group 8.1 Defect 3
+      closes.
+    tests:
+      - TestEvaluateAuthority_SnapshotEvidenceCapEnforced
+
+  - name: muEnableSnapshotShapeCheck
+    kind: bool_const
+    description: >-
+      isAuthoritySnapshotEntry predicate's callsite. On, only entries
+      whose shape matches (Path C + TargetRoot + PriorAuthority +
+      non-empty EvidencePointers) enter the shortcut. Off forces every
+      walked entry into the shortcut branch.
+    tests:
+      - TestEvaluateAuthority_SnapshotShapeCheck_Binding
+
+  - name: muEnableAuthorityChainCycleGuard
+    kind: bool_const
+    description: >-
+      visited-position map check at the top of the chain walk. On,
+      a 2-entry cycle terminates at depth 2. Off relies on
+      maxAuthorityChainDepth=1000 to terminate, drastically
+      increasing fetch+deserialize cost.
+    tests:
+      - TestEvaluateAuthority_CycleGuardIsLoadBearing

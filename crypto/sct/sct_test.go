@@ -19,10 +19,12 @@ import (
 // ─────────────────────────────────────────────────────────────────────
 
 func TestSigningPayload_GoldenBytes(t *testing.T) {
-	// Frozen golden vector. If anyone alters the wire layout —
-	// reorders fields, swaps endianness, drops the domain separator
-	// trailing NUL — this test fails. Equally, this is the contract
-	// the operator's SignSCT/VerifySCT must continue to satisfy.
+	// Frozen golden vector. Two independent computations must
+	// agree byte-for-byte: the hand-built `want` slice (which
+	// uses binary.BigEndian.PutUint64 directly) and the literal
+	// `expectedHex` string (which I computed offline). If either
+	// drifts from the production SigningPayload output, this
+	// test fails loud.
 	var hash [32]byte
 	for i := range hash {
 		hash[i] = byte(i)
@@ -32,9 +34,8 @@ func TestSigningPayload_GoldenBytes(t *testing.T) {
 		t.Fatalf("SigningPayload: %v", err)
 	}
 
-	// Build the expected payload by hand using a different code path
-	// (literal byte slice + manual binary writes) so a regression in
-	// the production AppendUint16/AppendUint64 path is detectable.
+	// Hand-build expected: independent code path validates the
+	// production AppendUint16/AppendUint64 output.
 	var want []byte
 	want = append(want, sct.DomainSep...)
 	want = append(want, sct.Version)
@@ -50,10 +51,12 @@ func TestSigningPayload_GoldenBytes(t *testing.T) {
 	want = append(want, tsBuf...)
 
 	if hex.EncodeToString(got) != hex.EncodeToString(want) {
-		t.Fatalf("payload bytes mismatch\n got=%s\nwant=%s", hex.EncodeToString(got), hex.EncodeToString(want))
+		t.Fatalf("payload bytes mismatch\n got=%s\nwant=%s",
+			hex.EncodeToString(got), hex.EncodeToString(want))
 	}
 
 	// Pin the absolute hex too — any silent re-layout breaks this.
+	// Tail: 00060a24181e4000 = BE uint64 of 1700000000000000.
 	const expectedHex = "4f5254484f4c4f475f5343545f5631000100" + // domain + version + signerDID len high
 		"0f" + // signerDID len low (15)
 		"6469643a6b65793a7a5369676e6572" + // signerDID
@@ -62,7 +65,7 @@ func TestSigningPayload_GoldenBytes(t *testing.T) {
 		"000c" + // logDID len = 12
 		"6469643a6b65793a7a4c6f67" +
 		"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
-		"00060a3a081e8000"
+		"00060a24181e4000"
 	if hex.EncodeToString(got) != expectedHex {
 		t.Fatalf("golden hex drifted; layout regressed\n got=%s\nwant=%s",
 			hex.EncodeToString(got), expectedHex)
@@ -70,22 +73,26 @@ func TestSigningPayload_GoldenBytes(t *testing.T) {
 }
 
 func TestSigningPayload_EmptyFields(t *testing.T) {
-	// Zero-length variable fields must produce a length-prefix of 0
-	// followed by no bytes — and the payload must still total 65
-	// bytes (16 + 1 + 2 + 0 + 2 + 0 + 2 + 0 + 32 + 8 = 65).
+	// Three zero-length variable fields produce length-prefix 0
+	// followed by no bytes. Total layout:
+	//   16 (DomainSep)
+	// +  1 (Version)
+	// +  2 + 0 (signerDID len + bytes)
+	// +  2 + 0 (sigAlgoID len + bytes)
+	// +  2 + 0 (logDID len + bytes)
+	// + 32 (canonical_hash)
+	// +  8 (log_time_micros)
+	// = 63 bytes total.
 	out, err := sct.SigningPayload("", "", "", [32]byte{}, 0)
 	if err != nil {
 		t.Fatalf("SigningPayload empty: %v", err)
 	}
-	if len(out) != 65 {
-		t.Fatalf("len(out)=%d, want 65", len(out))
+	if len(out) != 63 {
+		t.Fatalf("len(out)=%d, want 63", len(out))
 	}
 }
 
 func TestSigningPayload_NegativeLogTime(t *testing.T) {
-	// Negative log times (pre-1970, unusual but allowed) must encode
-	// as the two's-complement uint64 of the int64 — no panic, no
-	// truncation.
 	out, err := sct.SigningPayload("a", "b", "c", [32]byte{}, -1)
 	if err != nil {
 		t.Fatalf("SigningPayload negative: %v", err)
@@ -99,8 +106,6 @@ func TestSigningPayload_NegativeLogTime(t *testing.T) {
 }
 
 func TestSigningPayload_MaxLengthFields(t *testing.T) {
-	// Exactly 65535-byte fields must be admitted (boundary: ==
-	// MaxFieldLen, not >).
 	big := strings.Repeat("a", sct.MaxFieldLen)
 	if _, err := sct.SigningPayload(big, "x", "y", [32]byte{}, 0); err != nil {
 		t.Fatalf("max-length signerDID rejected: %v", err)
@@ -148,7 +153,7 @@ func mintSCT(t *testing.T) (*sct.SignedCertificateTimestamp, *did.DIDKeyPairSecp
 	}
 	var hash [32]byte
 	for i := range hash {
-		hash[i] = byte(i + 1) // non-zero so any zeroing tamper is visible
+		hash[i] = byte(i + 1)
 	}
 	logTime := time.UnixMicro(1700000123456789).UTC()
 	payload, err := sct.SigningPayload(kp.DID, sct.SigAlgoECDSASecp256k1SHA256, "did:key:zLog", hash, logTime.UnixMicro())
@@ -219,10 +224,6 @@ func TestVerify_BadAlgo(t *testing.T) {
 
 func TestVerify_LogTimeMismatch(t *testing.T) {
 	s, kp := mintSCT(t)
-	// Drift LogTime field WITHOUT touching LogTimeMicros — Verify
-	// MUST reject this since LogTime is the human rendering and a
-	// consumer that read LogTime would observe a value the signature
-	// did not commit to.
 	s.LogTime = time.UnixMicro(s.LogTimeMicros + 1).UTC().Format(time.RFC3339Nano)
 	if err := sct.Verify(&kp.PrivateKey.PublicKey, s); !errors.Is(err, sct.ErrLogTimeMismatch) {
 		t.Fatalf("got %v, want ErrLogTimeMismatch", err)
@@ -239,7 +240,7 @@ func TestVerify_BadCanonicalHashHex(t *testing.T) {
 
 func TestVerify_WrongLengthHash(t *testing.T) {
 	s, kp := mintSCT(t)
-	s.CanonicalHash = "deadbeef" // 4 bytes, not 32
+	s.CanonicalHash = "deadbeef"
 	if err := sct.Verify(&kp.PrivateKey.PublicKey, s); !errors.Is(err, sct.ErrBadHashLength) {
 		t.Fatalf("got %v, want ErrBadHashLength", err)
 	}
@@ -254,9 +255,6 @@ func TestVerify_BadSignatureHex(t *testing.T) {
 }
 
 func TestVerify_OversizeFieldPropagates(t *testing.T) {
-	// Force SigningPayload to fail from inside Verify: stuff a >65535
-	// signerDID into an SCT whose other fields are well-formed.
-	// Verify hits the field-length check via SigningPayload return.
 	s, kp := mintSCT(t)
 	s.SignerDID = strings.Repeat("a", sct.MaxFieldLen+1)
 	err := sct.Verify(&kp.PrivateKey.PublicKey, s)
@@ -266,8 +264,6 @@ func TestVerify_OversizeFieldPropagates(t *testing.T) {
 }
 
 func TestVerify_TamperedHashFailsCrypto(t *testing.T) {
-	// Tamper the canonical_hash to a different valid 32-byte hex —
-	// passes the parse + length checks, fails the crypto.
 	s, kp := mintSCT(t)
 	var tampered [32]byte
 	for i := range tampered {
@@ -284,8 +280,6 @@ func TestVerify_TamperedHashFailsCrypto(t *testing.T) {
 }
 
 func TestVerify_WrongKey(t *testing.T) {
-	// Sign with one key, verify with a different key. Confirms the
-	// signature path is actually exercised end-to-end.
 	s, _ := mintSCT(t)
 	other, err := did.GenerateDIDKeySecp256k1()
 	if err != nil {
@@ -296,13 +290,7 @@ func TestVerify_WrongKey(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Type sanity
-// ─────────────────────────────────────────────────────────────────────
-
 func TestSCTStruct_Fields(t *testing.T) {
-	// Cheap smoke: ensure every documented JSON tag is honored at
-	// the struct level so silent renames don't drift the wire shape.
 	s := sct.SignedCertificateTimestamp{
 		Version:       1,
 		SignerDID:     "x",

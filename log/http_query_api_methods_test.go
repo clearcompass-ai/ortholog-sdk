@@ -14,8 +14,7 @@ import (
 )
 
 // ─────────────────────────────────────────────────────────────────────
-// Compile-time interface check (also belt-and-suspenders against
-// future OperatorQueryAPI drift)
+// Compile-time interface check
 // ─────────────────────────────────────────────────────────────────────
 
 func TestHTTPOperatorQueryAPI_SatisfiesInterface(t *testing.T) {
@@ -70,8 +69,6 @@ func TestQueryPositionKeyed_Paths(t *testing.T) {
 			if !strings.HasPrefix(seenPath, tc.wantSeg) {
 				t.Errorf("path=%q, want prefix %q", seenPath, tc.wantSeg)
 			}
-			// Decode the trailing segment and confirm last-colon-split
-			// would yield seq=42.
 			tail := strings.TrimPrefix(seenPath, tc.wantSeg)
 			decoded, err := url.PathUnescape(tail)
 			if err != nil {
@@ -119,9 +116,10 @@ func TestQueryBySignerDID_EmptyDID(t *testing.T) {
 }
 
 func TestQueryBySignerDID_PathContainsEscapedDID(t *testing.T) {
-	var seenPath string
+	var seenPath, seenRawPath string
 	q, stop := newQueryServer(t, func(w http.ResponseWriter, r *http.Request) {
 		seenPath = r.URL.Path
+		seenRawPath = r.URL.RawPath
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte(`{"entries":[{"sequence_number":3}],"count":1}`))
 	})
@@ -130,13 +128,19 @@ func TestQueryBySignerDID_PathContainsEscapedDID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
+	// Decoded path always shows the unescaped slash (Go's URL
+	// parser unescapes for r.URL.Path).
 	if !strings.HasPrefix(seenPath, "/v1/query/signer_did/") {
 		t.Errorf("path=%q", seenPath)
 	}
-	// Reserved characters in path must be escaped.
-	tail := strings.TrimPrefix(seenPath, "/v1/query/signer_did/")
-	if strings.Contains(tail, "/") {
-		t.Errorf("unescaped slash in tail: %q", tail)
+	// RawPath preserves the wire encoding. If r.URL.RawPath is
+	// empty, Go's parser found nothing to escape — but we DID
+	// pass a slash-bearing DID, so RawPath should be populated
+	// AND contain %2F.
+	if seenRawPath == "" {
+		t.Errorf("RawPath empty; expected escaped %%2F in wire form")
+	} else if !strings.Contains(seenRawPath, "%2F") {
+		t.Errorf("RawPath=%q lacks %%2F escape for slash", seenRawPath)
 	}
 	if len(got) != 1 || got[0].Position.Sequence != 3 {
 		t.Errorf("entries=%v", got)
@@ -243,8 +247,6 @@ func TestQuery_EmptyResults(t *testing.T) {
 	})
 	defer stop()
 
-	// httptest.Server only routes one handler; we just need the
-	// "empty" response shape to round-trip through every method.
 	pos := types.LogPosition{LogDID: "did:key:zX", Sequence: 1}
 	calls := []func() ([]types.EntryWithMetadata, error){
 		func() ([]types.EntryWithMetadata, error) { return q.QueryByCosignatureOf(pos) },
@@ -265,8 +267,7 @@ func TestQuery_EmptyResults(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// SignerDIDCtx with empty DID skips network (already tested in
-// non-Ctx variant) — added for explicit Ctx variant coverage
+// SignerDIDCtx with empty DID skips network
 // ─────────────────────────────────────────────────────────────────────
 
 func TestSignerDIDCtx_EmptyDID(t *testing.T) {

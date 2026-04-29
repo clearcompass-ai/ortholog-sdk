@@ -192,15 +192,20 @@ var ErrBodyNotReplayable = errors.New("log/transport: request body not replayabl
 // honoring ctx, replays the body via req.GetBody, and retries.
 // After MaxRetries attempts the final 503 response is returned to
 // the caller.
+//
+// Per Go's http.RoundTripper contract ("RoundTrip should not modify
+// the request"), this implementation never mutates the caller's
+// *http.Request. Each attempt is performed against a fresh
+// req.Clone(); for retries (attempt > 0) the clone's Body is
+// replaced with a fresh stream from req.GetBody. The original
+// req.Body is consumed by the first attempt's RoundTrip — that is
+// the stdlib contract — but req itself is otherwise untouched.
 func (rt *RetryAfterRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	inner := rt.Inner
 	if inner == nil {
 		inner = http.DefaultTransport
 	}
-	maxRetries := rt.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = DefaultMaxRetries
-	}
+	maxRetries := rt.resolvedMaxRetries()
 	maxBackoff := rt.MaxBackoff
 	if maxBackoff <= 0 {
 		maxBackoff = DefaultMaxBackoff
@@ -221,7 +226,27 @@ func (rt *RetryAfterRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 	// Replay loop. attempt counts from 0 (the original send); the
 	// loop runs maxRetries+1 times in the worst case.
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, err := inner.RoundTrip(req)
+		// Build the per-attempt request without mutating the
+		// caller's. Clone() does a shallow body copy, so attempt 0
+		// sends the caller-supplied body; subsequent attempts
+		// replace the clone's Body with a fresh GetBody stream.
+		// Either way, the caller's *http.Request is untouched
+		// (BUG #2 fix).
+		attemptReq := req.Clone(req.Context())
+		if attempt > 0 {
+			if req.Body != nil && req.GetBody == nil {
+				return rt.surface503(req, ErrBodyNotReplayable), nil
+			}
+			if req.GetBody != nil {
+				body, err := req.GetBody()
+				if err != nil {
+					return rt.surface503(req, fmt.Errorf("log/transport: GetBody: %w", err)), nil
+				}
+				attemptReq.Body = body
+			}
+		}
+
+		resp, err := inner.RoundTrip(attemptReq)
 		if err != nil {
 			// Transport-level errors are not retried — the caller
 			// owns transport-error policy (network DNS, connection
@@ -249,19 +274,6 @@ func (rt *RetryAfterRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 
-		// Replay the body. If GetBody is missing and the request
-		// has a body, we cannot retry safely.
-		if req.Body != nil && req.GetBody == nil {
-			return rt.surface503(req, ErrBodyNotReplayable), nil
-		}
-		if req.GetBody != nil {
-			body, err := req.GetBody()
-			if err != nil {
-				return rt.surface503(req, fmt.Errorf("log/transport: GetBody: %w", err)), nil
-			}
-			req.Body = body
-		}
-
 		// Wait, honoring ctx.
 		if err := sleep(req.Context(), backoff); err != nil {
 			// Context cancelled mid-wait. Surface a synthetic 503 —
@@ -273,6 +285,22 @@ func (rt *RetryAfterRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 	// 503 return). If a future refactor breaks that invariant the
 	// caller observes a nil response and a clear error.
 	return nil, errors.New("log/transport: retry loop exited without response (impossible state)")
+}
+
+// resolvedMaxRetries applies the BUG #6 contract: MaxRetries == 0
+// means "no value supplied — apply DefaultMaxRetries". A negative
+// value is the explicit "disable retries" sentinel and yields 0
+// retries (i.e., one and only one RoundTrip attempt). Latency-
+// sensitive callers and deterministic tests use MaxRetries: -1.
+func (rt *RetryAfterRoundTripper) resolvedMaxRetries() int {
+	switch {
+	case rt.MaxRetries < 0:
+		return 0
+	case rt.MaxRetries == 0:
+		return DefaultMaxRetries
+	default:
+		return rt.MaxRetries
+	}
 }
 
 // surface503 returns a synthetic 503 response carrying the given

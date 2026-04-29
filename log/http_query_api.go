@@ -41,7 +41,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 
 	"github.com/clearcompass-ai/ortholog-sdk/types"
@@ -89,7 +88,7 @@ type queryEntryResponse struct {
 }
 
 // queryListResponse is the JSON envelope for the five header-field
-// query handlers. ScanFromPosition uses queryScanResponse instead.
+// query handlers.
 type queryListResponse struct {
 	Entries []queryEntryResponse `json:"entries"`
 	Count   int                  `json:"count"`
@@ -211,8 +210,3 @@ func (q *HTTPOperatorQueryAPI) toEntries(rows []queryEntryResponse) []types.Entr
 	}
 	return out
 }
-
-// strconvSeqUnused keeps the strconv import alive for
-// http_query_api_methods.go's ScanFromPosition (which builds query
-// strings). Removed once that file lands.
-var _ = strconv.Itoa

@@ -52,6 +52,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -177,10 +178,11 @@ type RetryAfterRoundTripper struct {
 	Sleep func(ctx context.Context, d time.Duration) error
 }
 
-// errBodyNotReplayable is returned from prepareRetry when the request
-// has a body but no GetBody. Surfaced to the original 503 path so
-// the caller observes an HTTP error, not a panic.
-var errBodyNotReplayable = errors.New("log/transport: request body not replayable; set req.GetBody for retry support")
+// ErrBodyNotReplayable is returned (via the synthetic 503 surface)
+// when the request has a body but no GetBody. Exported so callers
+// can distinguish a "we couldn't retry" 503 from a "the operator
+// returned 503" 503 by inspecting X-Retry-Aborted.
+var ErrBodyNotReplayable = errors.New("log/transport: request body not replayable; set req.GetBody for retry support")
 
 // RoundTrip executes req with bounded 503-retry semantics.
 //
@@ -218,8 +220,6 @@ func (rt *RetryAfterRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 
 	// Replay loop. attempt counts from 0 (the original send); the
 	// loop runs maxRetries+1 times in the worst case.
-	var lastResp *http.Response
-	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		resp, err := inner.RoundTrip(req)
 		if err != nil {
@@ -232,7 +232,6 @@ func (rt *RetryAfterRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 		if resp.StatusCode != http.StatusServiceUnavailable {
 			return resp, nil
 		}
-		lastResp = resp
 		// 503 path: compute backoff, drain body, replay or surface.
 		if attempt == maxRetries {
 			// Out of attempts. Return the final 503 unchanged so
@@ -253,31 +252,27 @@ func (rt *RetryAfterRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 		// Replay the body. If GetBody is missing and the request
 		// has a body, we cannot retry safely.
 		if req.Body != nil && req.GetBody == nil {
-			lastErr = errBodyNotReplayable
-			return rt.surface503(req, lastErr), nil
+			return rt.surface503(req, ErrBodyNotReplayable), nil
 		}
 		if req.GetBody != nil {
 			body, err := req.GetBody()
 			if err != nil {
-				lastErr = fmt.Errorf("log/transport: GetBody: %w", err)
-				return rt.surface503(req, lastErr), nil
+				return rt.surface503(req, fmt.Errorf("log/transport: GetBody: %w", err)), nil
 			}
 			req.Body = body
 		}
 
 		// Wait, honoring ctx.
 		if err := sleep(req.Context(), backoff); err != nil {
-			// Context cancelled mid-wait. Surface the most recent
-			// 503 — the caller already has all the data they need
-			// to decide what to do.
+			// Context cancelled mid-wait. Surface a synthetic 503 —
+			// the caller decides what to do.
 			return rt.surface503(req, err), nil
 		}
 	}
-	// Unreachable in practice — the loop returns inside.
-	if lastResp != nil {
-		return lastResp, nil
-	}
-	return nil, lastErr
+	// Unreachable: the loop returns inside (success path or final
+	// 503 return). If a future refactor breaks that invariant the
+	// caller observes a nil response and a clear error.
+	return nil, errors.New("log/transport: retry loop exited without response (impossible state)")
 }
 
 // surface503 returns a synthetic 503 response carrying the given
@@ -285,10 +280,11 @@ func (rt *RetryAfterRoundTripper) RoundTrip(req *http.Request) (*http.Response, 
 // sensible message. Used when retry preparation fails (no GetBody,
 // ctx cancelled).
 func (rt *RetryAfterRoundTripper) surface503(req *http.Request, cause error) *http.Response {
-	body := io.NopCloser(stringReadCloser(cause.Error()))
+	msg := cause.Error()
+	body := io.NopCloser(strings.NewReader(msg))
 	hdr := make(http.Header)
 	hdr.Set("Content-Type", "text/plain; charset=utf-8")
-	hdr.Set("X-Retry-Aborted", cause.Error())
+	hdr.Set("X-Retry-Aborted", msg)
 	return &http.Response{
 		Status:        "503 Service Unavailable",
 		StatusCode:    http.StatusServiceUnavailable,
@@ -297,7 +293,7 @@ func (rt *RetryAfterRoundTripper) surface503(req *http.Request, cause error) *ht
 		ProtoMinor:    1,
 		Header:        hdr,
 		Body:          body,
-		ContentLength: int64(len(cause.Error())),
+		ContentLength: int64(len(msg)),
 		Request:       req,
 	}
 }
@@ -314,7 +310,8 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 		return 0
 	}
 	// delta-seconds: integer (could include leading + or whitespace
-	// in pathological servers; trim defensively).
+	// in pathological servers; strconv.Atoi tolerates neither, but
+	// strict parsing is the safer default).
 	if secs, err := strconv.Atoi(value); err == nil {
 		if secs < 0 {
 			return 0
@@ -376,23 +373,4 @@ func ctxSleep(ctx context.Context, d time.Duration) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-}
-
-// stringReadCloser adapts a string to an io.Reader without pulling
-// in strings.NewReader (avoids an import cycle in some packaging
-// configs).
-type stringReadCloser string
-
-func (s stringReadCloser) Read(p []byte) (int, error) {
-	if len(s) == 0 {
-		return 0, io.EOF
-	}
-	n := copy(p, s)
-	if n == len(s) {
-		return n, io.EOF
-	}
-	// Truncating the underlying string is impossible (immutable),
-	// but Read is called once for short bodies in surface503; this
-	// branch is exercised by tests with multi-page bodies.
-	return n, nil
 }

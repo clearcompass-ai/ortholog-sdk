@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"math"
 	"time"
 
 	sdkadmission "github.com/clearcompass-ai/ortholog-sdk/crypto/admission"
@@ -127,15 +128,19 @@ func (s *HTTPSubmitter) buildModeA(header envelope.ControlHeader, payload []byte
 //     interruptible under cancellation.
 //   - Updates header.AdmissionProof.Nonce.
 //   - Builds a fresh unsigned entry, signs it, serializes — every
-//     iteration, because the canonical hash includes the
-//     signature bytes (SigningPayload covers signatures section
-//     under v7.75), so changing the nonce changes the
-//     post-signature canonical bytes.
+//     iteration, because the post-signature canonical bytes (which
+//     the entry hash covers) embed the freshly signed nonce.
+//     SigningPayload itself does NOT cover the signatures section;
+//     signatures are appended after signing.
 //   - Computes entryHash := sha256(canonical) and runs
 //     sdkadmission.VerifyStamp.
 //   - On VerifyStamp success: returns the canonical bytes.
 //
 // Returns:
+//   - ErrDifficultyOutOfRange if the operator-supplied difficulty
+//     does not fit the wire byte (> math.MaxUint8). Surfaces
+//     immediately, before any PoW iteration, because retrying with
+//     the same difficulty would silently truncate again.
 //   - ErrPoWExhausted if the loop runs PoWMaxIterations times
 //     without finding a valid nonce.
 //   - ctx.Err() if cancelled mid-search.
@@ -148,14 +153,34 @@ func (s *HTTPSubmitter) buildModeB(
 ) ([]byte, error) {
 	header = s.prepareHeader(header)
 
+	// BUG #1 guard: AdmissionProofBody.Difficulty is uint8 on the
+	// wire, but the operator advertises uint32 in its difficulty JSON
+	// (and difficultyMax is 256). Without this check, a uint32 → uint8
+	// cast silently wraps; the resulting stamp does not satisfy the
+	// operator's intended threshold and the 403-retry loop sees the
+	// same wrapped value and refuses to retry. Surface a typed error
+	// instead so the caller learns the operator picked an unsupported
+	// difficulty.
+	if difficulty > math.MaxUint8 {
+		return nil, fmt.Errorf("%w: %d > %d",
+			ErrDifficultyOutOfRange, difficulty, math.MaxUint8)
+	}
+
+	hashFuncWire, hashErr := hashFuncByte(hashFuncName)
+	if hashErr != nil {
+		return nil, hashErr
+	}
 	header.AdmissionProof = &envelope.AdmissionProofBody{
 		Mode:       types.WireByteModeB,
 		Difficulty: uint8(difficulty),
-		HashFunc:   hashFuncByte(hashFuncName),
+		HashFunc:   hashFuncWire,
 		Epoch:      sdkadmission.CurrentEpoch(s.cfg.EpochWindowSec),
 	}
 
-	hashFunc := hashFuncTyped(hashFuncName)
+	hashFunc, hashErr2 := hashFuncTyped(hashFuncName)
+	if hashErr2 != nil {
+		return nil, hashErr2
+	}
 	currentEpoch := sdkadmission.CurrentEpoch(s.cfg.EpochWindowSec)
 	checkInterval := uint64(s.cfg.PoWCheckInterval)
 	if checkInterval == 0 {

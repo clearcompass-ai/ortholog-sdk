@@ -92,16 +92,29 @@ func TestSigningPayload_EmptyFields(t *testing.T) {
 	}
 }
 
-func TestSigningPayload_NegativeLogTime(t *testing.T) {
-	out, err := sct.SigningPayload("a", "b", "c", [32]byte{}, -1)
-	if err != nil {
-		t.Fatalf("SigningPayload negative: %v", err)
-	}
-	tail := out[len(out)-8:]
-	for _, b := range tail {
-		if b != 0xff {
-			t.Fatalf("expected all-ones two's-complement tail, got %x", tail)
+// BUG #5 fix: SigningPayload rejects negative LogTimeMicros instead
+// of silently casting to uint64. The pre-fix test pinned the buggy
+// behavior (asserting an all-ones 0xFF...FF tail from the int64→
+// uint64 wrap). The new contract: producer fails to construct,
+// consumer fails to verify — symmetric refusal.
+func TestSigningPayload_NegativeLogTime_Errors(t *testing.T) {
+	for _, ts := range []int64{-1, -1000, -1 << 62} {
+		_, err := sct.SigningPayload("a", "b", "c", [32]byte{}, ts)
+		if err == nil {
+			t.Errorf("LogTimeMicros=%d should be rejected", ts)
+			continue
 		}
+		if !errors.Is(err, sct.ErrNegativeLogTime) {
+			t.Errorf("LogTimeMicros=%d: error %v should be ErrNegativeLogTime", ts, err)
+		}
+	}
+}
+
+// Boundary: zero is the unix epoch and must remain valid (e.g.,
+// truly-fresh-deployment SCTs at t=0 in deterministic tests).
+func TestSigningPayload_ZeroLogTime_Accepted(t *testing.T) {
+	if _, err := sct.SigningPayload("a", "b", "c", [32]byte{}, 0); err != nil {
+		t.Errorf("LogTimeMicros=0 must be accepted: %v", err)
 	}
 }
 

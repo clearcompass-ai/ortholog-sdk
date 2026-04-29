@@ -141,9 +141,18 @@ func (s *HTTPSubmitter) postAndVerify(
 		return nil, mapStatusToError(resp.StatusCode, body)
 	}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxSCTResponseBytes))
+	// BUG #3 fix: read maxSCTResponseBytes+1 to detect oversize
+	// responses. A misbehaving operator returning megabytes of JSON
+	// would otherwise be silently truncated, producing a parse error
+	// downstream with no attribution to the cause.
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxSCTResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("log/submitter: read response body: %w", err)
+	}
+	if len(bodyBytes) > maxSCTResponseBytes {
+		return nil, fmt.Errorf(
+			"log/submitter: SCT response body exceeds %d bytes",
+			maxSCTResponseBytes)
 	}
 
 	var s_ sct.SignedCertificateTimestamp

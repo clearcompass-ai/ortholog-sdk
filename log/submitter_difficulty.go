@@ -152,10 +152,16 @@ func (s *HTTPSubmitter) doDifficultyFetch(ctx context.Context) (uint32, string, 
 	}
 
 	// Cap at 4 KiB — the legitimate response is ~50 bytes; anything
-	// larger is suspect.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	// larger is suspect. BUG #3 fix: read 4 KiB+1 to detect-and-error
+	// on overflow rather than silently truncate.
+	const maxDifficultyResponseBytes = 4 << 10
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDifficultyResponseBytes+1))
 	if err != nil {
 		return 0, "", fmt.Errorf("%w: read body: %v", ErrDifficultyFetch, err)
+	}
+	if len(body) > maxDifficultyResponseBytes {
+		return 0, "", fmt.Errorf("%w: response body exceeds %d bytes",
+			ErrDifficultyFetch, maxDifficultyResponseBytes)
 	}
 
 	var dr difficultyResponse
@@ -173,21 +179,33 @@ func (s *HTTPSubmitter) doDifficultyFetch(ctx context.Context) (uint32, string, 
 
 // hashFuncByte translates the operator's hash_function string into
 // the wire byte the AdmissionProofBody.HashFunc field expects.
-// Unknown values default to SHA-256, matching the operator's own
-// fallback in api/submission.go::Step 7.
-func hashFuncByte(name string) uint8 {
-	if name == "argon2id" {
-		return sdkadmission.WireByteHashArgon2id
+// Unknown values return ErrDifficultyFetch with a "unsupported hash"
+// detail. The previous implementation silently fell back to SHA-256;
+// that hid operator-side hash upgrades and produced un-verifiable
+// stamps with no telemetry path back to the cause (BUG #4).
+func hashFuncByte(name string) (uint8, error) {
+	switch name {
+	case "sha256":
+		return sdkadmission.WireByteHashSHA256, nil
+	case "argon2id":
+		return sdkadmission.WireByteHashArgon2id, nil
+	default:
+		return 0, fmt.Errorf("%w: unsupported hash %q", ErrDifficultyFetch, name)
 	}
-	return sdkadmission.WireByteHashSHA256
 }
 
 // hashFuncTyped translates the operator's hash_function string to
-// the typed admission.HashFunc constant used by VerifyStamp
-// during PoW self-check.
-func hashFuncTyped(name string) sdkadmission.HashFunc {
-	if name == "argon2id" {
-		return sdkadmission.HashArgon2id
+// the typed admission.HashFunc constant used by VerifyStamp during
+// PoW self-check. Symmetric error contract with hashFuncByte; both
+// must agree on the supported set or the build/verify pair will
+// drift.
+func hashFuncTyped(name string) (sdkadmission.HashFunc, error) {
+	switch name {
+	case "sha256":
+		return sdkadmission.HashSHA256, nil
+	case "argon2id":
+		return sdkadmission.HashArgon2id, nil
+	default:
+		return 0, fmt.Errorf("%w: unsupported hash %q", ErrDifficultyFetch, name)
 	}
-	return sdkadmission.HashSHA256
 }

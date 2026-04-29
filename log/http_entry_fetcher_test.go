@@ -232,13 +232,13 @@ func TestFetch_MalformedLogTime(t *testing.T) {
 // Fetch — body cap
 // ─────────────────────────────────────────────────────────────────────
 
-func TestFetch_OversizeBodyTruncatedToCap(t *testing.T) {
-	// Server returns more than maxRawBodyBytes; LimitReader caps the
-	// read. The fetcher returns the truncated bytes successfully (no
-	// error) — operators that truthfully serve >2 MiB bodies are
-	// out-of-spec for the current MaxEntrySize but the SDK does not
-	// fail loudly here; the consumer's envelope.Deserialize is the
-	// strict gate.
+// BUG #3 fix: oversize bodies now return a typed error rather than
+// silent truncation. Pre-fix, the fetcher returned the truncated
+// bytes and envelope.Deserialize downstream would fail with a
+// confusing "incomplete frame" error with no attribution. Now an
+// operator serving >2 MiB on /raw fails loudly with the SDK
+// pointing at the cause.
+func TestFetch_OversizeBodyErrors(t *testing.T) {
 	huge := make([]byte, maxRawBodyBytes+1024)
 	for i := range huge {
 		huge[i] = byte(i)
@@ -249,12 +249,33 @@ func TestFetch_OversizeBodyTruncatedToCap(t *testing.T) {
 		_, _ = w.Write(huge)
 	})
 	defer stop()
+	_, err := f.Fetch(types.LogPosition{Sequence: 1})
+	if err == nil {
+		t.Fatal("expected error for oversize body")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error %q should mention size cap", err.Error())
+	}
+}
+
+// Boundary: exactly maxRawBodyBytes is accepted (no overflow).
+func TestFetch_BodyAtCap_Accepted(t *testing.T) {
+	body := make([]byte, maxRawBodyBytes)
+	for i := range body {
+		body[i] = byte(i)
+	}
+	f, stop := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(rawSequenceHeader, "1")
+		w.WriteHeader(200)
+		_, _ = w.Write(body)
+	})
+	defer stop()
 	got, err := f.Fetch(types.LogPosition{Sequence: 1})
 	if err != nil {
-		t.Fatalf("err=%v", err)
+		t.Fatalf("body at exact cap should be accepted: %v", err)
 	}
 	if len(got.CanonicalBytes) != maxRawBodyBytes {
-		t.Errorf("len(bytes)=%d, want %d (capped)", len(got.CanonicalBytes), maxRawBodyBytes)
+		t.Errorf("len=%d, want %d", len(got.CanonicalBytes), maxRawBodyBytes)
 	}
 }
 

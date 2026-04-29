@@ -168,9 +168,15 @@ func (s *HTTPSubmitter) postBatch(
 		return nil, mapStatusToError(resp.StatusCode, body)
 	}
 
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxBatchResponseBytes))
+	// BUG #3 fix: detect-and-error on overflow.
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxBatchResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("log/submitter: read batch response: %w", err)
+	}
+	if len(bodyBytes) > maxBatchResponseBytes {
+		return nil, fmt.Errorf(
+			"log/submitter: batch response body exceeds %d bytes",
+			maxBatchResponseBytes)
 	}
 
 	var br batchResponse

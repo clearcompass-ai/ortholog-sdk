@@ -494,3 +494,120 @@ func TestSurface503_Shape(t *testing.T) {
 		t.Errorf("body=%q", body)
 	}
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// BUG #2: RoundTrip must NOT mutate the caller's *http.Request
+// ─────────────────────────────────────────────────────────────────────
+
+// TestRoundTrip_DoesNotMutateRequest pins the Go RoundTripper
+// contract: "RoundTrip should not modify the request". Pre-fix, the
+// 503-replay path assigned `req.Body = body` directly on the
+// caller's request, so a second use of the same *http.Request would
+// see a corrupted Body. This test fails on the pre-fix code and
+// passes after BUG #2's clone-then-mutate refactor.
+func TestRoundTrip_DoesNotMutateRequest(t *testing.T) {
+	originalBody := bytes.NewReader([]byte("payload"))
+	req, _ := http.NewRequest(http.MethodPost, "http://x", originalBody)
+	originalGetBody := req.GetBody
+	originalBodyField := req.Body
+
+	ft := &fakeTransport{respond: func(n int, _ *http.Request) (*http.Response, error) {
+		if n < 3 {
+			return resp(503, "", "1"), nil
+		}
+		return resp(200, "", ""), nil
+	}}
+	rt := &RetryAfterRoundTripper{Inner: ft, Sleep: noSleep}
+	if _, err := rt.RoundTrip(req); err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+
+	// req.Body MAY have been consumed by the first attempt's
+	// inner RoundTrip (stdlib contract permits that), but the
+	// FIELD itself must not have been reassigned by the SDK
+	// middleware — otherwise downstream callers re-using the
+	// request would see a body the SDK fabricated, not the one
+	// they constructed.
+	if req.Body != originalBodyField {
+		t.Errorf("req.Body field was reassigned by middleware (BUG #2 regression)")
+	}
+	// GetBody must remain the caller's original — middleware does
+	// not own this slot.
+	if reflectFuncEq(req.GetBody, originalGetBody) == false {
+		t.Errorf("req.GetBody was replaced by middleware (BUG #2 regression)")
+	}
+}
+
+// reflectFuncEq compares two func references by their pointer; nil
+// vs nil is equal. Used because Go does not allow `func == func`.
+func reflectFuncEq(a, b func() (io.ReadCloser, error)) bool {
+	return fmt.Sprintf("%p", a) == fmt.Sprintf("%p", b)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// BUG #6: MaxRetries < 0 disables retries explicitly
+// ─────────────────────────────────────────────────────────────────────
+
+// TestRoundTrip_MaxRetriesNegative_NoReplay pins the BUG #6 contract:
+// MaxRetries: -1 means "do not retry", surfacing the first 503 to
+// the caller. This is the latency-sensitive / deterministic-test
+// escape hatch.
+func TestRoundTrip_MaxRetriesNegative_NoReplay(t *testing.T) {
+	ft := &fakeTransport{respond: func(_ int, _ *http.Request) (*http.Response, error) {
+		return resp(503, "busy", "1"), nil
+	}}
+	rt := &RetryAfterRoundTripper{Inner: ft, MaxRetries: -1, Sleep: noSleep}
+	req, _ := http.NewRequest(http.MethodGet, "http://x", nil)
+	r, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	if r.StatusCode != 503 {
+		t.Errorf("status=%d, want 503", r.StatusCode)
+	}
+	if got := ft.attempts.Load(); got != 1 {
+		t.Errorf("attempts=%d, want 1 (no replay)", got)
+	}
+}
+
+// TestRoundTrip_MaxRetriesZero_DefaultsToThree pins the legacy
+// contract that MaxRetries == 0 means "use DefaultMaxRetries". This
+// preserves zero-value config compatibility — every existing caller
+// constructing the struct without setting MaxRetries continues to
+// retry up to 3 times.
+func TestRoundTrip_MaxRetriesZero_DefaultsToThree(t *testing.T) {
+	ft := &fakeTransport{respond: func(_ int, _ *http.Request) (*http.Response, error) {
+		return resp(503, "busy", "1"), nil
+	}}
+	rt := &RetryAfterRoundTripper{Inner: ft /* MaxRetries: 0 */, Sleep: noSleep}
+	req, _ := http.NewRequest(http.MethodGet, "http://x", nil)
+	if _, err := rt.RoundTrip(req); err != nil {
+		t.Fatalf("err=%v", err)
+	}
+	// 1 initial + 3 retries = 4 attempts.
+	if got := ft.attempts.Load(); got != int32(DefaultMaxRetries+1) {
+		t.Errorf("attempts=%d, want %d", got, DefaultMaxRetries+1)
+	}
+}
+
+// TestResolvedMaxRetries unit-tests the BUG #6 selector directly so
+// branch coverage on the negative / zero / positive paths is pinned
+// in the smallest possible test.
+func TestResolvedMaxRetries(t *testing.T) {
+	cases := []struct {
+		in   int
+		want int
+	}{
+		{-5, 0},
+		{-1, 0},
+		{0, DefaultMaxRetries},
+		{1, 1},
+		{7, 7},
+	}
+	for _, tc := range cases {
+		rt := &RetryAfterRoundTripper{MaxRetries: tc.in}
+		if got := rt.resolvedMaxRetries(); got != tc.want {
+			t.Errorf("MaxRetries=%d → %d, want %d", tc.in, got, tc.want)
+		}
+	}
+}

@@ -181,9 +181,18 @@ func (f *HTTPEntryFetcher) Fetch(pos types.LogPosition) (*types.EntryWithMetadat
 		return nil, fmt.Errorf("log/http: fetch: HTTP %d for seq %d", resp.StatusCode, pos.Sequence)
 	}
 
-	wire, err := io.ReadAll(io.LimitReader(resp.Body, maxRawBodyBytes))
+	// BUG #3 fix: read maxRawBodyBytes+1 so an oversize response is
+	// detectable rather than silently truncated. Pre-fix, a 3 MiB
+	// response was chopped to 2 MiB and envelope.Deserialize returned
+	// a confusing "incomplete frame" error with no attribution.
+	wire, err := io.ReadAll(io.LimitReader(resp.Body, maxRawBodyBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("log/http: fetch read: %w", err)
+	}
+	if len(wire) > maxRawBodyBytes {
+		return nil, fmt.Errorf(
+			"log/http: response body for seq %d exceeds %d bytes",
+			pos.Sequence, maxRawBodyBytes)
 	}
 	if len(wire) == 0 {
 		return nil, errors.New("log/http: empty wire body")

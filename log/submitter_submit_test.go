@@ -250,6 +250,35 @@ func TestSubmit_ModeA_DoesNotRetry403(t *testing.T) {
 	}
 }
 
+// BUG #3 fix: Submit returns a typed error rather than silent
+// truncation when the operator's SCT response exceeds
+// maxSCTResponseBytes. Pre-fix, megabytes of operator JSON were
+// silently chopped, producing a "parse SCT JSON" error with no
+// attribution to the cause.
+func TestSubmit_OversizeSCTResponse_Errors(t *testing.T) {
+	op := newTestOperator(t)
+	op.SetSubmitHandler(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		// Write maxSCTResponseBytes+1 bytes of data masquerading
+		// as JSON. SDK should detect the overflow and reject.
+		junk := make([]byte, maxSCTResponseBytes+1024)
+		for i := range junk {
+			junk[i] = '"'
+		}
+		_, _ = w.Write(junk)
+	})
+	s := newTestSubmitter(t, op, "tok")
+	_, err := s.Submit(context.Background(),
+		envelope.ControlHeader{}, []byte("x"))
+	if err == nil {
+		t.Fatal("expected error for oversize SCT response")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error %q should mention size cap", err.Error())
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Stream hygiene + body shape
 // ─────────────────────────────────────────────────────────────────────

@@ -152,10 +152,16 @@ func (s *HTTPSubmitter) doDifficultyFetch(ctx context.Context) (uint32, string, 
 	}
 
 	// Cap at 4 KiB — the legitimate response is ~50 bytes; anything
-	// larger is suspect.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	// larger is suspect. BUG #3 fix: read 4 KiB+1 to detect-and-error
+	// on overflow rather than silently truncate.
+	const maxDifficultyResponseBytes = 4 << 10
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDifficultyResponseBytes+1))
 	if err != nil {
 		return 0, "", fmt.Errorf("%w: read body: %v", ErrDifficultyFetch, err)
+	}
+	if len(body) > maxDifficultyResponseBytes {
+		return 0, "", fmt.Errorf("%w: response body exceeds %d bytes",
+			ErrDifficultyFetch, maxDifficultyResponseBytes)
 	}
 
 	var dr difficultyResponse

@@ -177,9 +177,16 @@ func (q *HTTPOperatorQueryAPI) doGet(
 		body := readBodySnippet(resp.Body)
 		return nil, fmt.Errorf("%w: HTTP %d: %s", ErrQueryFailed, resp.StatusCode, body)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxQueryResponseBytes))
+	// BUG #3 fix: read maxQueryResponseBytes+1 to surface oversize
+	// responses with a typed error rather than silent truncation +
+	// downstream JSON parse failure.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxQueryResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("log/query: read body: %w", err)
+	}
+	if len(body) > maxQueryResponseBytes {
+		return nil, fmt.Errorf("log/query: response body exceeds %d bytes",
+			maxQueryResponseBytes)
 	}
 	var out queryListResponse
 	if err := json.Unmarshal(body, &out); err != nil {

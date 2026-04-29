@@ -34,9 +34,10 @@ Wire shape (length-prefixed, version-tagged, big-endian):
 	logDID_len        2  bytes  uint16 BE
 	logDID_bytes      N  bytes  N <= 65535
 	canonical_hash    32 bytes
-	log_time_micros   8  bytes  uint64 BE  (signed-over)
+	log_time_micros   8  bytes  uint64 BE  (signed-over; must be >= 0)
 
-Total: 65 + len(signerDID) + len(sigAlgoID) + len(logDID) bytes.
+Fixed bytes: 16 + 1 + (3 × 2) + 32 + 8 = 63.
+Total: 63 + len(signerDID) + len(sigAlgoID) + len(logDID) bytes.
 
 Verify-side rules:
 
@@ -123,6 +124,17 @@ var (
 	ErrBadCanonicalHash = errors.New("sct: canonical_hash decode")
 	ErrBadHashLength    = errors.New("sct: canonical_hash length != 32")
 	ErrBadSignature     = errors.New("sct: signature decode")
+
+	// ErrNegativeLogTime gates the int64 → uint64 cast in
+	// SigningPayload. Pre-fix, a negative LogTimeMicros silently
+	// wrapped to a huge uint64 in the signed payload; producer and
+	// consumer wrapped identically, so the signature still verified
+	// against a meaningless timestamp. The render check would then
+	// happily display a 1969-or-earlier date that the operator had
+	// not, in any reasonable sense, committed to. Rejecting at the
+	// payload boundary is symmetric: producer fails to construct and
+	// consumer fails to verify (BUG #5).
+	ErrNegativeLogTime = errors.New("sct: log_time_micros must be non-negative")
 )
 
 // SigningPayload builds the deterministic byte sequence that the SCT
@@ -132,6 +144,8 @@ var (
 //
 // Returns ErrSignerDIDTooLong / ErrSigAlgoTooLong / ErrLogDIDTooLong
 // when any length-prefixed field exceeds the 65535-byte uint16 cap.
+// Returns ErrNegativeLogTime when logTimeMicros < 0 — see the error's
+// godoc for the rationale (BUG #5).
 // All field-length checks happen before any byte is appended so a
 // caller never observes a partial buffer on error.
 func SigningPayload(
@@ -149,6 +163,9 @@ func SigningPayload(
 	}
 	if len(logDID) > MaxFieldLen {
 		return nil, fmt.Errorf("%w: length %d", ErrLogDIDTooLong, len(logDID))
+	}
+	if logTimeMicros < 0 {
+		return nil, fmt.Errorf("%w: %d", ErrNegativeLogTime, logTimeMicros)
 	}
 
 	total := len(DomainSep) + 1 + 2 + len(signerDID) + 2 + len(sigAlgoID) + 2 + len(logDID) + 32 + 8

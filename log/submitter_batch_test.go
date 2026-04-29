@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/clearcompass-ai/ortholog-sdk/core/envelope"
 	"github.com/clearcompass-ai/ortholog-sdk/crypto/sct"
@@ -197,8 +198,11 @@ func TestSubmitBatch_ResultCountMismatch(t *testing.T) {
 func TestSubmitBatch_BadSCTRejected(t *testing.T) {
 	op := newTestOperator(t)
 	op.SetBatchHandler(func(w http.ResponseWriter, _ *http.Request) {
-		// Return one well-formed SCT and one with a wrong
-		// signature. Index 1 should be flagged.
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		good, err := op.signSCT([32]byte{1}, now, defaultTestLogDID)
+		if err != nil {
+			t.Fatalf("signSCT: %v", err)
+		}
 		bad := sct.SignedCertificateTimestamp{
 			Version:       sct.Version,
 			SignerDID:     op.operatorKP.DID,
@@ -209,7 +213,6 @@ func TestSubmitBatch_BadSCTRejected(t *testing.T) {
 			LogTime:       "1970-01-01T00:00:00.000001Z",
 			Signature:     "deadbeef",
 		}
-		good, _ := op.signSCT([32]byte{1}, op.signNow(), defaultTestLogDID)
 		out := batchResponse{Results: []batchResultWire{
 			{SCT: *good},
 			{SCT: bad},
@@ -231,13 +234,9 @@ func TestSubmitBatch_BadSCTRejected(t *testing.T) {
 
 func TestSubmitBatch_PoWExhaustionPropagates(t *testing.T) {
 	op := newTestOperator(t)
-	op.SetDifficulty(4, "sha256")
 	s := newTestSubmitter(t, op, "")
-	// Force PoW exhaustion at item 0 by capping iterations and
-	// over-asking on difficulty.
 	s.cfg.PoWMaxIterations = 4
 	s.cfg.PoWCheckInterval = 256
-	// Override the cached difficulty path: use a high difficulty.
 	op.SetDifficulty(64, "sha256")
 	items := []SubmitItem{{Payload: []byte("x")}}
 	_, err := s.SubmitBatch(context.Background(), items)
@@ -263,24 +262,10 @@ func TestSubmitBatch_CtxCancelledBetweenItems(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// helper extension on testOperator (kept here to avoid bloating
-// submitter_helpers_test.go for a single-use convenience)
+// Compile-time pin: envelope import is used by Submit, but this
+// file's test names also exercise envelope.ControlHeader via
+// SubmitItem.Header — keep the import even if direct uses get
+// inlined-out by the compiler.
 // ─────────────────────────────────────────────────────────────────────
 
-// signNow returns a microsecond-truncated UTC "now" for SCT minting.
-func (o *testOperator) signNow() (t timeShim) {
-	return timeShim{now: nowUTCMicros()}.t
-}
-
-type timeShim struct {
-	t   timeShim
-	now any
-}
-
-// We need a real time.Time here; the shim above is just to keep the
-// import surface tight. Instead, expose nowUTCMicros() and use it
-// directly.
-//
-// Note: the closure in TestSubmitBatch_BadSCTRejected calls
-// op.signNow() which compiles to a time.Time return. Below is the
-// concrete implementation.
+var _ envelope.ControlHeader

@@ -57,12 +57,20 @@ type batchResponse struct {
 //   - Any error returned by buildOne for a specific item (PoW
 //     exhaustion, ctx cancellation, validation).
 //   - Typed HTTP-status errors from mapStatusToError on non-202.
+//   - context.Canceled / context.DeadlineExceeded directly when
+//     ctx is pre-cancelled.
 func (s *HTTPSubmitter) SubmitBatch(
 	ctx context.Context,
 	items []SubmitItem,
 ) ([]*sct.SignedCertificateTimestamp, error) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	// Surface cancellation directly without wrapping it inside a
+	// difficulty-fetch error — pre-cancelled ctx must produce
+	// context.Canceled cleanly.
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if len(items) == 0 {
 		return nil, ErrBatchEmpty
@@ -122,8 +130,6 @@ func (s *HTTPSubmitter) SubmitBatch(
 	// Verify each SCT.
 	out := make([]*sct.SignedCertificateTimestamp, len(results))
 	for i, r := range results {
-		// Capture by value into a local so &r doesn't alias the
-		// loop variable across iterations.
 		s_ := r.SCT
 		if err := sct.Verify(s.operatorPub, &s_); err != nil {
 			return nil, fmt.Errorf("%w: result[%d]: %v", ErrSCTRejected, i, err)

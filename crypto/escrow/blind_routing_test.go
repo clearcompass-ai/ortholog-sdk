@@ -1,95 +1,55 @@
-// Package escrow — blind_routing_test.go tests the attestation interface
-// and its two mock implementations. Also covers the BlindRouteResult
-// type and ensures the mocks satisfy the EnclaveAttestation interface
-// at compile time.
+// Package escrow — blind_routing_test.go covers the production-only
+// types declared in blind_routing.go. The mocks (and their tests)
+// live in crypto/escrow/escrowtest under build tag escrow_mocks.
 package escrow
 
 import "testing"
 
-// -------------------------------------------------------------------------------------------------
-// Interface satisfaction (compile-time assertion)
-// -------------------------------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────
+// Tiny in-package interface stub
+// ─────────────────────────────────────────────────────────────────────
+//
+// stubEnclave exists ONLY in this _test.go file (and therefore only
+// in test binaries for package escrow) to provide a concrete
+// EnclaveAttestation implementation against which the interface
+// shape can be compile-time asserted. It is intentionally minimal,
+// rejects every input, and is never accessible from other packages.
 
-// Compile-time check: MockAppleAttestation and MockAndroidAttestation
-// must satisfy EnclaveAttestation. Any signature drift breaks the build
-// here before tests even run.
-var (
-	_ EnclaveAttestation = (*MockAppleAttestation)(nil)
-	_ EnclaveAttestation = (*MockAndroidAttestation)(nil)
-)
+type stubEnclave struct{}
 
-// -------------------------------------------------------------------------------------------------
-// MockAppleAttestation
-// -------------------------------------------------------------------------------------------------
+func (stubEnclave) VerifyAttestation([]byte) error { return errAlwaysReject }
+func (stubEnclave) Platform() string               { return "stub_test_only" }
 
-func TestMockAppleAttestation_Platform(t *testing.T) {
-	m := &MockAppleAttestation{}
-	if got := m.Platform(); got != "apple_secure_enclave_mock" {
-		t.Fatalf("Platform() = %q, want %q", got, "apple_secure_enclave_mock")
+var errAlwaysReject = stubError("stubEnclave never accepts")
+
+type stubError string
+
+func (e stubError) Error() string { return string(e) }
+
+// Compile-time assertion: any drift in the EnclaveAttestation
+// interface (renamed methods, changed signatures) breaks the build
+// here.
+var _ EnclaveAttestation = stubEnclave{}
+
+// ─────────────────────────────────────────────────────────────────────
+// Stub behavior
+// ─────────────────────────────────────────────────────────────────────
+
+func TestStubEnclave_AlwaysRejects(t *testing.T) {
+	if err := (stubEnclave{}).VerifyAttestation([]byte{0x01}); err == nil {
+		t.Fatal("stub must always reject; got nil error")
 	}
 }
 
-func TestMockAppleAttestation_VerifyAttestationAcceptsNonEmpty(t *testing.T) {
-	m := &MockAppleAttestation{}
-	if err := m.VerifyAttestation([]byte{0x01}); err != nil {
-		t.Fatalf("VerifyAttestation(non-empty): %v", err)
+func TestStubEnclave_PlatformDistinct(t *testing.T) {
+	if (stubEnclave{}).Platform() == "" {
+		t.Fatal("stub Platform() must be non-empty for log discrimination")
 	}
 }
 
-func TestMockAppleAttestation_VerifyAttestationRejectsEmpty(t *testing.T) {
-	m := &MockAppleAttestation{}
-	if err := m.VerifyAttestation([]byte{}); err == nil {
-		t.Fatal("VerifyAttestation(empty) = nil, want error")
-	}
-}
-
-func TestMockAppleAttestation_VerifyAttestationRejectsNil(t *testing.T) {
-	m := &MockAppleAttestation{}
-	if err := m.VerifyAttestation(nil); err == nil {
-		t.Fatal("VerifyAttestation(nil) = nil, want error")
-	}
-}
-
-// -------------------------------------------------------------------------------------------------
-// MockAndroidAttestation
-// -------------------------------------------------------------------------------------------------
-
-func TestMockAndroidAttestation_Platform(t *testing.T) {
-	m := &MockAndroidAttestation{}
-	if got := m.Platform(); got != "android_strongbox_mock" {
-		t.Fatalf("Platform() = %q, want %q", got, "android_strongbox_mock")
-	}
-}
-
-func TestMockAndroidAttestation_VerifyAttestationAcceptsNonEmpty(t *testing.T) {
-	m := &MockAndroidAttestation{}
-	if err := m.VerifyAttestation([]byte{0xFF}); err != nil {
-		t.Fatalf("VerifyAttestation(non-empty): %v", err)
-	}
-}
-
-func TestMockAndroidAttestation_VerifyAttestationRejectsEmpty(t *testing.T) {
-	m := &MockAndroidAttestation{}
-	if err := m.VerifyAttestation([]byte{}); err == nil {
-		t.Fatal("VerifyAttestation(empty) = nil, want error")
-	}
-}
-
-// -------------------------------------------------------------------------------------------------
-// Platform names are distinct
-// -------------------------------------------------------------------------------------------------
-
-func TestMockAttestations_DistinctPlatforms(t *testing.T) {
-	apple := (&MockAppleAttestation{}).Platform()
-	android := (&MockAndroidAttestation{}).Platform()
-	if apple == android {
-		t.Fatalf("apple and android mocks share platform name %q — must differ", apple)
-	}
-}
-
-// -------------------------------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────
 // BlindRouteResult
-// -------------------------------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────
 
 func TestBlindRouteResult_ZeroValue(t *testing.T) {
 	var r BlindRouteResult
@@ -108,17 +68,38 @@ func TestBlindRouteResult_HoldsCIDs(t *testing.T) {
 	}
 }
 
-// -------------------------------------------------------------------------------------------------
-// BlindRouteShares type — compile-time usability check via nil literal
-// -------------------------------------------------------------------------------------------------
+// ─────────────────────────────────────────────────────────────────────
+// BlindRouteShares — function-type usability
+// ─────────────────────────────────────────────────────────────────────
 
-func TestBlindRouteShares_TypeUsable(t *testing.T) {
-	// Assert the function type is usable as a field value / variable.
-	// A nil function literal is not callable, but declaring it ensures
-	// the type is exported and has the expected signature shape at
-	// compile time.
+func TestBlindRouteShares_NilTypeUsable(t *testing.T) {
 	var fn BlindRouteShares
 	if fn != nil {
 		t.Fatal("nil function literal compared non-nil")
+	}
+}
+
+func TestBlindRouteShares_Callable(t *testing.T) {
+	// A non-nil BlindRouteShares must be callable with the
+	// declared signature. This catches signature drift (e.g.,
+	// someone changing [][]byte to []byte).
+	called := false
+	var fn BlindRouteShares = func(blobs [][]byte) (*BlindRouteResult, error) {
+		called = true
+		out := make([]string, len(blobs))
+		for i := range blobs {
+			out[i] = "cid"
+		}
+		return &BlindRouteResult{CIDs: out}, nil
+	}
+	res, err := fn([][]byte{{0x01}, {0x02}})
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if !called {
+		t.Fatal("function not invoked")
+	}
+	if len(res.CIDs) != 2 {
+		t.Fatalf("expected 2 CIDs, got %d", len(res.CIDs))
 	}
 }

@@ -140,7 +140,7 @@ func TestSigningPayload_OversizeFields(t *testing.T) {
 // Verify — happy path round-trip and tamper detection
 // ─────────────────────────────────────────────────────────────────────
 
-func mintSCT(t *testing.T) (*sct.SignedCertificateTimestamp, *did.KeyPair) {
+func mintSCT(t *testing.T) (*sct.SignedCertificateTimestamp, *did.DIDKeyPairSecp256k1) {
 	t.Helper()
 	kp, err := did.GenerateDIDKeySecp256k1()
 	if err != nil {
@@ -170,11 +170,6 @@ func mintSCT(t *testing.T) (*sct.SignedCertificateTimestamp, *did.KeyPair) {
 		LogTime:       logTime.Format(time.RFC3339Nano),
 		Signature:     hex.EncodeToString(sig),
 	}, kp
-}
-
-func pubFromKP(t *testing.T, kp *did.KeyPair) interface{ /* matches Verify signature */ } {
-	t.Helper()
-	return kp.PrivateKey.PublicKey
 }
 
 func TestVerify_HappyPath(t *testing.T) {

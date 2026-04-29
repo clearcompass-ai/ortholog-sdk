@@ -12,6 +12,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	sdkadmission "github.com/clearcompass-ai/ortholog-sdk/crypto/admission"
 )
 
 // difficultyResponse mirrors the JSON shape returned by
@@ -91,7 +93,9 @@ func (s *HTTPSubmitter) fetchDifficultyLocked(ctx context.Context) (uint32, stri
 //
 // Returns (newDiff, newHash, changed, err). changed is true iff
 // the prior cache was Initialized AND any of difficulty or hash
-// function changed from the prior values.
+// function changed from the prior values. (Uninitialized prior
+// cache is treated as "changed" so the first stamp-rejection on
+// an uncached client triggers exactly one retry.)
 func (s *HTTPSubmitter) refreshDifficulty(ctx context.Context) (uint32, string, bool, error) {
 	s.diffMu.Lock()
 	defer s.diffMu.Unlock()
@@ -173,7 +177,17 @@ func (s *HTTPSubmitter) doDifficultyFetch(ctx context.Context) (uint32, string, 
 // fallback in api/submission.go::Step 7.
 func hashFuncByte(name string) uint8 {
 	if name == "argon2id" {
-		return wireByteHashArgon2id
+		return sdkadmission.WireByteHashArgon2id
 	}
-	return wireByteHashSHA256
+	return sdkadmission.WireByteHashSHA256
+}
+
+// hashFuncTyped translates the operator's hash_function string to
+// the typed admission.HashFunc constant used by VerifyStamp
+// during PoW self-check.
+func hashFuncTyped(name string) sdkadmission.HashFunc {
+	if name == "argon2id" {
+		return sdkadmission.HashArgon2id
+	}
+	return sdkadmission.HashSHA256
 }

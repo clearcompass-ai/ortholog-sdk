@@ -95,15 +95,20 @@ func TestNewQueryAPI_NegativeTimeoutDefaulted(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 // encodePosition
 // ─────────────────────────────────────────────────────────────────────
+//
+// url.PathEscape preserves colons (RFC 3986 — colons are permitted
+// unencoded in URL path segments). The contract we test is:
+// encodePosition produces a string the operator's
+// api/queries.go::parseLogPosition can split on the LAST colon to
+// recover (logDID, sequence). DIDs with embedded colons survive
+// because the seq-suffix and final-colon are unambiguous.
 
 func TestEncodePosition_DidKey(t *testing.T) {
 	got := encodePosition(types.LogPosition{LogDID: "did:key:zXyz", Sequence: 42})
-	// did:key:zXyz → URL-escaped to did%3Akey%3AzXyz, then :42
-	if !strings.Contains(got, "did%3Akey%3AzXyz") {
-		t.Errorf("got %q, want did%%3Akey%%3AzXyz...", got)
-	}
-	if !strings.HasSuffix(got, "42") {
-		t.Errorf("missing sequence suffix: %q", got)
+	// Expected: "did:key:zXyz:42" — colons unescaped, last colon
+	// is the seq separator.
+	if got != "did:key:zXyz:42" {
+		t.Errorf("got %q, want %q", got, "did:key:zXyz:42")
 	}
 }
 
@@ -111,16 +116,27 @@ func TestEncodePosition_DidWebWithColons(t *testing.T) {
 	got := encodePosition(types.LogPosition{
 		LogDID: "did:web:example.com:logs:a", Sequence: 7,
 	})
-	// All colons (including those inside the DID) are escaped, so
-	// the operator sees an unambiguous string after URL-decode.
-	if !strings.HasSuffix(got, "7") {
-		t.Errorf("missing seq: %q", got)
+	// Colons preserved; last-colon-split yields seq=7 and DID
+	// "did:web:example.com:logs:a".
+	if got != "did:web:example.com:logs:a:7" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestEncodePosition_PathReservedCharsEscaped(t *testing.T) {
+	// Slashes ARE escaped by url.PathEscape — a DID containing /
+	// in its method-specific part survives by encoding to %2F.
+	got := encodePosition(types.LogPosition{
+		LogDID: "did:web:example.com:logs/path", Sequence: 1,
+	})
+	if !strings.Contains(got, "%2F") {
+		t.Errorf("slash should be %%2F-escaped, got %q", got)
 	}
 }
 
 func TestEncodePosition_SequenceZero(t *testing.T) {
 	got := encodePosition(types.LogPosition{LogDID: "did:key:zX", Sequence: 0})
-	if !strings.HasSuffix(got, "0") {
+	if !strings.HasSuffix(got, ":0") {
 		t.Errorf("got %q", got)
 	}
 }
@@ -129,7 +145,7 @@ func TestEncodePosition_LargeSequence(t *testing.T) {
 	got := encodePosition(types.LogPosition{
 		LogDID: "did:key:zX", Sequence: 18446744073709551615,
 	})
-	if !strings.HasSuffix(got, "18446744073709551615") {
+	if !strings.HasSuffix(got, ":18446744073709551615") {
 		t.Errorf("large seq lost: %q", got)
 	}
 }

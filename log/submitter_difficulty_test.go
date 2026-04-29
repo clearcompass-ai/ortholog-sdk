@@ -223,32 +223,49 @@ func TestDoDifficultyFetch_EmptyHashFunc(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 
 func TestHashFuncByte_KnownNames(t *testing.T) {
-	if hashFuncByte("sha256") != sdkadmission.WireByteHashSHA256 {
-		t.Error("sha256 mapping")
+	got, err := hashFuncByte("sha256")
+	if err != nil || got != sdkadmission.WireByteHashSHA256 {
+		t.Errorf("sha256: got %d err=%v", got, err)
 	}
-	if hashFuncByte("argon2id") != sdkadmission.WireByteHashArgon2id {
-		t.Error("argon2id mapping")
+	got, err = hashFuncByte("argon2id")
+	if err != nil || got != sdkadmission.WireByteHashArgon2id {
+		t.Errorf("argon2id: got %d err=%v", got, err)
 	}
 }
 
-func TestHashFuncByte_UnknownDefaultsSHA256(t *testing.T) {
-	if hashFuncByte("future-hash-9000") != sdkadmission.WireByteHashSHA256 {
-		t.Error("unknown name should default to SHA256")
+// BUG #4 fix: previously unknown names silently returned SHA-256.
+// Now they error so the caller learns the operator picked a hash the
+// SDK cannot produce.
+func TestHashFuncByte_UnknownErrors(t *testing.T) {
+	_, err := hashFuncByte("future-hash-9000")
+	if err == nil {
+		t.Fatal("expected error for unknown hash")
+	}
+	if !errors.Is(err, ErrDifficultyFetch) {
+		t.Errorf("error should wrap ErrDifficultyFetch: %v", err)
 	}
 }
 
 func TestHashFuncTyped_KnownNames(t *testing.T) {
-	if hashFuncTyped("sha256") != sdkadmission.HashSHA256 {
-		t.Error("sha256 typed mapping")
+	got, err := hashFuncTyped("sha256")
+	if err != nil || got != sdkadmission.HashSHA256 {
+		t.Errorf("sha256: got %v err=%v", got, err)
 	}
-	if hashFuncTyped("argon2id") != sdkadmission.HashArgon2id {
-		t.Error("argon2id typed mapping")
+	got, err = hashFuncTyped("argon2id")
+	if err != nil || got != sdkadmission.HashArgon2id {
+		t.Errorf("argon2id: got %v err=%v", got, err)
 	}
 }
 
-func TestHashFuncTyped_UnknownDefaultsSHA256(t *testing.T) {
-	if hashFuncTyped("xyz") != sdkadmission.HashSHA256 {
-		t.Error("unknown should default to SHA256")
+// BUG #4 fix: typed dispatcher mirrors the byte dispatcher's error
+// semantics so build-time and verify-time symmetry is preserved.
+func TestHashFuncTyped_UnknownErrors(t *testing.T) {
+	_, err := hashFuncTyped("xyz")
+	if err == nil {
+		t.Fatal("expected error for unknown hash")
+	}
+	if !errors.Is(err, ErrDifficultyFetch) {
+		t.Errorf("error should wrap ErrDifficultyFetch: %v", err)
 	}
 }
 

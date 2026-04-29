@@ -221,6 +221,15 @@ var (
 	ErrBatchTooLarge       = errors.New("log/submitter: batch exceeds MaxBatchSize")
 	ErrBatchResultMismatch = errors.New("log/submitter: batch result count mismatches request")
 	ErrPoWExhausted        = errors.New("log/submitter: PoW nonce search exhausted PoWMaxIterations")
+
+	// ErrDifficultyOutOfRange is returned when the operator-supplied
+	// difficulty does not fit the on-wire AdmissionProofBody.Difficulty
+	// field (uint8). Without this guard, a uint32 → uint8 narrowing
+	// silently wraps and the SDK would compute a stamp against an
+	// attacker-controlled bit pattern. Surface to the caller; do not
+	// auto-retry — the operator must change its advertised difficulty
+	// for the next request to succeed.
+	ErrDifficultyOutOfRange = errors.New("log/submitter: operator difficulty exceeds wire-byte limit")
 )
 
 // ─────────────────────────────────────────────────────────────────────

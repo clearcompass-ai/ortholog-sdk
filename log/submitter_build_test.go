@@ -194,6 +194,56 @@ func TestBuildModeB_ExhaustionReturnsErr(t *testing.T) {
 	}
 }
 
+// BUG #1 fix: AdmissionProofBody.Difficulty is uint8 on the wire. A
+// uint32 difficulty exceeding math.MaxUint8 must be rejected at the
+// SDK boundary; the previous code silently truncated, producing a
+// stamp that the operator would reject and a 403-retry loop that
+// would compute the same wrapped value forever.
+func TestBuildModeB_RejectsOverflowDifficulty(t *testing.T) {
+	op := newTestOperator(t)
+	s := newTestSubmitter(t, op, "")
+	for _, d := range []uint32{256, 257, 1024, 1 << 20} {
+		_, err := s.buildModeB(context.Background(),
+			envelope.ControlHeader{}, []byte("x"), d, "sha256")
+		if !errors.Is(err, ErrDifficultyOutOfRange) {
+			t.Errorf("difficulty=%d: got %v, want ErrDifficultyOutOfRange", d, err)
+		}
+	}
+}
+
+// Boundary: 255 fits in uint8 and must succeed at the validation
+// step. Use small PoWMaxIterations to bound test time — at d=255 the
+// stamp is unsearchable, so we expect ErrPoWExhausted, NOT
+// ErrDifficultyOutOfRange.
+func TestBuildModeB_AcceptsBoundaryDifficulty255(t *testing.T) {
+	op := newTestOperator(t)
+	s := newTestSubmitter(t, op, "")
+	s.cfg.PoWMaxIterations = 1 // bound runtime
+	s.cfg.PoWCheckInterval = 256
+	_, err := s.buildModeB(context.Background(),
+		envelope.ControlHeader{}, []byte("x"), 255, "sha256")
+	if errors.Is(err, ErrDifficultyOutOfRange) {
+		t.Fatalf("difficulty=255 should NOT be rejected as out-of-range: %v", err)
+	}
+	// We only care that the bounds check did not trip.
+}
+
+// BUG #4 fix: unknown hash propagates out of buildModeB rather than
+// silently falling back to SHA-256. The cache→build→stamp pipeline
+// must not produce stamps with a hash the operator did not request.
+func TestBuildModeB_RejectsUnknownHash(t *testing.T) {
+	op := newTestOperator(t)
+	s := newTestSubmitter(t, op, "")
+	_, err := s.buildModeB(context.Background(),
+		envelope.ControlHeader{}, []byte("x"), 1, "future-hash-9000")
+	if err == nil {
+		t.Fatal("expected error for unknown hash")
+	}
+	if !errors.Is(err, ErrDifficultyFetch) {
+		t.Errorf("error should wrap ErrDifficultyFetch: %v", err)
+	}
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // buildOne dispatch
 // ─────────────────────────────────────────────────────────────────────

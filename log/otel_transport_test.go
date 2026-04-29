@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -20,15 +21,12 @@ import (
 // Tracer fixture
 // ─────────────────────────────────────────────────────────────────────
 
-// newRecordingTracer returns a tracer that records into rec, plus
-// the recorder for inspection.
 func newRecordingTracer() (trace.Tracer, *tracetest.SpanRecorder) {
 	rec := tracetest.NewSpanRecorder()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(rec))
 	return tp.Tracer("test"), rec
 }
 
-// stubRT returns the configured response and error for every call.
 type stubRT struct {
 	calls atomic.Int32
 	resp  *http.Response
@@ -43,6 +41,7 @@ func (s *stubRT) RoundTrip(*http.Request) (*http.Response, error) {
 func mkResp(code int) *http.Response {
 	return &http.Response{
 		StatusCode: code,
+		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader("")),
 	}
 }
@@ -78,8 +77,7 @@ func TestOTel_4xxNotError(t *testing.T) {
 	if _, err := rt.RoundTrip(req); err != nil {
 		t.Fatalf("%v", err)
 	}
-	spans := rec.Ended()
-	if spans[0].Status().Code == codes.Error {
+	if rec.Ended()[0].Status().Code == codes.Error {
 		t.Error("4xx must NOT mark span Error")
 	}
 }
@@ -91,9 +89,8 @@ func TestOTel_5xxIsError(t *testing.T) {
 	if _, err := rt.RoundTrip(req); err != nil {
 		t.Fatalf("%v", err)
 	}
-	spans := rec.Ended()
-	if spans[0].Status().Code != codes.Error {
-		t.Errorf("5xx Status=%v, want Error", spans[0].Status().Code)
+	if rec.Ended()[0].Status().Code != codes.Error {
+		t.Errorf("5xx Status=%v, want Error", rec.Ended()[0].Status().Code)
 	}
 }
 
@@ -110,11 +107,11 @@ func TestOTel_TransportError(t *testing.T) {
 	if !errors.Is(err, want) {
 		t.Fatalf("got %v, want %v", err, want)
 	}
-	spans := rec.Ended()
-	if spans[0].Status().Code != codes.Error {
+	span := rec.Ended()[0]
+	if span.Status().Code != codes.Error {
 		t.Error("transport err must mark span Error")
 	}
-	if len(spans[0].Events()) == 0 {
+	if len(span.Events()) == 0 {
 		t.Error("transport err must record event (RecordError)")
 	}
 }
@@ -158,22 +155,16 @@ func TestOTel_AttributesPopulated(t *testing.T) {
 // ─────────────────────────────────────────────────────────────────────
 
 func TestOTel_NilInnerDefaults(t *testing.T) {
-	// Inner=nil → http.DefaultTransport. Use a closed server so we
-	// see a transport error (proves DefaultTransport was reached).
 	tracer, rec := newRecordingTracer()
 	rt := &OTelTransport{Tracer: tracer}
 	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:1", nil)
-	_, _ = rt.RoundTrip(req) // ignore error; we just need the span
-	spans := rec.Ended()
-	if len(spans) != 1 {
-		t.Fatalf("spans=%d", len(spans))
+	_, _ = rt.RoundTrip(req) // ignore err; we want span recorded
+	if len(rec.Ended()) != 1 {
+		t.Fatalf("spans=%d", len(rec.Ended()))
 	}
 }
 
 func TestOTel_NilTracerUsesGlobal(t *testing.T) {
-	// Tracer=nil branch — global tracer is used. We can't easily
-	// assert "global was hit" without swapping it, but the test
-	// ensures no panic and a result returns.
 	rt := &OTelTransport{Inner: &stubRT{resp: mkResp(200)}}
 	req, _ := http.NewRequest(http.MethodGet, "http://x", nil)
 	if _, err := rt.RoundTrip(req); err != nil {
@@ -187,12 +178,12 @@ func TestOTel_NilTracerUsesGlobal(t *testing.T) {
 
 func TestTrimQuery(t *testing.T) {
 	cases := map[string]string{
-		"http://x/y":                "http://x/y",
-		"http://x/y?a=b":            "http://x/y",
-		"http://x/y?a=b&c=d":        "http://x/y",
-		"http://x/y#frag":           "http://x/y",
-		"http://x/y?a=b#frag":       "http://x/y",
-		"":                          "",
+		"http://x/y":          "http://x/y",
+		"http://x/y?a=b":      "http://x/y",
+		"http://x/y?a=b&c=d":  "http://x/y",
+		"http://x/y#frag":     "http://x/y",
+		"http://x/y?a=b#frag": "http://x/y",
+		"":                    "",
 	}
 	for in, want := range cases {
 		if got := trimQuery(in); got != want {
@@ -209,17 +200,15 @@ func TestSpanNameFor_PathOnly(t *testing.T) {
 }
 
 func TestSpanNameFor_NilURL(t *testing.T) {
-	req := &http.Request{Method: "GET"} // URL nil
-	got := spanNameFor(req)
-	if got != "HTTP GET" {
+	req := &http.Request{Method: "GET"}
+	if got := spanNameFor(req); got != "HTTP GET" {
 		t.Errorf("got %q", got)
 	}
 }
 
 func TestSpanNameFor_EmptyPath(t *testing.T) {
 	req := &http.Request{Method: "GET", URL: &url.URL{}}
-	got := spanNameFor(req)
-	if got != "HTTP GET /" {
+	if got := spanNameFor(req); got != "HTTP GET /" {
 		t.Errorf("got %q", got)
 	}
 }
@@ -241,39 +230,13 @@ func TestWithOTel_Wraps(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Composition: stacked with RetryAfter, one span per attempt
+// Composition: stacked with RetryAfter — one outer span captures
+// the entire roundtrip including retries
 // ─────────────────────────────────────────────────────────────────────
 
-func TestOTel_PerAttemptSpans(t *testing.T) {
-	tracer, rec := newRecordingTracer()
-	calls := atomic.Int32{}
-	inner := http.RoundTripper(&fakeAttempts{calls: &calls})
-	retry := &RetryAfterRoundTripper{Inner: inner, Sleep: func(context.Context, _ Duration) error {
-		return nil
-	}}
-	traced := &OTelTransport{Inner: retry, Tracer: tracer}
-	req, _ := http.NewRequest(http.MethodGet, "http://x", nil)
-	if _, err := traced.RoundTrip(req); err != nil {
-		t.Fatalf("%v", err)
-	}
-	// Only one outer span — OTelTransport wraps the entire retry
-	// loop. That's the documented model: outer span captures total
-	// roundtrip duration including retries.
-	spans := rec.Ended()
-	if len(spans) != 1 {
-		t.Errorf("spans=%d, want 1 outer", len(spans))
-	}
-	if calls.Load() < 2 {
-		t.Errorf("inner attempts=%d, want >=2 (proves retry happened)", calls.Load())
-	}
-}
+type retryingFake struct{ calls atomic.Int32 }
 
-// fakeAttempts returns 503 once then 200. Used by composition test.
-type fakeAttempts struct {
-	calls *atomic.Int32
-}
-
-func (f *fakeAttempts) RoundTrip(*http.Request) (*http.Response, error) {
+func (f *retryingFake) RoundTrip(*http.Request) (*http.Response, error) {
 	n := f.calls.Add(1)
 	if n == 1 {
 		return mkResp(503), nil
@@ -281,13 +244,22 @@ func (f *fakeAttempts) RoundTrip(*http.Request) (*http.Response, error) {
 	return mkResp(200), nil
 }
 
-// Duration alias bridges the test's anonymous Sleep signature to
-// time.Duration without importing time at the test top — keeps the
-// import block tight.
-type Duration = sdktrace.IDGenerator // any small alias; pulled below
-
-// (Stub: the test above wires Sleep with a (ctx, time.Duration)
-// signature in real code. The Duration alias here is a one-line
-// hack to avoid importing time in this file. If the test fails to
-// compile in your environment, replace `_ Duration` with
-// `_ time.Duration` and add `"time"` to imports.)
+func TestOTel_StackedWithRetry(t *testing.T) {
+	tracer, rec := newRecordingTracer()
+	inner := &retryingFake{}
+	retry := &RetryAfterRoundTripper{
+		Inner: inner,
+		Sleep: func(context.Context, time.Duration) error { return nil },
+	}
+	traced := &OTelTransport{Inner: retry, Tracer: tracer}
+	req, _ := http.NewRequest(http.MethodGet, "http://x", nil)
+	if _, err := traced.RoundTrip(req); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if len(rec.Ended()) != 1 {
+		t.Errorf("outer spans=%d, want 1", len(rec.Ended()))
+	}
+	if inner.calls.Load() < 2 {
+		t.Errorf("inner attempts=%d, want >=2 (retry occurred)", inner.calls.Load())
+	}
+}
